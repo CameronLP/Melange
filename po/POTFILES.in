@@ -1,0 +1,8 @@
+# List of source files containing translatable strings.
+# Please keep this file sorted alphabetically.
+data/com.cameronlp.Melange.desktop.in
+data/com.cameronlp.Melange.metainfo.xml.in
+data/com.cameronlp.Melange.gschema.xml
+src/main.py
+src/window.py
+src/window.ui

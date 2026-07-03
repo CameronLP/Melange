@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="Adw" version="1.0"/>
+  <template class="MelangeWindow" parent="AdwApplicationWindow">
+    <property name="title" translatable="yes">Melange</property>
+    <property name="default-width">800</property>
+    <property name="default-height">600</property>
+    <property name="content">
+      <object class="AdwToolbarView" id="toolbar_view">
+        <child type="top">
+          <object class="AdwHeaderBar" id="headerbar">
+            <property name="show-title">true</property>
+
+
+
+            <child type="start">
+              <object class="GtkBox">
+                <property name="spacing">6</property>
+                <child>
+                  <object class="GtkButton" id="previous_button">
+                    <property name="label">Previous</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkButton" id="next_button">
+                    <property name="label">Next</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+
+
+
+            <child type="end">
+              <object class="GtkMenuButton" id="menu_button">
+                <property name="primary">True</property>
+                <property name="icon-name">open-menu-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Main Menu</property>
+                <property name="menu-model">primary_menu</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <property name="content">
+          <object class="GtkBox" id="content_box">
+            <property name="hexpand">True</property>
+            <property name="vexpand">True</property>
+          </object>
+        </property>
+      </object>
+    </property>
+  </template>
+
+  <menu id="primary_menu">
+
+    <section>
+
+      <submenu>
+        <attribute name="label">Audio Source</attribute>
+
+        <item>
+          <attribute name="label">Microphone</attribute>
+          <attribute name="action">win.audio-source</attribute>
+          <attribute name="target">'mic'</attribute>
+        </item>
+
+        <item>
+          <attribute name="label">System Audio</attribute>
+          <attribute name="action">win.audio-source</attribute>
+          <attribute name="target">'system'</attribute>
+        </item>
+
+        <item>
+          <attribute name="label">None</attribute>
+          <attribute name="action">win.audio-source</attribute>
+          <attribute name="target">'none'</attribute>
+        </item>
+
+      </submenu>
+
+    </section>
+
+
+    <section>
+
+      <item>
+        <attribute name="label" translatable="yes">_Preferences</attribute>
+        <attribute name="action">app.preferences</attribute>
+      </item>
+
+      <item>
+        <attribute name="label" translatable="yes">_Keyboard Shortcuts</attribute>
+        <attribute name="action">app.shortcuts</attribute>
+      </item>
+
+      <item>
+        <attribute name="label" translatable="yes">_About Melange</attribute>
+        <attribute name="action">app.about</attribute>
+      </item>
+
+    </section>
+
+  </menu>
+</interface>

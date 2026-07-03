@@ -1,0 +1,12 @@
+headerbar.melange-header {
+    color: white;
+    background: rgba(30, 30, 30, 0.65);
+}
+
+headerbar.melange-header button {
+    color: white;
+}
+
+headerbar.melange-header image {
+    color: white;
+}

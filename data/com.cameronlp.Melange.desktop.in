@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Melange
+Exec=melange
+Icon=com.cameronlp.Melange
+Terminal=false
+Type=Application
+Categories=Utility;
+Keywords=GTK;
+StartupNotify=true
+DBusActivatable=true
