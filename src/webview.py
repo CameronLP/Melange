@@ -50,9 +50,33 @@ threading.Thread(
 ).start()
 
 
+def on_debug_message(manager, js_value):
+
+    print("[JS]", js_value.to_string())
+
+
 def create_webview():
 
-    view = WebKit.WebView()
+    content_manager = WebKit.UserContentManager()
+
+    content_manager.register_script_message_handler("debug")
+
+    content_manager.connect(
+        "script-message-received::debug",
+        on_debug_message
+    )
+
+    view = WebKit.WebView(
+        user_content_manager=content_manager
+    )
+
+    # This is an embedded single-purpose visualizer, not a browser tab,
+    # so there's no autoplay-abuse concern. Without this,
+    # AudioContext.resume() only ever succeeds when called from JS that
+    # runs as a direct consequence of a real DOM click - which never
+    # happens on page load, so the system-audio analyser silently never
+    # starts.
+    view.get_settings().set_media_playback_requires_user_gesture(False)
 
     view.set_hexpand(True)
     view.set_vexpand(True)

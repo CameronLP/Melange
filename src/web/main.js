@@ -46,6 +46,10 @@ function debug(msg) {
 
     d.textContent += msg + "\n";
     d.scrollTop = d.scrollHeight;
+
+    try {
+        window.webkit.messageHandlers.debug.postMessage(String(msg));
+    } catch(e) {}
 }
 
 
@@ -552,12 +556,9 @@ window.receiveAudio = function(encoded) {
     }
 
 
-    //debug(
-    //    "FLOAT PCM samples=" +
-    //    floats.length +
-    //    " max=" +
-    //    max
-    //);
+    if (pcmNode) {
+        pcmNode.port.postMessage(floats);
+    }
 
 };
 

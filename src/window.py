@@ -2,8 +2,6 @@ import gi
 import json
 import subprocess
 import threading
-import math
-import struct
 import base64
 
 gi.require_version("Gst", "1.0")
@@ -39,39 +37,23 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
 
-        self.get_monitor_source()
-
         # Webview
 
         self.webview = create_webview()
-
-        #threading.Thread(
-        #    target=self.start_audio_monitor,
-        #    args=(self.webview,),
-        #    daemon=True
-        #).start()
-
-        #threading.Thread(
-        #    target=self.watch_audio_changes,
-        #    daemon=True
-        #).start()
 
         self.content_box.append(
             self.webview
         )
 
         self.gst_pipeline = None
+        self.current_sink = None
 
         self.start_system_audio()
 
-        print(
-            subprocess.check_output(
-                ["pactl", "list", "sources", "short"]
-            ).decode()
-        )
-
-
-
+        threading.Thread(
+            target=self.watch_audio_changes,
+            daemon=True
+        ).start()
 
         # Mouse and Toolbar
 
@@ -127,7 +109,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         action = Gio.SimpleAction.new_stateful(
             "audio-source",
             GLib.VariantType.new("s"),
-            GLib.Variant("s", "none")
+            GLib.Variant("s", "system")
         )
 
         action.connect(
@@ -258,64 +240,29 @@ class MelangeWindow(Adw.ApplicationWindow):
         #)
 
 
-    def start_audio_monitor(self, webview):
-
-        sink = subprocess.check_output(
-            ["pactl", "get-default-sink"]
-        ).decode().strip()
-
-        monitor = sink + ".monitor"
-
-        print("Starting capture:", monitor)
-
-
-        cmd = [
-            "parec",
-            "--format=s16le",
-            "--rate=48000",
-            "--channels=2",
-            "--device=" + monitor
-        ]
-
-
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE
-        )
-
-
-
-
-
-
-
     # System Audio Capture (Pipewire)
 
     def start_system_audio(self):
 
+        sink_name = self.get_default_sink()
 
-        monitor = self.get_monitor_source()
+        self.current_sink = sink_name
 
-        print("GStreamer monitor:", monitor)
+        print("Capturing monitor of sink:", sink_name)
 
+        # target-object must be the sink's own node name, not its
+        # ".monitor" name (pipewiresrc only matches real PipeWire node
+        # names/serials, and the deprecated `path` property only takes
+        # numeric ids). stream.capture.sink=true is what actually taps
+        # the sink's monitor ports instead of opening a real capture
+        # device - without it, WirePlumber may treat this as a
+        # microphone request and, on Bluetooth sinks, drop the a2dp
+        # connection to the lower quality headset profile.
         self.gst_pipeline = Gst.parse_launch(
             f"""
             pipewiresrc
-            path={monitor}
-            !
-            audioconvert
-            !
-            audio/x-raw,format=S16LE,rate=44100,channels=2
-            !
-            appsink name=sink emit-signals=true sync=false
-            """
-        )
-
-
-        self.gst_pipeline = Gst.parse_launch(
-            """
-            pipewiresrc
-            path=bluez_output.C4_16_88_3B_02_E7.1.monitor
+            target-object="{sink_name}"
+            stream-properties="props,stream.capture.sink=true"
             !
             audio/x-raw,format=S16LE,rate=44100,channels=2
             !
@@ -326,8 +273,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             appsink name=sink emit-signals=true sync=false
             """
         )
-
-
 
         sink = self.gst_pipeline.get_by_name("sink")
 
@@ -346,13 +291,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         sample = sink.emit("pull-sample")
 
         if sample:
-            print(
-                "CAPS:",
-                sample.get_caps().to_string()
-            )
-
-
-        if sample:
             buffer = sample.get_buffer()
 
             ok, mapinfo = buffer.map(
@@ -362,25 +300,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             if ok:
                 data = bytes(mapinfo.data)
                 buffer.unmap(mapinfo)
-
-                # s16le debug
-                samples = struct.unpack(
-                    "<" + "h"*(len(data)//2),
-                    data
-                )
-
-                peak = max(abs(x) for x in samples)
-
-                avg = sum(abs(x) for x in samples) / len(samples)
-
-                print(
-                    "PCM:",
-                    "peak=", peak,
-                    "avg=", avg,
-                    "first=", samples[:10]
-                )
-
-                print("PCM PEAK:", peak)
 
                 GLib.idle_add(
                     self.send_audio_to_webview,
@@ -392,8 +311,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
 
     def send_audio_to_webview(self, data):
-
-        import base64
 
         encoded = base64.b64encode(
             data
@@ -413,19 +330,11 @@ class MelangeWindow(Adw.ApplicationWindow):
 
 
 
-    def get_monitor_source(self):
+    def get_default_sink(self):
 
-        sink = subprocess.check_output(
+        return subprocess.check_output(
             ["pactl", "get-default-sink"]
         ).decode().strip()
-
-        print("DEFAULT SINK:", sink)
-
-        monitor = sink + ".monitor"
-
-        print("MONITOR:", monitor)
-
-        return monitor
 
     def watch_audio_changes(self):
 
@@ -437,25 +346,38 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         for line in process.stdout:
 
-            print("PULSE EVENT:", line.strip())
-
-            if "sink" in line:
+            # Default sink/source changes are reported as a change on
+            # the server object, not on a specific sink - filtering on
+            # "sink" here would also fire on unrelated per-app volume
+            # changes (sink-input events) and restart the pipeline for
+            # no reason.
+            if "on server" in line:
 
                 GLib.idle_add(
-                    self.restart_audio_monitor
+                    self.check_default_sink_changed
                 )
 
+    def check_default_sink_changed(self):
 
+        sink_name = self.get_default_sink()
+
+        if sink_name != self.current_sink:
+
+            print("Default sink changed:", self.current_sink, "->", sink_name)
+
+            self.restart_audio_monitor()
+
+        return False
 
     def restart_audio_monitor(self):
 
-        print("Restarting audio monitor")
+        if self.gst_pipeline:
 
-        threading.Thread(
-            target=self.start_audio_monitor,
-            args=(self.webview,),
-            daemon=True
-        ).start()
+            self.gst_pipeline.set_state(
+                Gst.State.NULL
+            )
+
+        self.start_system_audio()
 
         return False
 
