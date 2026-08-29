@@ -50,12 +50,16 @@ threading.Thread(
 ).start()
 
 
-def on_debug_message(manager, js_value):
+def create_webview(on_message=None):
 
-    print("[JS]", js_value.to_string())
+    def handle_debug_message(manager, js_value):
 
+        text = js_value.to_string()
 
-def create_webview():
+        print("[JS]", text)
+
+        if on_message:
+            on_message(text)
 
     content_manager = WebKit.UserContentManager()
 
@@ -63,7 +67,7 @@ def create_webview():
 
     content_manager.connect(
         "script-message-received::debug",
-        on_debug_message
+        handle_debug_message
     )
 
     view = WebKit.WebView(

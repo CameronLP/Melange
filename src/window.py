@@ -39,7 +39,9 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         # Webview
 
-        self.webview = create_webview()
+        self.webview = create_webview(
+            on_message=self.on_webview_debug_message
+        )
 
         self.content_box.append(
             self.webview
@@ -119,6 +121,25 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(action)
 
+
+
+    def on_webview_debug_message(self, text):
+
+        if text != "APP_READY":
+            return
+
+        # Setting the action's initial state in new_stateful() only
+        # sets its internal value - it does not fire "change-state"
+        # (that only happens on a real activation, e.g. clicking the
+        # menu item), so without this the webview never actually gets
+        # told to use system audio until the user opens the menu
+        # themselves. "APP_READY" is sent by main.js once
+        # window.setAudioSource is actually defined and safe to call.
+        action = self.lookup_action("audio-source")
+
+        action.change_state(
+            GLib.Variant("s", "system")
+        )
 
 
     def toolbar_enter(self, controller, x, y):

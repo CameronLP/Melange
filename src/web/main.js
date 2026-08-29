@@ -601,6 +601,14 @@ function resetButterchurnAudio() {
 }
 
 
+// Signals Python that window.setAudioSource etc. are now defined and
+// safe to call - the WebKit "load-changed" FINISHED event fires once
+// the network fetch completes, which is before this module script has
+// actually run, so calling setAudioSource() from Python in response to
+// that would silently no-op with a ReferenceError.
+debug("APP_READY");
+
+
 
 
 
