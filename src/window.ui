@@ -15,22 +15,12 @@
 
 
             <child type="start">
-              <object class="GtkBox">
-                <property name="spacing">6</property>
-                <child>
-                  <object class="GtkButton" id="previous_button">
-                    <property name="label">Previous</property>
-                  </object>
-                </child>
-                <child>
-                  <object class="GtkButton" id="next_button">
-                    <property name="label">Next</property>
-                  </object>
-                </child>
+              <object class="GtkButton" id="load_preset_button">
+                <property name="icon-name">document-open-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Load Preset File</property>
+                <property name="action-name">win.load-preset</property>
               </object>
             </child>
-
-
 
             <child type="end">
               <object class="GtkMenuButton" id="menu_button">
@@ -43,9 +33,13 @@
           </object>
         </child>
         <property name="content">
-          <object class="GtkBox" id="content_box">
-            <property name="hexpand">True</property>
-            <property name="vexpand">True</property>
+          <object class="AdwToastOverlay" id="toast_overlay">
+            <property name="child">
+              <object class="GtkBox" id="content_box">
+                <property name="hexpand">True</property>
+                <property name="vexpand">True</property>
+              </object>
+            </property>
           </object>
         </property>
       </object>
@@ -73,6 +67,21 @@
            placeholder is filled in via GtkPopoverMenu.add_child). -->
       <item>
         <attribute name="custom">sensitivity</attribute>
+      </item>
+
+    </section>
+
+
+    <section>
+
+      <item>
+        <attribute name="label" translatable="yes">_Load Preset…</attribute>
+        <attribute name="action">win.load-preset</attribute>
+      </item>
+
+      <item>
+        <attribute name="label" translatable="yes">Lock Preset</attribute>
+        <attribute name="action">win.lock-preset</attribute>
       </item>
 
     </section>

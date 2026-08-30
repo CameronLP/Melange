@@ -1,5 +1,6 @@
 import butterchurn from "butterchurn";
 import presets from "butterchurn-presets";
+import milkdropPresetConverter from "milkdrop-preset-converter";
 
 let audioSource = null;
 let currentStream = null;
@@ -411,6 +412,60 @@ window.previousPreset = function() {
     );
 
     announcePresetName(names[currentPreset]);
+};
+
+
+// Routed through Python (which calls back into nextPreset/
+// previousPreset itself) rather than calling those directly, so the
+// preset-lock check - and the native toast it shows - only has to
+// live in one place, regardless of whether a change was requested
+// from these arrows or the win.next-preset/win.previous-preset
+// keyboard shortcuts.
+document.getElementById("nav-prev").addEventListener(
+    "click",
+    () => debug("NAV_PREVIOUS")
+);
+
+document.getElementById("nav-next").addEventListener(
+    "click",
+    () => debug("NAV_NEXT")
+);
+
+
+// Called from Python (see load_preset_clicked in window.py) after the
+// user picks a .milk file via the native file chooser. base64Text is
+// the raw file contents - base64 because MilkDrop preset text is full
+// of quotes/backslashes/newlines that aren't safe to embed directly in
+// a JS string literal the way evaluate_javascript() builds this call.
+window.loadPresetFile = async function(base64Text, name) {
+
+    try {
+
+        const bytes = Uint8Array.from(
+            atob(base64Text),
+            c => c.charCodeAt(0)
+        );
+
+        const text = new TextDecoder("utf-8").decode(bytes);
+
+        const preset = await milkdropPresetConverter.convertPreset(text);
+
+        allPresets[name] = preset;
+        names.push(name);
+        currentPreset = names.length - 1;
+
+        visualizer.loadPreset(preset, 0);
+
+        announcePresetName(name);
+
+        debug("Loaded preset file: " + name);
+
+    } catch(e) {
+
+        debug("LOAD PRESET ERROR: " + e.message);
+
+        console.error(e);
+    }
 };
 
 

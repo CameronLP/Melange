@@ -19,12 +19,11 @@ class MelangeWindow(Adw.ApplicationWindow):
     __gtype_name__ = "MelangeWindow"
 
     content_box = Gtk.Template.Child()
+    toast_overlay = Gtk.Template.Child()
     toolbar_view = Gtk.Template.Child()
     headerbar = Gtk.Template.Child()
     menu_button = Gtk.Template.Child()
 
-    next_button = Gtk.Template.Child()
-    previous_button = Gtk.Template.Child()
 
     def __init__(self, **kwargs):
 
@@ -70,6 +69,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pinned_sink = None
         self.pactl_event_timer = None
         self.webview_ready = False
+        self.preset_locked = False
 
         self.start_system_audio()
 
@@ -129,16 +129,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.menu_changed
         )
 
-        self.next_button.connect(
-            "clicked",
-            self.next_preset
-        )
-
-        self.previous_button.connect(
-            "clicked",
-            self.previous_preset
-        )
-
         self.build_sensitivity_control()
 
 
@@ -190,6 +180,28 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(fullscreen_action)
 
+        load_preset_action = Gio.SimpleAction.new("load-preset", None)
+
+        load_preset_action.connect(
+            "activate",
+            self.load_preset_clicked
+        )
+
+        self.add_action(load_preset_action)
+
+        lock_preset_action = Gio.SimpleAction.new_stateful(
+            "lock-preset",
+            None,
+            GLib.Variant("b", False)
+        )
+
+        lock_preset_action.connect(
+            "change-state",
+            self.lock_preset_changed
+        )
+
+        self.add_action(lock_preset_action)
+
 
 
     def on_webview_debug_message(self, text):
@@ -197,6 +209,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         if text.startswith("PRESET_NAME:"):
             preset_name = text[len("PRESET_NAME:"):]
             self.set_title(f'Melange - "{preset_name}"')
+            return
+
+        # Sent by the on-canvas nav arrows (index.html/main.js) instead
+        # of calling nextPreset()/previousPreset() directly, so the
+        # lock check (and the native toast it shows) lives in one
+        # place regardless of whether a change was requested via those
+        # arrows or the win.next-preset/win.previous-preset keyboard
+        # shortcuts.
+        if text == "NAV_NEXT":
+            self.next_preset(None)
+            return
+
+        if text == "NAV_PREVIOUS":
+            self.previous_preset(None)
             return
 
         if text != "APP_READY":
@@ -298,6 +324,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         if not ok:
             return
 
+        # Skip the leftmost/rightmost 15% - that's where the on-canvas
+        # preset nav arrows live (see index.html's .nav-zone rule).
+        # This gesture runs in the CAPTURE phase (see its setup above)
+        # so it always sees the press before the webview does; since
+        # the whole canvas is one opaque WebKit widget from GTK's
+        # perspective (unlike a real header bar, whose buttons are
+        # separate widgets that claim their own clicks first),
+        # unconditionally starting a move here would eat every click
+        # meant for those buttons before WebKit ever sees it.
+        width = widget.get_width()
+
+        if width > 0 and (x < width * 0.15 or x > width * 0.85):
+            return
+
         self.get_surface().begin_move(
             gesture.get_current_event_device(),
             gesture.get_current_button(),
@@ -314,31 +354,78 @@ class MelangeWindow(Adw.ApplicationWindow):
         else:
             self.fullscreen()
 
+    def lock_preset_changed(self, action, value):
+
+        action.set_state(value)
+
+        self.preset_locked = value.get_boolean()
+
+        self.show_toast(
+            "Preset locked" if self.preset_locked else "Preset unlocked"
+        )
+
+    def show_toast(self, text):
+
+        toast = Adw.Toast.new(text)
+        toast.set_timeout(2)
+
+        self.toast_overlay.add_toast(toast)
+
+    def load_preset_clicked(self, action, param):
+
+        dialog = Gtk.FileDialog()
+        dialog.set_title("Load Preset")
+
+        milk_filter = Gtk.FileFilter()
+        milk_filter.set_name("MilkDrop Presets")
+        milk_filter.add_pattern("*.milk")
+
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(milk_filter)
+        dialog.set_filters(filters)
+
+        dialog.open(self, None, self.on_preset_file_chosen)
+
+    def on_preset_file_chosen(self, dialog, result, user_data=None):
+
+        try:
+            gfile = dialog.open_finish(result)
+
+        except GLib.Error as e:
+            print("Load preset cancelled/failed:", e)
+            return
+
+        ok, contents, etag = gfile.load_contents(None)
+
+        if not ok:
+            print("Failed to read preset file:", gfile.get_path())
+            return
+
+        # Base64, not a plain string substitution - MilkDrop preset
+        # text is full of quotes/backslashes/newlines that aren't safe
+        # to embed directly in a JS string literal.
+        encoded = base64.b64encode(contents).decode("ascii")
+        name = gfile.get_basename()
+
+        self.run_js(
+            f"loadPresetFile({json.dumps(encoded)}, {json.dumps(name)});"
+        )
+
     def next_preset(self, button):
+
+        if self.preset_locked:
+            self.show_toast("Preset is locked")
+            return
 
         self.run_js("nextPreset();")
 
-        #self.webview.evaluate_javascript(
-        #    "nextPreset();",
-        #    -1,
-        #    None,
-        #    None,
-        #    None,
-        #    None
-        #)
-
     def previous_preset(self, button):
 
-        self.run_js("previousPreset();")
+        if self.preset_locked:
+            self.show_toast("Preset is locked")
+            return
 
-        #self.webview.evaluate_javascript(
-        #    "previousPreset();",
-        #    -1,
-        #    None,
-        #    None,
-        #    None,
-        #    None
-        #)
+        self.run_js("previousPreset();")
 
     def sensitivity_changed(self, scale):
 

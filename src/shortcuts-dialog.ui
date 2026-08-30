@@ -22,6 +22,12 @@
             <property name="action-name">win.toggle-fullscreen</property>
           </object>
         </child>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Lock Preset</property>
+            <property name="action-name">win.lock-preset</property>
+          </object>
+        </child>
       </object>
     </child>
     <child>
