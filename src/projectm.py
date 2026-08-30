@@ -155,6 +155,12 @@ _playlist_lib.projectm_playlist_clear.restype = None
 _playlist_lib.projectm_playlist_items.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_uint32]
 _playlist_lib.projectm_playlist_items.restype = ctypes.POINTER(ctypes.c_char_p)
 
+_playlist_lib.projectm_playlist_item.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+_playlist_lib.projectm_playlist_item.restype = ctypes.c_void_p
+
+_playlist_lib.projectm_playlist_free_string.argtypes = [ctypes.c_void_p]
+_playlist_lib.projectm_playlist_free_string.restype = None
+
 _playlist_lib.projectm_playlist_free_string_array.argtypes = [ctypes.POINTER(ctypes.c_char_p)]
 _playlist_lib.projectm_playlist_free_string_array.restype = None
 
@@ -262,6 +268,19 @@ class Playlist:
         _playlist_lib.projectm_playlist_free_string_array(raw)
 
         return result
+
+    def item(self, index):
+
+        ptr = _playlist_lib.projectm_playlist_item(self.handle, index)
+
+        if not ptr:
+            return None
+
+        value = ctypes.cast(ptr, ctypes.c_char_p).value.decode("utf-8")
+
+        _playlist_lib.projectm_playlist_free_string(ptr)
+
+        return value
 
     def set_shuffle(self, shuffle):
 

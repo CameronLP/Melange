@@ -46,6 +46,11 @@
                     "url" : "https://github.com/projectM-visualizer/projectm.git",
                     "commit" : "bd2b1ba9f425e91c93421effb6c184fbdf89e4b3",
                     "comment" : "Pinned past v4.1.4: that tag hardcodes rendering to FBO 0 (glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0) in ProjectM::RenderFrame), incompatible with Gtk.GLArea, which always renders into its own offscreen FBO. This commit adds projectm_opengl_render_frame_fbo() to fix that. Submodules (vendor/projectm-eval) are fetched automatically."
+                },
+                {
+                    "type" : "patch",
+                    "path" : "patches/projectm-gtk-glarea-fixes.patch",
+                    "comment" : "Three upstream bugs found while integrating with Gtk.GLArea's offscreen-FBO rendering model (not GLArea-specific in nature, just never exercised by projectM's usual SDL/Qt frontends which target FBO 0): (1) ProjectM::RenderFrame never resets glViewport before the final composite draw, so it inherits whatever smaller viewport a preset's internal blur pass last set, confining output to that leftover rectangle. (2) BlurTexture::Update captured 'the framebuffer to restore afterward' AFTER calling AllocateTextures(), which itself rebinds a framebuffer as a side effect on the first call - permanently losing the real caller framebuffer from that point on. (3) A default-constructed Texture (id 0, target GL_NONE) used as a placeholder - e.g. the auto-loaded idle preset's output texture before it's ever been rendered - raised GL_INVALID_ENUM when something tried to Bind() it during a preset transition."
                 }
             ]
         },

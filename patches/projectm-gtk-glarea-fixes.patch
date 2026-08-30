@@ -1,0 +1,74 @@
+diff --git a/src/libprojectM/MilkdropPreset/BlurTexture.cpp b/src/libprojectM/MilkdropPreset/BlurTexture.cpp
+index daa1033d2..bce991396 100644
+--- a/src/libprojectM/MilkdropPreset/BlurTexture.cpp
++++ b/src/libprojectM/MilkdropPreset/BlurTexture.cpp
+@@ -106,6 +106,17 @@ void BlurTexture::Update(const Renderer::Texture& sourceTexture, const PerFrameC
+         return;
+     }
+ 
++    // Remember previously bound framebuffer. Must happen before
++    // AllocateTextures(), which calls m_blurFramebuffer.SetSize() on
++    // the first call (or after a real size change) - that binds the
++    // framebuffer as a side effect, so capturing "previous" after it
++    // would capture SetSize()'s own binding instead of the caller's,
++    // permanently losing the real caller framebuffer on restore below.
++    GLint origReadFramebuffer;
++    GLint origDrawFramebuffer;
++    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &origReadFramebuffer);
++    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &origDrawFramebuffer);
++
+     AllocateTextures(sourceTexture);
+ 
+     unsigned int const passes = static_cast<int>(m_blurLevel) * 2;
+@@ -133,12 +144,6 @@ void BlurTexture::Update(const Renderer::Texture& sourceTexture, const PerFrameC
+     scale[2] = 1.0f / (tempMax - tempMin);
+     bias[2] = -tempMin * scale[2];
+ 
+-    // Remember previously bound framebuffer
+-    GLint origReadFramebuffer;
+-    GLint origDrawFramebuffer;
+-    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &origReadFramebuffer);
+-    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &origDrawFramebuffer);
+-
+     m_blurFramebuffer.Bind(0);
+ 
+     glBlendFunc(GL_ONE, GL_ZERO);
+diff --git a/src/libprojectM/ProjectM.cpp b/src/libprojectM/ProjectM.cpp
+index 3e97724de..15ef47369 100644
+--- a/src/libprojectM/ProjectM.cpp
++++ b/src/libprojectM/ProjectM.cpp
+@@ -167,6 +167,13 @@ void ProjectM::RenderFrame(uint32_t targetFramebufferObject /*= 0*/)
+     m_activePreset->RenderFrame(audioData, renderContext);
+ 
+     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(targetFramebufferObject));
++    // The preset's internal rendering (blur downsampling, per-pass
++    // composites, etc.) sets glViewport repeatedly to internal,
++    // often smaller, texture sizes and never restores it. Without
++    // resetting it here, the final full-screen composite quad below
++    // inherits whatever viewport a preset's last internal pass left
++    // behind, confining the visible output to that leftover rectangle.
++    glViewport(0, 0, static_cast<GLsizei>(m_windowWidth), static_cast<GLsizei>(m_windowHeight));
+ 
+     if (m_transition != nullptr && m_transitioningPreset != nullptr)
+     {
+diff --git a/src/libprojectM/Renderer/Texture.cpp b/src/libprojectM/Renderer/Texture.cpp
+index 47fb59b30..6cb0c293b 100644
+--- a/src/libprojectM/Renderer/Texture.cpp
++++ b/src/libprojectM/Renderer/Texture.cpp
+@@ -54,6 +54,16 @@ Texture::~Texture()
+ 
+ void Texture::Bind(GLint slot, const Sampler::Ptr& sampler) const
+ {
++    // A default-constructed Texture (id 0, target GL_NONE) is used as
++    // a placeholder, e.g. for an attachment slot or a preset that has
++    // never actually been rendered yet. Binding GL_NONE is invalid
++    // and raises GL_INVALID_ENUM, so just skip - there's no real
++    // texture to bind anyway.
++    if (m_textureId == 0)
++    {
++        return;
++    }
++
+     glActiveTexture(GL_TEXTURE0 + slot);
+     glBindTexture(m_target, m_textureId);
+ 

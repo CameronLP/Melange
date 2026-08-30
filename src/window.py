@@ -1,15 +1,16 @@
+import ctypes
 import gi
 import json
+import os
 import subprocess
 import threading
-import base64
 
 gi.require_version("Gst", "1.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
 from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst
-from melange.webview import create_webview
+from melange.projectm_view import ProjectMView
 
 Gst.init(None)
 
@@ -36,22 +37,22 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
 
-        # Webview
+        # Visualizer
 
-        self.webview = create_webview(
-            on_message=self.on_webview_debug_message
-        )
+        self.projectm_view = ProjectMView()
+        self.projectm_view.connect("ready", self.on_projectm_ready)
 
         self.content_box.append(
-            self.webview
+            self.projectm_view
         )
 
         # Lets the window be dragged from anywhere, not just the
-        # header bar. Has to run in the CAPTURE phase and on
-        # content_box (the webview's parent) rather than the webview
-        # itself - WebKit claims button presses for its own hit
-        # testing, so a normal (bubble-phase) gesture on the webview
-        # would never see them.
+        # header bar. Runs in the CAPTURE phase on content_box (the
+        # visualizer's parent) rather than the visualizer itself, since
+        # begin_move() has to fire before the child widget's own click
+        # handling - a real header bar's buttons are separate widgets
+        # that claim their own clicks first, but there's nothing
+        # equivalent to defer to here.
         drag_gesture = Gtk.GestureClick()
 
         drag_gesture.set_button(Gdk.BUTTON_PRIMARY)
@@ -68,10 +69,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.current_sink = None
         self.pinned_sink = None
         self.pactl_event_timer = None
-        self.webview_ready = False
         self.preset_locked = False
-        self.preset_names = []
-        self.preset_list_store = None
         self.preset_browser_dialog = None
 
         self.start_system_audio()
@@ -150,9 +148,17 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(action)
 
-        # Preset/fullscreen controls, exposed as actions (rather than
-        # just calling run_js straight from the button handlers) so
-        # they get real keyboard accelerators via
+        # Setting the initial state above only sets the action's
+        # internal value - it does not fire "change-state" (that only
+        # happens on a real activation, e.g. clicking the menu item),
+        # so without this nothing would actually get pinned to the
+        # current sink until the user opened the menu themselves.
+        action.change_state(
+            GLib.Variant("s", self.current_sink)
+        )
+
+        # Preset/fullscreen controls, exposed as actions so they get
+        # real keyboard accelerators via
         # app.set_accels_for_action() in main.py, and so those
         # accelerators show up automatically in the shortcuts dialog
         # via action-name.
@@ -216,60 +222,36 @@ class MelangeWindow(Adw.ApplicationWindow):
 
 
 
-    def on_webview_debug_message(self, text):
+    def on_projectm_ready(self, projectm_view):
 
-        if text.startswith("PRESET_NAME:"):
-            preset_name = text[len("PRESET_NAME:"):]
-            self.set_title(f'Melange - "{preset_name}"')
-            return
+        projectm_view.playlist.set_switched_callback(self.on_preset_switched)
+        projectm_view.set_sensitivity(1.0)
 
-        # The actual preset names only exist in JS (from
-        # butterchurn-presets, plus anything loaded via
-        # win.load-preset) - this is Python's copy, used to build the
-        # native preset browser list. Sent whenever the list changes.
-        if text.startswith("PRESET_LIST:"):
-            self.preset_names = json.loads(text[len("PRESET_LIST:"):])
+        # data/presets (projectM's own default set, presets_projectM
+        # from projectM-SDL) installed alongside this module - a real
+        # /usr/... host path can't be exposed into the sandbox at all
+        # (Flatpak rejects "/usr" as reserved), which a bundled preset
+        # directory sidesteps entirely regardless.
+        pkgdatadir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-            if self.preset_list_store is not None:
-                self.preset_list_store.splice(
-                    0,
-                    self.preset_list_store.get_n_items(),
-                    self.preset_names
-                )
-
-            return
-
-        # Sent by the on-canvas nav arrows (index.html/main.js) instead
-        # of calling nextPreset()/previousPreset() directly, so the
-        # lock check (and the native toast it shows) lives in one
-        # place regardless of whether a change was requested via those
-        # arrows or the win.next-preset/win.previous-preset keyboard
-        # shortcuts.
-        if text == "NAV_NEXT":
-            self.next_preset(None)
-            return
-
-        if text == "NAV_PREVIOUS":
-            self.previous_preset(None)
-            return
-
-        if text != "APP_READY":
-            return
-
-        self.webview_ready = True
-
-        # Setting the action's initial state in new_stateful() only
-        # sets its internal value - it does not fire "change-state"
-        # (that only happens on a real activation, e.g. clicking the
-        # menu item), so without this the webview never actually gets
-        # told to use system audio until the user opens the menu
-        # themselves. "APP_READY" is sent by main.js once
-        # window.setAudioSource is actually defined and safe to call.
-        action = self.lookup_action("audio-source")
-
-        action.change_state(
-            GLib.Variant("s", self.current_sink)
+        projectm_view.playlist.add_path(
+            os.path.join(pkgdatadir, "presets"),
+            recurse_subdirs=True
         )
+
+        if projectm_view.playlist.size() > 0:
+            projectm_view.playlist.set_position(0, hard_cut=False)
+
+    def on_preset_switched(self, is_hard_cut, index):
+
+        name = self.projectm_view.playlist.item(index)
+
+        if name:
+            display_name = os.path.splitext(os.path.basename(name))[0]
+
+            self.set_title(f'Melange - "{display_name}"')
+
+        self.projectm_view.unstick()
 
 
     def toolbar_enter(self, controller, x, y):
@@ -352,20 +334,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         if not ok:
             return
 
-        # Skip the leftmost/rightmost 15% - that's where the on-canvas
-        # preset nav arrows live (see index.html's .nav-zone rule).
-        # This gesture runs in the CAPTURE phase (see its setup above)
-        # so it always sees the press before the webview does; since
-        # the whole canvas is one opaque WebKit widget from GTK's
-        # perspective (unlike a real header bar, whose buttons are
-        # separate widgets that claim their own clicks first),
-        # unconditionally starting a move here would eat every click
-        # meant for those buttons before WebKit ever sees it.
-        width = widget.get_width()
-
-        if width > 0 and (x < width * 0.15 or x > width * 0.85):
-            return
-
         self.get_surface().begin_move(
             gesture.get_current_event_device(),
             gesture.get_current_button(),
@@ -387,6 +355,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         action.set_state(value)
 
         self.preset_locked = value.get_boolean()
+        self.projectm_view.set_locked(self.preset_locked)
 
         self.show_toast(
             "Preset locked" if self.preset_locked else "Preset unlocked"
@@ -401,14 +370,26 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def browse_presets_clicked(self, action, param):
 
+        if not self.projectm_view.playlist:
+            self.show_toast("Visualizer is still starting up")
+            return
+
         if self.preset_browser_dialog is None:
             self.build_preset_browser_dialog()
+
+        items = self.projectm_view.playlist.items()
+
+        self.preset_list_store.splice(
+            0,
+            self.preset_list_store.get_n_items(),
+            items
+        )
 
         self.preset_browser_dialog.present(self)
 
     def build_preset_browser_dialog(self):
 
-        self.preset_list_store = Gtk.StringList.new(self.preset_names)
+        self.preset_list_store = Gtk.StringList.new([])
 
         expression = Gtk.PropertyExpression.new(
             Gtk.StringObject,
@@ -488,9 +469,18 @@ class MelangeWindow(Adw.ApplicationWindow):
     def preset_row_activated(self, list_view, position):
 
         string_object = list_view.get_model().get_item(position)
-        name = string_object.get_string()
+        path = string_object.get_string()
 
-        self.run_js(f"loadPresetByName({json.dumps(name)});")
+        # position is an index into the (possibly search-filtered)
+        # GtkListView model, which won't match the playlist's own
+        # ordering once a filter is active - set_position() needs the
+        # real playlist index, found by matching the path instead.
+        try:
+            playlist_index = self.projectm_view.playlist.items().index(path)
+            self.projectm_view.playlist.set_position(playlist_index, hard_cut=False)
+
+        except ValueError:
+            self.projectm_view.load_preset_file(path)
 
         self.preset_browser_dialog.close()
 
@@ -518,41 +508,50 @@ class MelangeWindow(Adw.ApplicationWindow):
             print("Load preset cancelled/failed:", e)
             return
 
-        ok, contents, etag = gfile.load_contents(None)
-
-        if not ok:
-            print("Failed to read preset file:", gfile.get_path())
+        if not self.projectm_view.playlist:
+            self.show_toast("Visualizer is still starting up")
             return
 
-        # Base64, not a plain string substitution - MilkDrop preset
-        # text is full of quotes/backslashes/newlines that aren't safe
-        # to embed directly in a JS string literal.
-        encoded = base64.b64encode(contents).decode("ascii")
-        name = gfile.get_basename()
+        path = gfile.get_path()
 
-        self.run_js(
-            f"loadPresetFile({json.dumps(encoded)}, {json.dumps(name)});"
-        )
+        if not path:
+            print("Preset file has no local path (not on this filesystem?):", gfile.get_uri())
+            return
+
+        # projectm_load_preset_file() takes a real filesystem path
+        # directly and parses/renders .milk natively - unlike the old
+        # Butterchurn path, there's no conversion step or JS round
+        # trip needed here at all.
+        self.projectm_view.load_preset_file(path)
+        self.projectm_view.playlist.add_preset(path)
+
+        self.set_title(f'Melange - "{os.path.splitext(os.path.basename(path))[0]}"')
 
     def next_preset(self, button):
 
+        if not self.projectm_view.playlist:
+            return
+
         if self.preset_locked:
             self.show_toast("Preset is locked")
             return
 
-        self.run_js("nextPreset();")
+        self.projectm_view.playlist.play_next(hard_cut=False)
 
     def previous_preset(self, button):
 
+        if not self.projectm_view.playlist:
+            return
+
         if self.preset_locked:
             self.show_toast("Preset is locked")
             return
 
-        self.run_js("previousPreset();")
+        self.projectm_view.playlist.play_previous(hard_cut=False)
 
     def sensitivity_changed(self, scale):
 
-        self.run_js(f"setSensitivity({scale.get_value()});")
+        self.projectm_view.set_sensitivity(scale.get_value())
 
     def build_sensitivity_control(self):
 
@@ -599,14 +598,12 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if source == "mic":
             self.pinned_sink = None
-            self.stop_audio_capture()
-            self.run_js("setAudioSource('mic')")
+            self.restart_audio_monitor(self.get_default_source(), is_source=True)
             return
 
         if source == "none":
             self.pinned_sink = None
             self.stop_audio_capture()
-            self.run_js("setAudioSource('none')")
             return
 
         # Anything else is a specific sink's node name, picked from the
@@ -617,33 +614,39 @@ class MelangeWindow(Adw.ApplicationWindow):
         if self.current_sink != source:
             self.restart_audio_monitor(source)
 
-        self.run_js("setAudioSource('system')")
-
 
     # System Audio Capture (Pipewire)
 
-    def start_system_audio(self, sink_name=None):
+    def start_system_audio(self, node_name=None, is_source=False):
 
-        if sink_name is None:
-            sink_name = self.get_default_sink()
+        if node_name is None:
+            node_name = self.get_default_sink()
 
-        self.current_sink = sink_name
+        self.current_sink = node_name
 
-        print("Capturing monitor of sink:", sink_name)
+        print("Capturing", "source" if is_source else "sink monitor", "of:", node_name)
 
-        # target-object must be the sink's own node name, not its
-        # ".monitor" name (pipewiresrc only matches real PipeWire node
-        # names/serials, and the deprecated `path` property only takes
-        # numeric ids). stream.capture.sink=true is what actually taps
-        # the sink's monitor ports instead of opening a real capture
-        # device - without it, WirePlumber may treat this as a
-        # microphone request and, on Bluetooth sinks, drop the a2dp
-        # connection to the lower quality headset profile.
+        # target-object must be the node's own name (pipewiresrc only
+        # matches real PipeWire node names/serials, and the deprecated
+        # `path` property only takes numeric ids).
+        #
+        # stream.capture.sink=true is what taps a sink's monitor ports
+        # instead of opening a real capture device on it - without it,
+        # WirePlumber may treat this as a microphone request and, on
+        # Bluetooth sinks, drop the a2dp connection to the lower
+        # quality headset profile. It's the wrong thing to set when
+        # actually capturing a source (mic) though, since there we do
+        # want a normal capture stream.
+        stream_props = (
+            "" if is_source else
+            'stream-properties="props,stream.capture.sink=true"'
+        )
+
         self.gst_pipeline = Gst.parse_launch(
             f"""
             pipewiresrc
-            target-object="{sink_name}"
-            stream-properties="props,stream.capture.sink=true"
+            target-object="{node_name}"
+            {stream_props}
             !
             audio/x-raw,format=S16LE,rate=44100,channels=2
             !
@@ -709,43 +712,22 @@ class MelangeWindow(Adw.ApplicationWindow):
                 buffer.unmap(mapinfo)
 
                 GLib.idle_add(
-                    self.send_audio_to_webview,
+                    self.feed_pcm_to_projectm,
                     data
                 )
 
         return Gst.FlowReturn.OK
 
+    def feed_pcm_to_projectm(self, data):
 
+        # S16LE stereo interleaved, straight from the GStreamer caps in
+        # start_system_audio - projectm_pcm_add_int16 takes this format
+        # directly, no conversion needed.
+        samples = (ctypes.c_int16 * (len(data) // 2)).from_buffer_copy(data)
 
-    def send_audio_to_webview(self, data):
-
-        if not self.webview_ready:
-            return False
-
-        encoded = base64.b64encode(
-            data
-        ).decode("ascii")
-
-
-        self.webview.evaluate_javascript(
-            f"receiveAudio('{encoded}')",
-            -1,
-            None,
-            None,
-            None,
-            self.on_receive_audio_result,
-            None
-        )
+        self.projectm_view.pcm_add_int16(samples)
 
         return False
-
-    def on_receive_audio_result(self, webview, result, user_data):
-
-        try:
-            webview.evaluate_javascript_finish(result)
-
-        except Exception as e:
-            print("receiveAudio JS error:", e)
 
 
 
@@ -753,6 +735,12 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return subprocess.check_output(
             ["pactl", "get-default-sink"]
+        ).decode().strip()
+
+    def get_default_source(self):
+
+        return subprocess.check_output(
+            ["pactl", "get-default-source"]
         ).decode().strip()
 
     def list_sinks(self):
@@ -904,7 +892,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.current_sink = None
 
-    def restart_audio_monitor(self, sink_name=None):
+    def restart_audio_monitor(self, node_name=None, is_source=False):
 
         if self.gst_pipeline:
 
@@ -922,19 +910,8 @@ class MelangeWindow(Adw.ApplicationWindow):
                 Gst.CLOCK_TIME_NONE
             )
 
-        self.start_system_audio(sink_name)
+        self.start_system_audio(node_name, is_source)
 
         return False
 
 
-    def run_js(self, script):
-
-        GLib.idle_add(
-            self.webview.evaluate_javascript,
-            script,
-            -1,
-            None,
-            None,
-            None,
-            None
-        )

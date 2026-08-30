@@ -30,6 +30,7 @@ melange_sources = [
   '__init__.py',
   'main.py',
   'projectm.py',
+  'projectm_view.py',
   'webview.py',
   'window.py',
   'style.css'

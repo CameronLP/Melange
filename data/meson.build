@@ -44,3 +44,7 @@ configure_file(
 )
 
 subdir('icons')
+
+install_subdir('presets',
+  install_dir: get_option('datadir') / meson.project_name()
+)
