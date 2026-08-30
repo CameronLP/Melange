@@ -70,6 +70,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pactl_event_timer = None
         self.webview_ready = False
         self.preset_locked = False
+        self.preset_names = []
+        self.preset_list_store = None
+        self.preset_browser_dialog = None
 
         self.start_system_audio()
 
@@ -189,6 +192,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(load_preset_action)
 
+        browse_presets_action = Gio.SimpleAction.new("browse-presets", None)
+
+        browse_presets_action.connect(
+            "activate",
+            self.browse_presets_clicked
+        )
+
+        self.add_action(browse_presets_action)
+
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
             None,
@@ -209,6 +221,22 @@ class MelangeWindow(Adw.ApplicationWindow):
         if text.startswith("PRESET_NAME:"):
             preset_name = text[len("PRESET_NAME:"):]
             self.set_title(f'Melange - "{preset_name}"')
+            return
+
+        # The actual preset names only exist in JS (from
+        # butterchurn-presets, plus anything loaded via
+        # win.load-preset) - this is Python's copy, used to build the
+        # native preset browser list. Sent whenever the list changes.
+        if text.startswith("PRESET_LIST:"):
+            self.preset_names = json.loads(text[len("PRESET_LIST:"):])
+
+            if self.preset_list_store is not None:
+                self.preset_list_store.splice(
+                    0,
+                    self.preset_list_store.get_n_items(),
+                    self.preset_names
+                )
+
             return
 
         # Sent by the on-canvas nav arrows (index.html/main.js) instead
@@ -370,6 +398,101 @@ class MelangeWindow(Adw.ApplicationWindow):
         toast.set_timeout(2)
 
         self.toast_overlay.add_toast(toast)
+
+    def browse_presets_clicked(self, action, param):
+
+        if self.preset_browser_dialog is None:
+            self.build_preset_browser_dialog()
+
+        self.preset_browser_dialog.present(self)
+
+    def build_preset_browser_dialog(self):
+
+        self.preset_list_store = Gtk.StringList.new(self.preset_names)
+
+        expression = Gtk.PropertyExpression.new(
+            Gtk.StringObject,
+            None,
+            "string"
+        )
+
+        string_filter = Gtk.StringFilter.new(expression)
+        string_filter.set_match_mode(Gtk.StringFilterMatchMode.SUBSTRING)
+
+        filter_model = Gtk.FilterListModel.new(
+            self.preset_list_store,
+            string_filter
+        )
+
+        selection = Gtk.SingleSelection.new(filter_model)
+
+        factory = Gtk.SignalListItemFactory()
+
+        factory.connect("setup", self.preset_row_setup)
+        factory.connect("bind", self.preset_row_bind)
+
+        list_view = Gtk.ListView.new(selection, factory)
+
+        list_view.connect("activate", self.preset_row_activated)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_child(list_view)
+        scrolled.set_vexpand(True)
+
+        search_entry = Gtk.SearchEntry()
+
+        search_entry.connect(
+            "search-changed",
+            lambda entry: string_filter.set_search(entry.get_text())
+        )
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+
+        box.append(search_entry)
+        box.append(scrolled)
+
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(Adw.HeaderBar())
+        toolbar_view.set_content(box)
+
+        dialog = Adw.Dialog()
+        dialog.set_title("Presets")
+        dialog.set_content_width(420)
+        dialog.set_content_height(560)
+        dialog.set_child(toolbar_view)
+
+        self.preset_browser_dialog = dialog
+
+    def preset_row_setup(self, factory, list_item):
+
+        label = Gtk.Label(xalign=0)
+
+        label.set_margin_start(6)
+        label.set_margin_end(6)
+        label.set_margin_top(6)
+        label.set_margin_bottom(6)
+
+        list_item.set_child(label)
+
+    def preset_row_bind(self, factory, list_item):
+
+        label = list_item.get_child()
+        string_object = list_item.get_item()
+
+        label.set_label(string_object.get_string())
+
+    def preset_row_activated(self, list_view, position):
+
+        string_object = list_view.get_model().get_item(position)
+        name = string_object.get_string()
+
+        self.run_js(f"loadPresetByName({json.dumps(name)});")
+
+        self.preset_browser_dialog.close()
 
     def load_preset_clicked(self, action, param):
 

@@ -327,12 +327,39 @@ function announcePresetName(name) {
 }
 
 
+// The preset browser lives in native GTK (window.py), but the actual
+// preset names only exist here (from butterchurn-presets, plus
+// anything loaded via loadPresetFile) - so Python needs its own copy
+// to build that list. Sent whenever the list changes rather than kept
+// in sync incrementally, since it's just names/strings.
+function announcePresetList() {
+    debug("PRESET_LIST:" + JSON.stringify(names));
+}
+
+
+// Called from Python when a preset is picked in the native browser.
+window.loadPresetByName = function(name) {
+
+    if (!(name in allPresets)) {
+        debug("loadPresetByName: unknown preset " + name);
+        return;
+    }
+
+    currentPreset = names.indexOf(name);
+
+    visualizer.loadPreset(allPresets[name], 3);
+
+    announcePresetName(name);
+};
+
+
 visualizer.loadPreset(
     allPresets[names[0]],
     0
 );
 
 announcePresetName(names[0]);
+announcePresetList();
 
 
 debug("Preset loaded");
@@ -457,6 +484,7 @@ window.loadPresetFile = async function(base64Text, name) {
         visualizer.loadPreset(preset, 0);
 
         announcePresetName(name);
+        announcePresetList();
 
         debug("Loaded preset file: " + name);
 

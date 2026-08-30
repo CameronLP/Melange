@@ -22,6 +22,14 @@
               </object>
             </child>
 
+            <child type="start">
+              <object class="GtkButton" id="browse_presets_button">
+                <property name="icon-name">system-search-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Browse Presets</property>
+                <property name="action-name">win.browse-presets</property>
+              </object>
+            </child>
+
             <child type="end">
               <object class="GtkMenuButton" id="menu_button">
                 <property name="primary">True</property>
@@ -77,6 +85,11 @@
       <item>
         <attribute name="label" translatable="yes">_Load Preset…</attribute>
         <attribute name="action">win.load-preset</attribute>
+      </item>
+
+      <item>
+        <attribute name="label" translatable="yes">_Browse Presets…</attribute>
+        <attribute name="action">win.browse-presets</attribute>
       </item>
 
       <item>
