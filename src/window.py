@@ -49,8 +49,24 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.gst_pipeline = None
         self.current_sink = None
+        self.pinned_sink = None
+        self.pactl_event_timer = None
+        self.webview_ready = False
 
         self.start_system_audio()
+
+        # The "Audio Source" submenu is defined empty in window.ui and
+        # populated here since the list of real output devices changes
+        # at runtime as things get plugged/unplugged.
+        section0 = self.menu_button.get_menu_model().get_item_link(
+            0, Gio.MENU_LINK_SECTION
+        )
+
+        self.audio_source_submenu = section0.get_item_link(
+            0, Gio.MENU_LINK_SUBMENU
+        )
+
+        self.rebuild_audio_source_menu()
 
         threading.Thread(
             target=self.watch_audio_changes,
@@ -111,7 +127,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         action = Gio.SimpleAction.new_stateful(
             "audio-source",
             GLib.VariantType.new("s"),
-            GLib.Variant("s", "system")
+            GLib.Variant("s", self.current_sink)
         )
 
         action.connect(
@@ -128,6 +144,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         if text != "APP_READY":
             return
 
+        self.webview_ready = True
+
         # Setting the action's initial state in new_stateful() only
         # sets its internal value - it does not fire "change-state"
         # (that only happens on a real activation, e.g. clicking the
@@ -138,7 +156,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         action = self.lookup_action("audio-source")
 
         action.change_state(
-            GLib.Variant("s", "system")
+            GLib.Variant("s", self.current_sink)
         )
 
 
@@ -249,23 +267,35 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         action.set_state(value)
 
-        self.run_js("setAudioSource(" + json.dumps(source) + ")")
+        if source == "mic":
+            self.pinned_sink = None
+            self.stop_audio_capture()
+            self.run_js("setAudioSource('mic')")
+            return
 
-        #self.webview.evaluate_javascript(
-        #    "setAudioSource(" + json.dumps(source) + ")",
-        #    -1,
-        #    None,
-        #    None,
-        #    None,
-        #    None
-        #)
+        if source == "none":
+            self.pinned_sink = None
+            self.stop_audio_capture()
+            self.run_js("setAudioSource('none')")
+            return
+
+        # Anything else is a specific sink's node name, picked from the
+        # dynamically built device list - pin capture to that device
+        # (see on_pactl_event for what happens if it later disappears).
+        self.pinned_sink = source
+
+        if self.current_sink != source:
+            self.restart_audio_monitor(source)
+
+        self.run_js("setAudioSource('system')")
 
 
     # System Audio Capture (Pipewire)
 
-    def start_system_audio(self):
+    def start_system_audio(self, sink_name=None):
 
-        sink_name = self.get_default_sink()
+        if sink_name is None:
+            sink_name = self.get_default_sink()
 
         self.current_sink = sink_name
 
@@ -302,9 +332,35 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.on_audio_sample
         )
 
+        bus = self.gst_pipeline.get_bus()
+
+        bus.add_signal_watch()
+
+        bus.connect(
+            "message",
+            self.on_gst_message
+        )
+
         self.gst_pipeline.set_state(
             Gst.State.PLAYING
         )
+
+
+    def on_gst_message(self, bus, message):
+
+        t = message.type
+
+        if t == Gst.MessageType.ERROR:
+
+            err, debug_info = message.parse_error()
+
+            print("GST ERROR:", err, "|", debug_info)
+
+        elif t == Gst.MessageType.WARNING:
+
+            err, debug_info = message.parse_warning()
+
+            print("GST WARNING:", err, "|", debug_info)
 
 
     def on_audio_sample(self, sink):
@@ -333,6 +389,9 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def send_audio_to_webview(self, data):
 
+        if not self.webview_ready:
+            return False
+
         encoded = base64.b64encode(
             data
         ).decode("ascii")
@@ -344,10 +403,19 @@ class MelangeWindow(Adw.ApplicationWindow):
             None,
             None,
             None,
+            self.on_receive_audio_result,
             None
         )
 
         return False
+
+    def on_receive_audio_result(self, webview, result, user_data):
+
+        try:
+            webview.evaluate_javascript_finish(result)
+
+        except Exception as e:
+            print("receiveAudio JS error:", e)
 
 
 
@@ -356,6 +424,60 @@ class MelangeWindow(Adw.ApplicationWindow):
         return subprocess.check_output(
             ["pactl", "get-default-sink"]
         ).decode().strip()
+
+    def list_sinks(self):
+
+        raw = subprocess.check_output(
+            ["pactl", "-f", "json", "list", "sinks"]
+        )
+
+        sinks = json.loads(raw)
+
+        return [
+            (sink["name"], sink["description"])
+            for sink in sinks
+        ]
+
+    def rebuild_audio_source_menu(self):
+
+        self.audio_source_submenu.remove_all()
+
+        devices = Gio.Menu()
+
+        for name, description in self.list_sinks():
+
+            item = Gio.MenuItem.new(description, None)
+
+            item.set_action_and_target_value(
+                "win.audio-source",
+                GLib.Variant("s", name)
+            )
+
+            devices.append_item(item)
+
+        self.audio_source_submenu.append_section(None, devices)
+
+        other = Gio.Menu()
+
+        mic_item = Gio.MenuItem.new("Microphone", None)
+
+        mic_item.set_action_and_target_value(
+            "win.audio-source",
+            GLib.Variant("s", "mic")
+        )
+
+        other.append_item(mic_item)
+
+        none_item = Gio.MenuItem.new("None", None)
+
+        none_item.set_action_and_target_value(
+            "win.audio-source",
+            GLib.Variant("s", "none")
+        )
+
+        other.append_item(none_item)
+
+        self.audio_source_submenu.append_section(None, other)
 
     def watch_audio_changes(self):
 
@@ -367,30 +489,80 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         for line in process.stdout:
 
-            # Default sink/source changes are reported as a change on
-            # the server object, not on a specific sink - filtering on
-            # "sink" here would also fire on unrelated per-app volume
-            # changes (sink-input events) and restart the pipeline for
-            # no reason.
-            if "on server" in line:
+            # "on server" covers default sink/source changes; "on sink"
+            # covers devices actually appearing/disappearing (e.g.
+            # headphones being switched off), but disconnecting a
+            # device fires a whole burst of these (card/sink/module
+            # events) within milliseconds of each other. on_pactl_event
+            # does several blocking `pactl`/subprocess calls, so running
+            # it once per event in that burst was stalling the main
+            # thread repeatedly right when a switch happens - hence
+            # debouncing to a single run per burst.
+            if "on server" in line or "on sink" in line:
 
                 GLib.idle_add(
-                    self.check_default_sink_changed
+                    self.schedule_pactl_event
                 )
 
-    def check_default_sink_changed(self):
+    def schedule_pactl_event(self):
 
-        sink_name = self.get_default_sink()
+        if self.pactl_event_timer:
 
-        if sink_name != self.current_sink:
+            GLib.source_remove(
+                self.pactl_event_timer
+            )
 
-            print("Default sink changed:", self.current_sink, "->", sink_name)
-
-            self.restart_audio_monitor()
+        self.pactl_event_timer = GLib.timeout_add(
+            300,
+            self.run_pactl_event
+        )
 
         return False
 
-    def restart_audio_monitor(self):
+    def run_pactl_event(self):
+
+        self.pactl_event_timer = None
+
+        self.on_pactl_event()
+
+        return False
+
+    def on_pactl_event(self):
+
+        self.rebuild_audio_source_menu()
+
+        if self.pinned_sink is None:
+            return False
+
+        known_sinks = {name for name, _ in self.list_sinks()}
+
+        if self.pinned_sink not in known_sinks:
+
+            # The device the user explicitly picked just disappeared
+            # (e.g. headphones switched off/put away). Deliberately NOT
+            # auto-restarting capture on some other device here: doing
+            # that turned out to be unreliable (a restart triggered
+            # from this background watcher - as opposed to one directly
+            # triggered by a menu click - would intermittently come up
+            # silent, for reasons that trace back to timing in
+            # PipeWire's own driver reassignment after a device drops,
+            # not anything in this app). Falling back to "None" instead
+            # means the only pipeline (re)starts that ever happen are
+            # in direct response to the user picking something, which
+            # was solid in every test.
+            print(
+                "Pinned sink",
+                self.pinned_sink,
+                "disappeared, falling back to None"
+            )
+
+            self.lookup_action("audio-source").change_state(
+                GLib.Variant("s", "none")
+            )
+
+        return False
+
+    def stop_audio_capture(self):
 
         if self.gst_pipeline:
 
@@ -398,7 +570,29 @@ class MelangeWindow(Adw.ApplicationWindow):
                 Gst.State.NULL
             )
 
-        self.start_system_audio()
+            self.gst_pipeline = None
+
+        self.current_sink = None
+
+    def restart_audio_monitor(self, sink_name=None):
+
+        if self.gst_pipeline:
+
+            self.gst_pipeline.set_state(
+                Gst.State.NULL
+            )
+
+            # set_state() only requests the transition - it can finish
+            # asynchronously. Without waiting for it here, the new
+            # pipeline below gets built (and its pipewiresrc tries to
+            # attach) while the old one is still tearing down its
+            # PipeWire stream, and the new appsink silently never
+            # receives a single sample.
+            self.gst_pipeline.get_state(
+                Gst.CLOCK_TIME_NONE
+            )
+
+        self.start_system_audio(sink_name)
 
         return False
 

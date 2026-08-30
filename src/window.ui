@@ -56,27 +56,11 @@
 
     <section>
 
-      <submenu>
+      <!-- Populated at runtime in window.py (rebuild_audio_source_menu)
+           with the currently connected output devices, since that list
+           changes as devices are plugged/unplugged. -->
+      <submenu id="audio_source_submenu">
         <attribute name="label">Audio Source</attribute>
-
-        <item>
-          <attribute name="label">Microphone</attribute>
-          <attribute name="action">win.audio-source</attribute>
-          <attribute name="target">'mic'</attribute>
-        </item>
-
-        <item>
-          <attribute name="label">System Audio</attribute>
-          <attribute name="action">win.audio-source</attribute>
-          <attribute name="target">'system'</attribute>
-        </item>
-
-        <item>
-          <attribute name="label">None</attribute>
-          <attribute name="action">win.audio-source</attribute>
-          <attribute name="target">'none'</attribute>
-        </item>
-
       </submenu>
 
     </section>

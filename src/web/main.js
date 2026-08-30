@@ -409,6 +409,7 @@ window.setAudioSource = async function(type) {
 
 
     if (type === "none") {
+        resetButterchurnAudio();
         debug("Audio disabled");
         return;
     }
