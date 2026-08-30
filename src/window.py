@@ -139,6 +139,39 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(action)
 
+        # Preset/fullscreen controls, exposed as actions (rather than
+        # just calling run_js straight from the button handlers) so
+        # they get real keyboard accelerators via
+        # app.set_accels_for_action() in main.py, and so those
+        # accelerators show up automatically in the shortcuts dialog
+        # via action-name.
+        next_action = Gio.SimpleAction.new("next-preset", None)
+
+        next_action.connect(
+            "activate",
+            lambda action, param: self.next_preset(None)
+        )
+
+        self.add_action(next_action)
+
+        previous_action = Gio.SimpleAction.new("previous-preset", None)
+
+        previous_action.connect(
+            "activate",
+            lambda action, param: self.previous_preset(None)
+        )
+
+        self.add_action(previous_action)
+
+        fullscreen_action = Gio.SimpleAction.new("toggle-fullscreen", None)
+
+        fullscreen_action.connect(
+            "activate",
+            self.toggle_fullscreen
+        )
+
+        self.add_action(fullscreen_action)
+
 
 
     def on_webview_debug_message(self, text):
@@ -232,6 +265,13 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     # Callbacks
 
+
+    def toggle_fullscreen(self, action, param):
+
+        if self.is_fullscreen():
+            self.unfullscreen()
+        else:
+            self.fullscreen()
 
     def next_preset(self, button):
 

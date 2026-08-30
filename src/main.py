@@ -27,7 +27,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Adw, Gtk, Gdk
+from gi.repository import Adw, Gtk, Gdk, Gio
 from pathlib import Path
 
 from .window import MelangeWindow
@@ -55,11 +55,46 @@ class MelangeApplication(Adw.Application):
             application_id="com.cameronlp.Melange"
         )
 
+        quit_action = Gio.SimpleAction.new("quit", None)
+
+        quit_action.connect(
+            "activate",
+            lambda action, param: self.quit()
+        )
+
+        self.add_action(quit_action)
+
+        shortcuts_action = Gio.SimpleAction.new("shortcuts", None)
+
+        shortcuts_action.connect(
+            "activate",
+            self.show_shortcuts
+        )
+
+        self.add_action(shortcuts_action)
+
+        self.set_accels_for_action("app.quit", ["<Primary>q"])
+        self.set_accels_for_action("app.shortcuts", ["<Primary>question"])
+        self.set_accels_for_action("win.next-preset", ["Right", "space"])
+        self.set_accels_for_action("win.previous-preset", ["Left"])
+        self.set_accels_for_action("win.toggle-fullscreen", ["F11"])
+
 
     def do_activate(self):
 
         window = MelangeWindow(application=self)
         window.present()
+
+
+    def show_shortcuts(self, action, param):
+
+        builder = Gtk.Builder.new_from_resource(
+            "/com/cameronlp/Melange/shortcuts-dialog.ui"
+        )
+
+        dialog = builder.get_object("shortcuts_dialog")
+
+        dialog.present(self.get_active_window())
 
 
 def main(version):

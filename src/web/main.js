@@ -147,19 +147,6 @@ document.addEventListener(
 
 
 
-// Visualizer key controls
-document.addEventListener(
-    "keydown",
-    e => {
-
-        if (e.key === " ") {
-            nextPreset();
-        }
-
-    }
-);
-
-
 const visualizer =
     butterchurn.createVisualizer(
         audioContext,
