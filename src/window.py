@@ -121,6 +121,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.previous_preset
         )
 
+        self.build_sensitivity_control()
+
 
 
         # Audio
@@ -256,6 +258,43 @@ class MelangeWindow(Adw.ApplicationWindow):
         #    None,
         #    None
         #)
+
+    def sensitivity_changed(self, scale):
+
+        self.run_js(f"setSensitivity({scale.get_value()});")
+
+    def build_sensitivity_control(self):
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+
+        label = Gtk.Label(label="Sensitivity", xalign=0)
+
+        box.append(label)
+
+        scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL,
+            0.0,
+            4.0,
+            0.1
+        )
+
+        scale.set_value(1.0)
+        scale.set_size_request(180, -1)
+        scale.set_draw_value(False)
+
+        scale.connect(
+            "value-changed",
+            self.sensitivity_changed
+        )
+
+        box.append(scale)
+
+        self.menu_button.get_popover().add_child(box, "sensitivity")
 
 
 

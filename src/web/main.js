@@ -171,6 +171,27 @@ const visualizer =
     );
 
 
+// Sensitivity control: sits between whichever source is currently
+// selected and butterchurn, so it works the same for system audio and
+// mic. Stays permanently connected to butterchurn - switching sources
+// only ever reconnects the source side (see connectButterchurn),
+// never this node, so the gain setting persists across source changes.
+const sensitivityGain =
+    audioContext.createGain();
+
+sensitivityGain.gain.value = 1.0;
+
+visualizer.connectAudio(sensitivityGain);
+
+
+window.setSensitivity = function(value) {
+
+    sensitivityGain.gain.value = value;
+
+    debug("Sensitivity: " + value);
+};
+
+
 debug("Visualizer created");
 
 
@@ -574,12 +595,12 @@ function connectButterchurn(node, name) {
 
     if (butterchurnSource) {
         try {
-            butterchurnSource.disconnect();
+            butterchurnSource.disconnect(sensitivityGain);
         } catch(e) {}
     }
 
 
-    visualizer.connectAudio(node);
+    node.connect(sensitivityGain);
 
     butterchurnSource = node;
 
@@ -590,10 +611,10 @@ function connectButterchurn(node, name) {
 
 function resetButterchurnAudio() {
 
-    try {
-        visualizer.disconnectAudio();
-    } catch(e) {
-        debug("No existing audio to disconnect");
+    if (butterchurnSource) {
+        try {
+            butterchurnSource.disconnect(sensitivityGain);
+        } catch(e) {}
     }
 
     butterchurnSource = null;
