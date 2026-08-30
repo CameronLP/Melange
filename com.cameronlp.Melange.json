@@ -30,6 +30,26 @@
     ],
     "modules" : [
         {
+            "name" : "projectm",
+            "buildsystem" : "cmake-ninja",
+            "config-opts" : [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_INSTALL_LIBDIR=lib",
+                "-DENABLE_PLAYLIST=ON",
+                "-DENABLE_SDL_UI=OFF",
+                "-DBUILD_TESTING=OFF",
+                "-DBUILD_DOCS=OFF"
+            ],
+            "sources" : [
+                {
+                    "type" : "git",
+                    "url" : "https://github.com/projectM-visualizer/projectm.git",
+                    "commit" : "bd2b1ba9f425e91c93421effb6c184fbdf89e4b3",
+                    "comment" : "Pinned past v4.1.4: that tag hardcodes rendering to FBO 0 (glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0) in ProjectM::RenderFrame), incompatible with Gtk.GLArea, which always renders into its own offscreen FBO. This commit adds projectm_opengl_render_frame_fbo() to fix that. Submodules (vendor/projectm-eval) are fetched automatically."
+                }
+            ]
+        },
+        {
             "name" : "melange",
             "builddir" : true,
             "buildsystem" : "meson",
