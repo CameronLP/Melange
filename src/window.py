@@ -194,6 +194,11 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def on_webview_debug_message(self, text):
 
+        if text.startswith("PRESET_NAME:"):
+            preset_name = text[len("PRESET_NAME:"):]
+            self.set_title(f'Melange - "{preset_name}"')
+            return
+
         if text != "APP_READY":
             return
 

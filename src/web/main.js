@@ -317,10 +317,21 @@ const names =
     Object.keys(allPresets);
 
 
+// Announces the current preset name to Python over the existing debug
+// message channel (prefixed so on_webview_debug_message can tell it
+// apart from ordinary log lines), which sets it as the window title -
+// simpler and more native than an on-canvas overlay.
+function announcePresetName(name) {
+    debug("PRESET_NAME:" + name);
+}
+
+
 visualizer.loadPreset(
     allPresets[names[0]],
     0
 );
+
+announcePresetName(names[0]);
 
 
 debug("Preset loaded");
@@ -381,6 +392,8 @@ window.nextPreset = function() {
         allPresets[names[currentPreset]],
         5
     );
+
+    announcePresetName(names[currentPreset]);
 };
 
 
@@ -396,6 +409,8 @@ window.previousPreset = function() {
         allPresets[names[currentPreset]],
         5
     );
+
+    announcePresetName(names[currentPreset]);
 };
 
 
