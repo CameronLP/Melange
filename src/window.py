@@ -47,6 +47,24 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.webview
         )
 
+        # Lets the window be dragged from anywhere, not just the
+        # header bar. Has to run in the CAPTURE phase and on
+        # content_box (the webview's parent) rather than the webview
+        # itself - WebKit claims button presses for its own hit
+        # testing, so a normal (bubble-phase) gesture on the webview
+        # would never see them.
+        drag_gesture = Gtk.GestureClick()
+
+        drag_gesture.set_button(Gdk.BUTTON_PRIMARY)
+        drag_gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+
+        drag_gesture.connect(
+            "pressed",
+            self.on_window_drag_pressed
+        )
+
+        self.content_box.add_controller(drag_gesture)
+
         self.gst_pipeline = None
         self.current_sink = None
         self.pinned_sink = None
@@ -264,6 +282,24 @@ class MelangeWindow(Adw.ApplicationWindow):
 
 
     # Callbacks
+
+
+    def on_window_drag_pressed(self, gesture, n_press, x, y):
+
+        widget = gesture.get_widget()
+
+        ok, bounds = widget.compute_bounds(self)
+
+        if not ok:
+            return
+
+        self.get_surface().begin_move(
+            gesture.get_current_event_device(),
+            gesture.get_current_button(),
+            bounds.get_x() + x,
+            bounds.get_y() + y,
+            gesture.get_current_event_time()
+        )
 
 
     def toggle_fullscreen(self, action, param):
