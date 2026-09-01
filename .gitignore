@@ -18,6 +18,15 @@ lib/
 lib64/
 parts/
 sdist/
+
+# node_modules is deliberately vendored in this repo (see
+# src/web/package.json) - without this, the generic Python-artifact
+# patterns above (dist/, lib/, build/, etc.) silently swallow
+# legitimately-named npm package output directories, which has already
+# happened for real dependencies (vite, rolldown, butterchurn-presets'
+# lib/ entry point, ...).
+!src/web/node_modules/
+!src/web/node_modules/**
 var/
 wheels/
 share/python-wheels/
