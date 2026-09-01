@@ -13,6 +13,7 @@
   "dependencies": {
     "butterchurn": "^2.6.7",
     "butterchurn-presets": "^2.4.7",
+    "butterchurn-presets-baron": "^1.5.1",
     "milkdrop-preset-converter": "^0.1.2",
     "vite": "^8.1.0"
   }
