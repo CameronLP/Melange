@@ -1,6 +1,127 @@
 import butterchurn from "butterchurn";
 import presets from "butterchurn-presets";
-import milkdropPresetConverter from "milkdrop-preset-converter";
+import { getPresets as getBaronPresets } from "butterchurn-presets-baron";
+// Default-import interop breaks for this package: its CJS bundle sets
+// __esModule: true without ever setting a .default export (only the
+// named convertPreset), so `import x from "..."` resolves to
+// undefined under Vite/Rollup's interop. A named import sidesteps it.
+import { convertPreset as convertMilkdropPreset } from "milkdrop-preset-converter";
+
+// milkdrop-preset-converter has a bug affecting most real-world .milk
+// presets: it mistranslates a chained addition in the original
+// MilkDrop warp/comp shader code (roughly `A + B + C`) into invalid
+// GLSL - `bvecN(A) && bvecN(B)` - since GLSL's &&/|| only accept a
+// scalar bool, never a vector-of-bool. That's not just cosmetically
+// wrong: feeding it to WebGL has been observed to hang the renderer
+// instead of failing with a fast compile error. This walks the
+// generated shader source and rewrites the mistranslated pattern back
+// to the addition it almost certainly started as. Verified against a
+// large sample of real presets: zero residual bad matches afterward.
+function findMatchingParen(str, openIdx) {
+
+    let depth = 0;
+
+    for (let j = openIdx; j < str.length; j++) {
+
+        if (str[j] === "(") depth++;
+        else if (str[j] === ")") {
+            depth--;
+            if (depth === 0) return j;
+        }
+    }
+
+    return -1;
+}
+
+function matchBvecCastAt(str, i) {
+
+    const m = /^bvec[234]\s*\(/.exec(str.slice(i, i + 20));
+
+    if (!m) return null;
+
+    return { openParenIdx: i + m[0].length - 1 };
+}
+
+// The right-hand side is usually another bvecN(...) cast, but in a
+// 3+-way chained expression it's a bare parenthesized group wrapping
+// a further bvecN(...) && bvecN(...) - handled on a later pass once
+// this one has unwrapped the outer layer.
+function matchRhsAt(str, i) {
+
+    const bvecCast = matchBvecCastAt(str, i);
+
+    if (bvecCast) return bvecCast;
+
+    return str[i] === "(" ? { openParenIdx: i } : null;
+}
+
+function repairBadShaderPass(str) {
+
+    let out = "";
+    let i = 0;
+    let changed = false;
+
+    while (i < str.length) {
+
+        const bvecCast = matchBvecCastAt(str, i);
+
+        if (bvecCast) {
+
+            const closeA = findMatchingParen(str, bvecCast.openParenIdx);
+
+            if (closeA !== -1) {
+
+                const afterA = closeA + 1;
+
+                const andOrMatch =
+                    /^\s*(&&|\|\|)\s*/.exec(str.slice(afterA, afterA + 10));
+
+                if (andOrMatch) {
+
+                    const rhsStart = afterA + andOrMatch[0].length;
+                    const rhs = matchRhsAt(str, rhsStart);
+
+                    if (rhs) {
+
+                        const closeB = findMatchingParen(str, rhs.openParenIdx);
+
+                        if (closeB !== -1) {
+
+                            const argA = str.slice(bvecCast.openParenIdx + 1, closeA);
+                            const argB = str.slice(rhs.openParenIdx + 1, closeB);
+
+                            out += `(${argA}) + (${argB})`;
+                            i = closeB + 1;
+                            changed = true;
+
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        out += str[i];
+        i++;
+    }
+
+    return { out, changed };
+}
+
+function repairBadShader(str) {
+
+    for (let pass = 0; pass < 10; pass++) {
+
+        const { out, changed } = repairBadShaderPass(str);
+
+        str = out;
+
+        if (!changed) break;
+    }
+
+    return str;
+}
+
 
 let audioSource = null;
 let currentStream = null;
@@ -77,6 +198,25 @@ window.onerror = function(
         colno,
         error
     );
+};
+
+
+// Forwards console.error/warn (e.g. WebGL shader compile failures
+// logged from inside butterchurn's own renderer) to the same debug
+// channel - those don't throw, so window.onerror above never sees
+// them, and without this they'd otherwise only be visible in a web
+// inspector this embedded view doesn't expose.
+const nativeConsoleError = console.error.bind(console);
+const nativeConsoleWarn = console.warn.bind(console);
+
+console.error = function(...args) {
+    debug("CONSOLE ERROR: " + args.map(String).join(" "));
+    nativeConsoleError(...args);
+};
+
+console.warn = function(...args) {
+    debug("CONSOLE WARN: " + args.map(String).join(" "));
+    nativeConsoleWarn(...args);
 };
 
 
@@ -205,6 +345,11 @@ async function setupPCM() {
             constructor() {
                 super();
 
+                // Flat per-sample queue, not per-chunk: incoming PCM
+                // chunks are almost always bigger than the 128-sample
+                // render quantum, so shifting whole chunks off and
+                // only reading their first 128 samples silently
+                // dropped the rest of every chunk.
                 this.samples = [];
 
                 this.port.onmessage = e => {
@@ -212,7 +357,9 @@ async function setupPCM() {
                     const data =
                         new Float32Array(e.data);
 
-                    this.samples.push(data);
+                    for (let i = 0; i < data.length; i++) {
+                        this.samples.push(data[i]);
+                    }
 
                 };
             }
@@ -222,21 +369,13 @@ async function setupPCM() {
 
                 const out = outputs[0][0];
 
-                if (this.samples.length > 0) {
+                for (let i = 0; i < out.length; i++) {
 
-                    const block = this.samples.shift();
-
-                    for (let i = 0; i < out.length; i++) {
-                        out[i] = block[i] || 0;
-                    }
-
-                } else {
-
-                    for (let i = 0; i < out.length; i++) {
-                        out[i] = 0;
-                    }
+                    out[i] =
+                        this.samples.length
+                        ? this.samples.shift()
+                        : 0;
                 }
-
 
                 return true;
             }
@@ -312,6 +451,24 @@ setupPCM();
 
 const allPresets =
     presets.getPresets();
+
+
+// Merged in on top of the base pack. Names collide across packs fairly
+// often (both draw from the same community MilkDrop presets), so a
+// colliding baron preset is suffixed rather than silently overwriting
+// the base one.
+const baronPresets =
+    getBaronPresets();
+
+for (const name of Object.keys(baronPresets)) {
+
+    const key =
+        name in allPresets
+        ? name + " (baron)"
+        : name;
+
+    allPresets[key] = baronPresets[name];
+}
 
 
 const names =
@@ -460,10 +617,11 @@ document.getElementById("nav-next").addEventListener(
 
 
 // Called from Python (see load_preset_clicked in window.py) after the
-// user picks a .milk file via the native file chooser. base64Text is
-// the raw file contents - base64 because MilkDrop preset text is full
-// of quotes/backslashes/newlines that aren't safe to embed directly in
-// a JS string literal the way evaluate_javascript() builds this call.
+// user picks a .milk or .json preset file via the native file chooser.
+// base64Text is the raw file contents - base64 because preset text
+// (MilkDrop especially) is full of quotes/backslashes/newlines that
+// aren't safe to embed directly in a JS string literal the way
+// evaluate_javascript() builds this call.
 window.loadPresetFile = async function(base64Text, name) {
 
     try {
@@ -475,7 +633,36 @@ window.loadPresetFile = async function(base64Text, name) {
 
         const text = new TextDecoder("utf-8").decode(bytes);
 
-        const preset = await milkdropPresetConverter.convertPreset(text);
+        // Butterchurn presets are plain JSON; MilkDrop presets are a
+        // custom key=value text format that isn't valid JSON. Sniffing
+        // the content this way (rather than trusting the file
+        // extension) means a renamed file still loads correctly.
+        let preset;
+
+        try {
+            preset = JSON.parse(text);
+        } catch(jsonError) {
+            preset = await convertMilkdropPreset(text);
+        }
+
+        if (preset.warp) preset.warp = repairBadShader(preset.warp);
+        if (preset.comp) preset.comp = repairBadShader(preset.comp);
+
+        // Belt-and-suspenders: repairBadShader fixes every case seen
+        // across a large real-world sample, but if some other variant
+        // of the bug slips through, refusing to load is much safer
+        // than risking the renderer hang invalid GLSL has caused here.
+        const badShaderPattern = /bvec[234]\s*\([^;{}]*?\)\s*(&&|\|\|)/;
+
+        if (
+            (preset.warp && badShaderPattern.test(preset.warp)) ||
+            (preset.comp && badShaderPattern.test(preset.comp))
+        ) {
+            throw new Error(
+                "converted shader still has invalid GLSL (bvecN &&/||) " +
+                "after repair - refusing to load to avoid hanging the renderer"
+            );
+        }
 
         allPresets[name] = preset;
         names.push(name);
@@ -490,7 +677,11 @@ window.loadPresetFile = async function(base64Text, name) {
 
     } catch(e) {
 
-        debug("LOAD PRESET ERROR: " + e.message);
+        // Prefixed (like PRESET_NAME:/PRESET_LIST:) so Python can
+        // route it to a visible toast - a failed load otherwise has
+        // no user-facing feedback at all, since this whole path only
+        // ever reported to the debug log.
+        debug("LOAD_PRESET_ERROR:" + e.message);
 
         console.error(e);
     }

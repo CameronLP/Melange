@@ -223,6 +223,15 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.set_title(f'Melange - "{preset_name}"')
             return
 
+        # A failed Load Preset (bad MilkDrop conversion, invalid
+        # Butterchurn JSON, etc.) otherwise has no user-facing
+        # feedback at all - it only ever reached the debug log, so a
+        # rejected load just silently looked like nothing happened.
+        if text.startswith("LOAD_PRESET_ERROR:"):
+            reason = text[len("LOAD_PRESET_ERROR:"):]
+            self.show_toast(f"Couldn't load preset: {reason}")
+            return
+
         # The actual preset names only exist in JS (from
         # butterchurn-presets, plus anything loaded via
         # win.load-preset) - this is Python's copy, used to build the
@@ -394,7 +403,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def show_toast(self, text):
 
-        toast = Adw.Toast.new(text)
+        # Adw.Toast text is parsed as Pango markup, so raw &, <, > in
+        # the message (e.g. from a JS error string) breaks parsing and
+        # silently produces a toast with no text at all.
+        toast = Adw.Toast.new(GLib.markup_escape_text(text))
         toast.set_timeout(2)
 
         self.toast_overlay.add_toast(toast)
@@ -499,12 +511,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         dialog = Gtk.FileDialog()
         dialog.set_title("Load Preset")
 
-        milk_filter = Gtk.FileFilter()
-        milk_filter.set_name("MilkDrop Presets")
-        milk_filter.add_pattern("*.milk")
+        preset_filter = Gtk.FileFilter()
+        preset_filter.set_name("Presets (MilkDrop / Butterchurn)")
+        preset_filter.add_pattern("*.milk")
+        preset_filter.add_pattern("*.json")
 
         filters = Gio.ListStore.new(Gtk.FileFilter)
-        filters.append(milk_filter)
+        filters.append(preset_filter)
         dialog.set_filters(filters)
 
         dialog.open(self, None, self.on_preset_file_chosen)
