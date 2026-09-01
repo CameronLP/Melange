@@ -73,12 +73,22 @@ class MelangeApplication(Adw.Application):
 
         self.add_action(shortcuts_action)
 
+        about_action = Gio.SimpleAction.new("about", None)
+
+        about_action.connect(
+            "activate",
+            self.show_about
+        )
+
+        self.add_action(about_action)
+
         self.set_accels_for_action("app.quit", ["<Primary>q"])
         self.set_accels_for_action("app.shortcuts", ["<Primary>question"])
         self.set_accels_for_action("win.next-preset", ["Right", "space"])
         self.set_accels_for_action("win.previous-preset", ["Left"])
         self.set_accels_for_action("win.toggle-fullscreen", ["F11"])
         self.set_accels_for_action("win.lock-preset", ["l"])
+        self.set_accels_for_action("win.shuffle-preset", ["s"])
 
 
     def do_activate(self):
@@ -96,6 +106,32 @@ class MelangeApplication(Adw.Application):
         dialog = builder.get_object("shortcuts_dialog")
 
         dialog.present(self.get_active_window())
+
+
+    def show_about(self, action, param):
+
+        about = Adw.AboutDialog(
+            application_name="Melange",
+            application_icon="com.cameronlp.Melange",
+            developer_name="Cameron Penne",
+            version="0.1.0",
+            license_type=Gtk.License.GPL_3_0,
+            comments=_(
+                "A MilkDrop-style music visualizer for the desktop"
+            ),
+            website="https://github.com/CameronLP/Melange",
+            issue_url="https://github.com/CameronLP/Melange/issues",
+        )
+
+        about.add_credit_section(
+            _("Powered By"),
+            [
+                "Jordan Berg (Butterchurn, MilkDrop preset conversion) https://github.com/jberg",
+                "baron (Butterchurn preset pack) https://github.com/uvmain/butterchurn-presets-baron",
+            ]
+        )
+
+        about.present(self.get_active_window())
 
 
 def main(version):

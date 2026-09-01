@@ -97,6 +97,53 @@
         <attribute name="action">win.lock-preset</attribute>
       </item>
 
+      <item>
+        <attribute name="label" translatable="yes">Shuffle Presets</attribute>
+        <attribute name="action">win.shuffle-preset</attribute>
+      </item>
+
+    </section>
+
+
+    <section>
+
+      <!-- The actual GtkScale is built and attached in window.py
+           (build_cycle_interval_control), same as the sensitivity
+           control above. -->
+      <item>
+        <attribute name="custom">cycle-interval</attribute>
+      </item>
+
+    </section>
+
+
+    <section>
+
+      <!-- build_blend_time_control -->
+      <item>
+        <attribute name="custom">blend-time</attribute>
+      </item>
+
+    </section>
+
+
+    <section>
+
+      <!-- build_mesh_size_control -->
+      <item>
+        <attribute name="custom">mesh-size</attribute>
+      </item>
+
+    </section>
+
+
+    <section>
+
+      <!-- build_framerate_control -->
+      <item>
+        <attribute name="custom">framerate</attribute>
+      </item>
+
     </section>
 
 

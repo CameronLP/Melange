@@ -28,6 +28,12 @@
             <property name="action-name">win.lock-preset</property>
           </object>
         </child>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Shuffle Presets</property>
+            <property name="action-name">win.shuffle-preset</property>
+          </object>
+        </child>
       </object>
     </child>
     <child>

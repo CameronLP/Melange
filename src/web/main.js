@@ -1,3 +1,22 @@
+// main.js
+//
+// Copyright 2026 Cameron
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import butterchurn from "butterchurn";
 import presets from "butterchurn-presets";
 import { getPresets as getBaronPresets } from "butterchurn-presets-baron";
@@ -502,12 +521,49 @@ window.loadPresetByName = function(name) {
         return;
     }
 
-    currentPreset = names.indexOf(name);
-
-    visualizer.loadPreset(allPresets[name], 3);
-
-    announcePresetName(name);
+    goToPreset(names.indexOf(name), blendSeconds);
 };
+
+
+// currentPreset tracks what's showing now; presetHistory/historyPos
+// give next/previous browser-style back/forward navigation - previous
+// always retraces what was actually shown (regardless of shuffle),
+// and next replays forward through that history before generating a
+// new preset again once historyPos catches back up to the end.
+let currentPreset = 0;
+let presetHistory = [0];
+let historyPos = 0;
+let shuffleEnabled = false;
+let blendSeconds = 3;
+
+
+window.setBlendTime = function(seconds) {
+    blendSeconds = seconds;
+};
+
+
+// Used by next/loadPresetByName/loadPresetFile - anywhere a preset
+// change should be recorded in history. Not used for plain back/
+// forward movement within existing history (see previousPreset/the
+// early-return in nextPreset), which just replays it instead.
+function goToPreset(index, blendSeconds) {
+
+    currentPreset = index;
+
+    visualizer.loadPreset(
+        allPresets[names[index]],
+        blendSeconds
+    );
+
+    announcePresetName(names[index]);
+
+    // A new selection after navigating back discards whatever forward
+    // history there was, same as a browser tab after following a new
+    // link mid-back-navigation.
+    presetHistory.length = historyPos + 1;
+    presetHistory.push(index);
+    historyPos = presetHistory.length - 1;
+}
 
 
 visualizer.loadPreset(
@@ -528,14 +584,40 @@ visualizer.setRendererSize(
 );
 
 
-function frame() {
+// 0 means uncapped - render on every animation frame, same as before
+// this existed.
+let targetFps = 0;
+let lastRenderTime = 0;
 
-    visualizer.render();
+window.setFramerate = function(fps) {
+    targetFps = fps;
+};
+
+window.setMeshSize = function(size) {
+
+    // Matches Butterchurn's own default aspect ratio (48x36).
+    visualizer.setInternalMeshSize(
+        Math.round(size),
+        Math.round(size * 0.75)
+    );
+};
+
+
+function frame(now) {
+
+    if (
+        targetFps <= 0 ||
+        now - lastRenderTime >= 1000 / targetFps
+    ) {
+        visualizer.render();
+        lastRenderTime = now;
+    }
+
     requestAnimationFrame(frame);
 }
 
 
-frame();
+frame(0);
 
 
 window.addEventListener(
@@ -560,39 +642,80 @@ window.addEventListener(
 
 
 
-let currentPreset = 0;
+window.setShuffle = function(enabled) {
+    shuffleEnabled = !!enabled;
+};
 
 
+let cycleTimer = null;
+
+
+// No separate on/off toggle - 0 (or below) means "off", routed
+// through the same "NAV_NEXT" debug message the on-canvas arrows use
+// (see the click handlers below) rather than calling nextPreset()
+// directly, so auto-cycling also respects the preset lock (and its
+// toast) via Python's existing next_preset().
+window.setCycleInterval = function(seconds) {
+
+    if (cycleTimer) {
+        clearInterval(cycleTimer);
+        cycleTimer = null;
+    }
+
+    if (seconds > 0) {
+        cycleTimer = setInterval(
+            () => debug("NAV_NEXT"),
+            seconds * 1000
+        );
+    }
+};
 
 
 window.nextPreset = function() {
 
-    currentPreset++;
+    // Replay forward through history first (e.g. after previousPreset
+    // moved back) rather than generating a new preset, so going back
+    // then forward returns to what was actually showing.
+    if (historyPos < presetHistory.length - 1) {
 
-    if (currentPreset >= names.length) {
-        currentPreset = 0;
+        historyPos++;
+        currentPreset = presetHistory[historyPos];
+
+        visualizer.loadPreset(
+            allPresets[names[currentPreset]],
+            blendSeconds
+        );
+
+        announcePresetName(names[currentPreset]);
+        return;
     }
 
-    visualizer.loadPreset(
-        allPresets[names[currentPreset]],
-        5
-    );
+    let index;
 
-    announcePresetName(names[currentPreset]);
+    if (shuffleEnabled && names.length > 1) {
+
+        do {
+            index = Math.floor(Math.random() * names.length);
+        } while (index === currentPreset);
+
+    } else {
+        index = (currentPreset + 1) % names.length;
+    }
+
+    goToPreset(index, blendSeconds);
 };
 
 
 window.previousPreset = function() {
 
-    currentPreset--;
+    if (historyPos === 0) return;
 
-    if (currentPreset < 0) {
-        currentPreset = names.length - 1;
-    }
+    historyPos--;
+    currentPreset = presetHistory[historyPos];
 
     visualizer.loadPreset(
         allPresets[names[currentPreset]],
-        5
+        blendSeconds
     );
 
     announcePresetName(names[currentPreset]);
@@ -666,11 +789,9 @@ window.loadPresetFile = async function(base64Text, name) {
 
         allPresets[name] = preset;
         names.push(name);
-        currentPreset = names.length - 1;
 
-        visualizer.loadPreset(preset, 0);
+        goToPreset(names.length - 1, 0);
 
-        announcePresetName(name);
         announcePresetList();
 
         debug("Loaded preset file: " + name);

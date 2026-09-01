@@ -1,3 +1,22 @@
+# window.py
+#
+# Copyright 2026 Cameron
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import gi
 import json
 import subprocess
@@ -214,6 +233,24 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(lock_preset_action)
 
+        shuffle_action = Gio.SimpleAction.new_stateful(
+            "shuffle-preset",
+            None,
+            GLib.Variant("b", False)
+        )
+
+        shuffle_action.connect(
+            "change-state",
+            self.shuffle_preset_changed
+        )
+
+        self.add_action(shuffle_action)
+
+        self.build_cycle_interval_control()
+        self.build_blend_time_control()
+        self.build_mesh_size_control()
+        self.build_framerate_control()
+
 
 
     def on_webview_debug_message(self, text):
@@ -400,6 +437,218 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.show_toast(
             "Preset locked" if self.preset_locked else "Preset unlocked"
         )
+
+    def shuffle_preset_changed(self, action, value):
+
+        action.set_state(value)
+
+        enabled = value.get_boolean()
+
+        self.run_js(f"setShuffle({'true' if enabled else 'false'});")
+
+        self.show_toast(
+            "Shuffle on" if enabled else "Shuffle off"
+        )
+
+    # No separate on/off action - the slider's own bottom end (0)
+    # means "off", so there's exactly one control and one state to
+    # reason about instead of a toggle plus an interval that could
+    # disagree with each other.
+    def cycle_interval_changed(self, scale):
+
+        self.run_js(f"setCycleInterval({scale.get_value()});")
+
+    def format_cycle_interval(self, scale, value, user_data=None):
+
+        if value <= 0:
+            return "Off"
+
+        return f"{int(value)}s"
+
+    def build_cycle_interval_control(self):
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+
+        label = Gtk.Label(label="Cycle Interval", xalign=0)
+
+        box.append(label)
+
+        scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL,
+            0.0,
+            120.0,
+            1.0
+        )
+
+        scale.set_value(0.0)
+
+        # Wider than the sensitivity slider's 180px: with draw_value
+        # on, the value label is centered on the handle, so at either
+        # end it was overflowing past a tighter width and getting
+        # clipped by the popover.
+        scale.set_size_request(220, -1)
+        scale.set_draw_value(True)
+
+        scale.set_format_value_func(self.format_cycle_interval)
+
+        scale.connect(
+            "value-changed",
+            self.cycle_interval_changed
+        )
+
+        box.append(scale)
+
+        self.menu_button.get_popover().add_child(box, "cycle-interval")
+
+    def blend_time_changed(self, scale):
+
+        self.run_js(f"setBlendTime({scale.get_value()});")
+
+    def format_blend_time(self, scale, value, user_data=None):
+
+        if value <= 0:
+            return "Instant"
+
+        return f"{value:.1f}s"
+
+    def build_blend_time_control(self):
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+
+        label = Gtk.Label(label="Transition Blend Time", xalign=0)
+
+        box.append(label)
+
+        scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL,
+            0.0,
+            10.0,
+            0.5
+        )
+
+        scale.set_value(3.0)
+        scale.set_size_request(220, -1)
+        scale.set_draw_value(True)
+
+        scale.set_format_value_func(self.format_blend_time)
+
+        scale.connect(
+            "value-changed",
+            self.blend_time_changed
+        )
+
+        box.append(scale)
+
+        self.menu_button.get_popover().add_child(box, "blend-time")
+
+    def mesh_size_changed(self, scale):
+
+        self.run_js(f"setMeshSize({scale.get_value()});")
+
+    def format_mesh_size(self, scale, value, user_data=None):
+
+        return f"{int(value)}x{int(value * 0.75)}"
+
+    def build_mesh_size_control(self):
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+
+        label = Gtk.Label(label="Mesh Size", xalign=0)
+
+        box.append(label)
+
+        # 8-128, matching Butterchurn's own default (48x36) at the
+        # midpoint - held to a fixed 4:3 ratio (its default aspect)
+        # rather than exposing width/height separately.
+        scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL,
+            8.0,
+            128.0,
+            1.0
+        )
+
+        scale.set_value(48.0)
+        scale.set_size_request(220, -1)
+        scale.set_draw_value(True)
+
+        scale.set_format_value_func(self.format_mesh_size)
+
+        scale.connect(
+            "value-changed",
+            self.mesh_size_changed
+        )
+
+        box.append(scale)
+
+        self.menu_button.get_popover().add_child(box, "mesh-size")
+
+    def framerate_changed(self, scale):
+
+        value = scale.get_value()
+
+        # The slider's top end means "uncapped" (render on every
+        # animation frame), same "boundary value is the special
+        # state" shape as the cycle interval's "off" at its bottom.
+        fps = 0 if value >= 60 else value
+
+        self.run_js(f"setFramerate({fps});")
+
+    def format_framerate(self, scale, value, user_data=None):
+
+        if value >= 60:
+            return "Uncapped"
+
+        return f"{int(value)} FPS"
+
+    def build_framerate_control(self):
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+
+        label = Gtk.Label(label="Framerate", xalign=0)
+
+        box.append(label)
+
+        scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL,
+            10.0,
+            60.0,
+            1.0
+        )
+
+        scale.set_value(60.0)
+        scale.set_size_request(220, -1)
+        scale.set_draw_value(True)
+
+        scale.set_format_value_func(self.format_framerate)
+
+        scale.connect(
+            "value-changed",
+            self.framerate_changed
+        )
+
+        box.append(scale)
+
+        self.menu_button.get_popover().add_child(box, "framerate")
 
     def show_toast(self, text):
 
