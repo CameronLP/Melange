@@ -126,7 +126,8 @@ class MelangeApplication(Adw.Application):
         about.add_credit_section(
             _("Powered By"),
             [
-                "Jordan Berg (Butterchurn, MilkDrop preset conversion) https://github.com/jberg",
+                "Jordan Berg (Butterchurn) https://github.com/jberg/butterchurn",
+                "Jordan Berg (MilkDrop preset conversion) https://github.com/jberg/milkdrop-preset-converter",
                 "baron (Butterchurn preset pack) https://github.com/uvmain/butterchurn-presets-baron",
             ]
         )

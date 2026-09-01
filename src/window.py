@@ -22,6 +22,7 @@ import json
 import subprocess
 import threading
 import base64
+import time
 
 gi.require_version("Gst", "1.0")
 gi.require_version("Gtk", "4.0")
@@ -50,6 +51,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.menu_open = False
         self.hide_timer = None
+        self.last_mouse_pos = None
         self.mouse_over_toolbar = False
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
@@ -97,9 +99,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         # The "Audio Source" submenu is defined empty in window.ui and
         # populated here since the list of real output devices changes
-        # at runtime as things get plugged/unplugged.
+        # at runtime as things get plugged/unplugged. Index 1, not 0:
+        # the theme selector section (window.ui) comes first now.
         section0 = self.menu_button.get_menu_model().get_item_link(
-            0, Gio.MENU_LINK_SECTION
+            1, Gio.MENU_LINK_SECTION
         )
 
         self.audio_source_submenu = section0.get_item_link(
@@ -116,6 +119,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Mouse and Toolbar
 
         motion = Gtk.EventControllerMotion()
+
+        # Same reasoning as the drag gesture above: WebKit's own hit
+        # testing can consume motion events before a default BUBBLE-
+        # phase controller on an ancestor widget ever sees them, so
+        # this went dead in practice as soon as the pointer was over
+        # the webview - which is virtually the whole window.
+        motion.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
 
         motion.connect(
             "motion",
@@ -134,11 +144,30 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.toolbar_leave
         )
 
-        self.toolbar_view.add_controller(
+        # headerbar specifically, not toolbar_view - toolbar_view is
+        # the whole AdwToolbarView, header bar strip AND the webview
+        # content below it, so attaching there made mouse_over_toolbar
+        # true almost any time the pointer was in the window at all,
+        # and hide_toolbar bailed out on its very first check forever.
+        self.headerbar.add_controller(
             toolbar_motion
         )
 
         self.add_controller(motion)
+
+        # Escape only ever exits fullscreen (never toggles it on) -
+        # a dialog with its own focus (Preferences, the preset
+        # browser, ...) sees Escape first and closes itself instead,
+        # since key controllers only fire for the currently focused
+        # surface.
+        escape_controller = Gtk.EventControllerKey()
+
+        escape_controller.connect(
+            "key-pressed",
+            self.on_key_pressed
+        )
+
+        self.add_controller(escape_controller)
 
 
 
@@ -246,10 +275,21 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(shuffle_action)
 
-        self.build_cycle_interval_control()
-        self.build_blend_time_control()
-        self.build_mesh_size_control()
-        self.build_framerate_control()
+        preferences_action = Gio.SimpleAction.new("preferences", None)
+
+        preferences_action.connect(
+            "activate",
+            self.preferences_clicked
+        )
+
+        self.add_action(preferences_action)
+
+        self.build_preferences_dialog()
+
+        self.menu_button.get_popover().add_child(
+            self.build_theme_selector(),
+            "theme-selector"
+        )
 
 
 
@@ -320,6 +360,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def toolbar_enter(self, controller, x, y):
 
+        print(f"[{time.monotonic():.3f}] toolbar_enter x={x:.0f} y={y:.0f}")
+
         self.mouse_over_toolbar = True
 
         if self.hide_timer:
@@ -331,10 +373,13 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.hide_timer = None
 
         self.toolbar_view.set_reveal_top_bars(True)
+        self.set_cursor(None)
 
 
 
     def toolbar_leave(self, controller):
+
+        print(f"[{time.monotonic():.3f}] toolbar_leave")
 
         self.mouse_over_toolbar = False
 
@@ -344,17 +389,51 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
 
+    # WebKit re-synthesizes a "motion" event at the cursor's last
+    # known position on essentially every animation frame the
+    # visualizer renders (confirmed from the log: dozens of events at
+    # an identical x/y, ~60Hz) - completely independent of whether the
+    # mouse actually moved. Reacting to those made the toolbar
+    # perpetually re-reveal itself. The cursor's own real position
+    # genuinely not changing is the one reliable signal that a given
+    # event is one of these synthetic ones rather than real input.
+    MOVEMENT_THRESHOLD_PX = 1
+
     def mouse_move(self, controller, x, y):
+
+        self.set_cursor(None)
+
+        if self.last_mouse_pos is not None:
+
+            last_x, last_y = self.last_mouse_pos
+
+            if (
+                abs(x - last_x) < self.MOVEMENT_THRESHOLD_PX and
+                abs(y - last_y) < self.MOVEMENT_THRESHOLD_PX
+            ):
+                return
+
+        self.last_mouse_pos = (x, y)
 
         self.toolbar_view.set_reveal_top_bars(True)
 
-        GLib.timeout_add_seconds(
+        if self.hide_timer:
+            GLib.source_remove(self.hide_timer)
+
+        self.hide_timer = GLib.timeout_add_seconds(
             3,
             self.hide_toolbar
         )
 
 
     def hide_toolbar(self):
+
+        print(
+            f"[{time.monotonic():.3f}] hide_toolbar firing:",
+            "mouse_over_toolbar=", self.mouse_over_toolbar,
+            "menu_open=", self.menu_open,
+            "is_fullscreen=", self.is_fullscreen()
+        )
 
         self.hide_timer = None
 
@@ -365,6 +444,12 @@ class MelangeWindow(Adw.ApplicationWindow):
             return False
 
         self.toolbar_view.set_reveal_top_bars(False)
+
+        # Only in fullscreen - windowed mode still needs a visible
+        # cursor for ordinary desktop interaction (moving/resizing,
+        # other windows, ...).
+        if self.is_fullscreen():
+            self.set_cursor(Gdk.Cursor.new_from_name("none"))
 
         return False
 
@@ -428,6 +513,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         else:
             self.fullscreen()
 
+    def on_key_pressed(self, controller, keyval, keycode, state):
+
+        if keyval == Gdk.KEY_Escape and self.is_fullscreen():
+            self.unfullscreen()
+            return True
+
+        return False
+
     def lock_preset_changed(self, action, value):
 
         action.set_state(value)
@@ -454,201 +547,199 @@ class MelangeWindow(Adw.ApplicationWindow):
     # means "off", so there's exactly one control and one state to
     # reason about instead of a toggle plus an interval that could
     # disagree with each other.
-    def cycle_interval_changed(self, scale):
+    # Shared by all five sliders below: a plain Gtk.Scale (no built-in
+    # draw_value bubble - that looked out of place inside a proper
+    # Adw.ActionRow) as the row's suffix, with the current value shown
+    # as the row's subtitle instead, updated on every change. format_fn
+    # takes the raw float and returns that subtitle text.
+    def build_slider_row(self, title, min_val, max_val, step, initial, format_fn, on_change):
 
-        self.run_js(f"setCycleInterval({scale.get_value()});")
+        row = Adw.ActionRow(title=title)
+        row.set_subtitle(format_fn(initial))
 
-    def format_cycle_interval(self, scale, value, user_data=None):
+        scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL,
+            min_val,
+            max_val,
+            step
+        )
 
-        if value <= 0:
-            return "Off"
+        scale.set_value(initial)
+        scale.set_size_request(160, -1)
+        scale.set_valign(Gtk.Align.CENTER)
+        scale.set_draw_value(False)
 
-        return f"{int(value)}s"
+        def value_changed(scale):
+            value = scale.get_value()
+            row.set_subtitle(format_fn(value))
+            on_change(value)
+
+        scale.connect("value-changed", value_changed)
+
+        row.add_suffix(scale)
+
+        return row
 
     def build_cycle_interval_control(self):
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        def format_cycle_interval(value):
+            return "Off" if value <= 0 else f"{int(value)}s"
 
-        box.set_margin_start(12)
-        box.set_margin_end(12)
-        box.set_margin_top(6)
-        box.set_margin_bottom(6)
-
-        label = Gtk.Label(label="Cycle Interval", xalign=0)
-
-        box.append(label)
-
-        scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL,
-            0.0,
-            120.0,
-            1.0
+        return self.build_slider_row(
+            "Cycle Interval",
+            0.0, 120.0, 1.0, 0.0,
+            format_cycle_interval,
+            lambda value: self.run_js(f"setCycleInterval({value});")
         )
-
-        scale.set_value(0.0)
-
-        # Wider than the sensitivity slider's 180px: with draw_value
-        # on, the value label is centered on the handle, so at either
-        # end it was overflowing past a tighter width and getting
-        # clipped by the popover.
-        scale.set_size_request(220, -1)
-        scale.set_draw_value(True)
-
-        scale.set_format_value_func(self.format_cycle_interval)
-
-        scale.connect(
-            "value-changed",
-            self.cycle_interval_changed
-        )
-
-        box.append(scale)
-
-        self.menu_button.get_popover().add_child(box, "cycle-interval")
-
-    def blend_time_changed(self, scale):
-
-        self.run_js(f"setBlendTime({scale.get_value()});")
-
-    def format_blend_time(self, scale, value, user_data=None):
-
-        if value <= 0:
-            return "Instant"
-
-        return f"{value:.1f}s"
 
     def build_blend_time_control(self):
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        def format_blend_time(value):
+            return "Instant" if value <= 0 else f"{value:.1f}s"
 
-        box.set_margin_start(12)
-        box.set_margin_end(12)
-        box.set_margin_top(6)
-        box.set_margin_bottom(6)
-
-        label = Gtk.Label(label="Transition Blend Time", xalign=0)
-
-        box.append(label)
-
-        scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL,
-            0.0,
-            10.0,
-            0.5
+        return self.build_slider_row(
+            "Transition Blend Time",
+            0.0, 10.0, 0.5, 3.0,
+            format_blend_time,
+            lambda value: self.run_js(f"setBlendTime({value});")
         )
-
-        scale.set_value(3.0)
-        scale.set_size_request(220, -1)
-        scale.set_draw_value(True)
-
-        scale.set_format_value_func(self.format_blend_time)
-
-        scale.connect(
-            "value-changed",
-            self.blend_time_changed
-        )
-
-        box.append(scale)
-
-        self.menu_button.get_popover().add_child(box, "blend-time")
-
-    def mesh_size_changed(self, scale):
-
-        self.run_js(f"setMeshSize({scale.get_value()});")
-
-    def format_mesh_size(self, scale, value, user_data=None):
-
-        return f"{int(value)}x{int(value * 0.75)}"
 
     def build_mesh_size_control(self):
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-
-        box.set_margin_start(12)
-        box.set_margin_end(12)
-        box.set_margin_top(6)
-        box.set_margin_bottom(6)
-
-        label = Gtk.Label(label="Mesh Size", xalign=0)
-
-        box.append(label)
+        def format_mesh_size(value):
+            return f"{int(value)}x{int(value * 0.75)}"
 
         # 8-128, matching Butterchurn's own default (48x36) at the
         # midpoint - held to a fixed 4:3 ratio (its default aspect)
         # rather than exposing width/height separately.
-        scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL,
-            8.0,
-            128.0,
-            1.0
+        return self.build_slider_row(
+            "Mesh Size",
+            8.0, 128.0, 1.0, 48.0,
+            format_mesh_size,
+            lambda value: self.run_js(f"setMeshSize({value});")
         )
-
-        scale.set_value(48.0)
-        scale.set_size_request(220, -1)
-        scale.set_draw_value(True)
-
-        scale.set_format_value_func(self.format_mesh_size)
-
-        scale.connect(
-            "value-changed",
-            self.mesh_size_changed
-        )
-
-        box.append(scale)
-
-        self.menu_button.get_popover().add_child(box, "mesh-size")
-
-    def framerate_changed(self, scale):
-
-        value = scale.get_value()
-
-        # The slider's top end means "uncapped" (render on every
-        # animation frame), same "boundary value is the special
-        # state" shape as the cycle interval's "off" at its bottom.
-        fps = 0 if value >= 60 else value
-
-        self.run_js(f"setFramerate({fps});")
-
-    def format_framerate(self, scale, value, user_data=None):
-
-        if value >= 60:
-            return "Uncapped"
-
-        return f"{int(value)} FPS"
 
     def build_framerate_control(self):
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        def format_framerate(value):
+            return "Uncapped" if value >= 60 else f"{int(value)} FPS"
 
-        box.set_margin_start(12)
-        box.set_margin_end(12)
-        box.set_margin_top(6)
-        box.set_margin_bottom(6)
+        def framerate_changed(value):
 
-        label = Gtk.Label(label="Framerate", xalign=0)
+            # The slider's top end means "uncapped" (render on every
+            # animation frame), same "boundary value is the special
+            # state" shape as the cycle interval's "off" at its bottom.
+            fps = 0 if value >= 60 else value
+            self.run_js(f"setFramerate({fps});")
 
-        box.append(label)
-
-        scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL,
-            10.0,
-            60.0,
-            1.0
+        return self.build_slider_row(
+            "Framerate",
+            10.0, 60.0, 1.0, 60.0,
+            format_framerate,
+            framerate_changed
         )
 
-        scale.set_value(60.0)
-        scale.set_size_request(220, -1)
-        scale.set_draw_value(True)
+    def theme_button_toggled(self, button, scheme):
 
-        scale.set_format_value_func(self.format_framerate)
+        if button.get_active():
+            Adw.StyleManager.get_default().set_color_scheme(scheme)
 
-        scale.connect(
-            "value-changed",
-            self.framerate_changed
+    def build_theme_selector(self):
+
+        # Round light/dark/follow-system swatches - matches GNOME Text
+        # Editor's EditorThemeSelector almost exactly (see .theme-
+        # selector-box in style.css), rather than a labeled
+        # Preferences row: quick to reach, and the current choice is
+        # visible at a glance.
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+
+        box.add_css_class("theme-selector-box")
+
+        options = [
+            ("follow", "Follow System Style", Adw.ColorScheme.DEFAULT),
+            ("light", "Light Style", Adw.ColorScheme.FORCE_LIGHT),
+            ("dark", "Dark Style", Adw.ColorScheme.FORCE_DARK),
+        ]
+
+        group_button = None
+
+        for css_class, tooltip, scheme in options:
+
+            button = Gtk.CheckButton()
+
+            button.add_css_class("theme-selector")
+            button.add_css_class(css_class)
+            button.set_hexpand(True)
+            button.set_halign(Gtk.Align.CENTER)
+            button.set_focus_on_click(False)
+            button.set_tooltip_text(tooltip)
+
+            if group_button is None:
+                group_button = button
+            else:
+                button.set_group(group_button)
+
+            if scheme == Adw.ColorScheme.DEFAULT:
+                button.set_active(True)
+
+            button.connect(
+                "toggled",
+                self.theme_button_toggled,
+                scheme
+            )
+
+            box.append(button)
+
+        return box
+
+    def preferences_clicked(self, action, param):
+
+        self.preferences_dialog.present(self)
+
+    def build_preferences_dialog(self):
+
+        audio_group = Adw.PreferencesGroup()
+        audio_group.add(self.build_sensitivity_control())
+
+        audio_page = Adw.PreferencesPage(
+            title="Audio",
+            icon_name="audio-speakers-symbolic"
         )
 
-        box.append(scale)
+        audio_page.add(audio_group)
 
-        self.menu_button.get_popover().add_child(box, "framerate")
+        playback_group = Adw.PreferencesGroup()
+        playback_group.add(self.build_cycle_interval_control())
+        playback_group.add(self.build_blend_time_control())
+
+        playback_page = Adw.PreferencesPage(
+            title="Playback",
+            icon_name="media-playback-start-symbolic"
+        )
+
+        playback_page.add(playback_group)
+
+        rendering_group = Adw.PreferencesGroup()
+        rendering_group.add(self.build_mesh_size_control())
+        rendering_group.add(self.build_framerate_control())
+
+        rendering_page = Adw.PreferencesPage(
+            title="Rendering",
+            icon_name="preferences-desktop-display-symbolic"
+        )
+
+        rendering_page.add(rendering_group)
+
+        # More than one page here is what gives the dialog its top
+        # view-switcher (rather than a single flat list) for free.
+        # Theme (light/dark/system) lives in the hamburger menu itself
+        # instead - see build_theme_selector.
+        dialog = Adw.PreferencesDialog()
+        dialog.add(audio_page)
+        dialog.add(playback_page)
+        dialog.add(rendering_page)
+
+        self.preferences_dialog = dialog
 
     def show_toast(self, text):
 
@@ -812,42 +903,17 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.run_js("previousPreset();")
 
-    def sensitivity_changed(self, scale):
-
-        self.run_js(f"setSensitivity({scale.get_value()});")
-
     def build_sensitivity_control(self):
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        def format_sensitivity(value):
+            return f"{value:.1f}x"
 
-        box.set_margin_start(12)
-        box.set_margin_end(12)
-        box.set_margin_top(6)
-        box.set_margin_bottom(6)
-
-        label = Gtk.Label(label="Sensitivity", xalign=0)
-
-        box.append(label)
-
-        scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL,
-            0.0,
-            4.0,
-            0.1
+        return self.build_slider_row(
+            "Sensitivity",
+            0.0, 4.0, 0.1, 1.0,
+            format_sensitivity,
+            lambda value: self.run_js(f"setSensitivity({value});")
         )
-
-        scale.set_value(1.0)
-        scale.set_size_request(180, -1)
-        scale.set_draw_value(False)
-
-        scale.connect(
-            "value-changed",
-            self.sensitivity_changed
-        )
-
-        box.append(scale)
-
-        self.menu_button.get_popover().add_child(box, "sensitivity")
 
 
 

@@ -14,13 +14,10 @@
 
 
 
-            <child type="start">
-              <object class="GtkButton" id="load_preset_button">
-                <property name="icon-name">document-open-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Load Preset File</property>
-                <property name="action-name">win.load-preset</property>
-              </object>
-            </child>
+            <!-- Load Preset File dropped from the header bar for now -
+                 MilkDrop conversion isn't reliable enough yet to give
+                 it top-level prominence. Still reachable from the
+                 hamburger menu (win.load-preset). -->
 
             <child type="start">
               <object class="GtkButton" id="browse_presets_button">
@@ -58,24 +55,24 @@
 
     <section>
 
-      <!-- Populated at runtime in window.py (rebuild_audio_source_menu)
-           with the currently connected output devices, since that list
-           changes as devices are plugged/unplugged. -->
-      <submenu id="audio_source_submenu">
-        <attribute name="label">Audio Source</attribute>
-      </submenu>
+      <!-- The actual segmented button row is built and attached in
+           window.py (build_theme_selector), same as the other custom
+           widgets below. -->
+      <item>
+        <attribute name="custom">theme-selector</attribute>
+      </item>
 
     </section>
 
 
     <section>
 
-      <!-- The actual GtkScale is built and attached in window.py
-           (Gio.Menu items can't embed widgets directly - this
-           placeholder is filled in via GtkPopoverMenu.add_child). -->
-      <item>
-        <attribute name="custom">sensitivity</attribute>
-      </item>
+      <!-- Populated at runtime in window.py (rebuild_audio_source_menu)
+           with the currently connected output devices, since that list
+           changes as devices are plugged/unplugged. -->
+      <submenu id="audio_source_submenu">
+        <attribute name="label">Audio Source</attribute>
+      </submenu>
 
     </section>
 
@@ -102,46 +99,9 @@
         <attribute name="action">win.shuffle-preset</attribute>
       </item>
 
-    </section>
-
-
-    <section>
-
-      <!-- The actual GtkScale is built and attached in window.py
-           (build_cycle_interval_control), same as the sensitivity
-           control above. -->
       <item>
-        <attribute name="custom">cycle-interval</attribute>
-      </item>
-
-    </section>
-
-
-    <section>
-
-      <!-- build_blend_time_control -->
-      <item>
-        <attribute name="custom">blend-time</attribute>
-      </item>
-
-    </section>
-
-
-    <section>
-
-      <!-- build_mesh_size_control -->
-      <item>
-        <attribute name="custom">mesh-size</attribute>
-      </item>
-
-    </section>
-
-
-    <section>
-
-      <!-- build_framerate_control -->
-      <item>
-        <attribute name="custom">framerate</attribute>
+        <attribute name="label" translatable="yes">Toggle Fullscreen</attribute>
+        <attribute name="action">win.toggle-fullscreen</attribute>
       </item>
 
     </section>
@@ -151,7 +111,7 @@
 
       <item>
         <attribute name="label" translatable="yes">_Preferences</attribute>
-        <attribute name="action">app.preferences</attribute>
+        <attribute name="action">win.preferences</attribute>
       </item>
 
       <item>
