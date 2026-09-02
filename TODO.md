@@ -64,6 +64,20 @@
       at all today, so this needs a similar explicit affordance -
       likely a toolbar button and/or a menu entry, alongside or
       instead of relying on a window-manager keybinding).
+- [ ] Translation support - the GNOME-app-template scaffolding for
+      this is already present (po/meson.build, po/LINGUAS,
+      po/POTFILES.in, `translatable="yes"` markers throughout
+      window.ui, `from gettext import gettext as _` used for a few
+      strings in main.py) but po/LINGUAS is empty - no language has
+      actually been translated yet. More importantly, POTFILES.in only
+      covers window.ui + main.py + window.py; checked and virtually
+      none of window.py's own user-facing strings (toasts, tooltips,
+      dialog headings/bodies, row titles - most of what's been added
+      this session, since most new UI was built directly in Python
+      rather than window.ui) are actually wrapped in `_()` at all, and
+      mirror_window.py (also all-Python) isn't in POTFILES.in or
+      gettext-wrapped either. Real translation support means auditing
+      and wrapping those strings, not just adding language files.
 - [ ] Reduce audio-bridge overhead further - `send_audio_to_webview`
       (window.py) calls `webview.evaluate_javascript()` with a fresh
       JS source string (`receiveAudio('<base64>')`) built fresh for
