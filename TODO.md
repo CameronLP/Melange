@@ -149,6 +149,41 @@
 
 ## Done
 
+- [x] Preset-nav arrows moved to GTK - they used to be part of the
+      page itself (HTML buttons drawn on the canvas, index.html/
+      main.js), which meant a mirror window (showing only the
+      webview's own rendered content via Gtk.WidgetPaintable) also
+      showed them, as inert non-interactive clutter (Gtk.Picture never
+      forwards input back to a paintable's source). Moved to two real
+      Gtk.Button widgets (window.py), overlaid on the webview via a
+      Gtk.Overlay wrapping it, with the same circular/translucent
+      look and hover-reveal-then-fade behavior (now tied to the same
+      toolbar auto-hide state as the header bar, via a new
+      set_nav_arrows_visible, rather than a per-button CSS :hover
+      zone) - so they no longer appear in mirror windows at all, and
+      still look/behave the same in the primary window. The existing
+      15%-edge-of-window carve-out in the drag-to-move gesture
+      (on_window_drag_pressed) is kept, now guarding against dragging
+      the window when a click lands on a nav button rather than
+      WebKit's own hit-testing swallowing the click. The buttons call
+      next_preset()/previous_preset() directly (same lock-check/toast
+      path as every other trigger) rather than round-tripping through
+      the JS debug-message channel the HTML buttons used to need -
+      that channel's "NAV_NEXT" message is still used by the cycle
+      timer (main.js scheduleCycleTick), so it wasn't removed
+      entirely, only the now-dead "NAV_PREVIOUS" side of it (nothing
+      sends that anymore) and the arrows' own listeners.
+      Verified: clean startup (would have failed loudly if the
+      Overlay/button construction were broken), win.next-preset/
+      win.previous-preset (the same methods the buttons call) advance
+      and reverse correctly with no errors, and creating a mirror
+      window afterward still works with no errors and no second
+      WebKitWebProcess spawned - confirming the webview's move into an
+      Overlay didn't break WidgetPaintable's tracking of it. Not
+      independently verified by hand: actually clicking the buttons or
+      seeing the hover-reveal fade, and confirming visually that they
+      no longer appear in a mirror window (no GUI interaction or
+      screenshot capability in this environment).
 - [x] Multiple visualizer windows (mirror mode, for multi-monitor
       setups) - "New Mirror Window…" in the primary window's menu
       opens an additional window (mirror_window.py, `MirrorWindow`)
@@ -168,11 +203,13 @@
       sense - they have no independent state or behavior at all, only
       ever showing whatever the primary is currently rendering. Since
       it's the primary's actual live webview being shown, not a copy,
-      anything the page renders (including the on-canvas preset-nav
-      arrows) appears in the mirror too - there's only one underlying
-      DOM - but Gtk.Picture doesn't forward input back to a
-      paintable's source, so those arrows (and everything else in the
-      page) are inert there, purely visual.
+      anything the page renders appears in the mirror too - there's
+      only one underlying DOM, and Gtk.Picture doesn't forward input
+      back to a paintable's source, so nothing in the page is
+      interactive there. This included the on-canvas preset-nav arrows
+      at first (inert clutter in the mirror as a result) - see the
+      "Preset-nav arrows moved to GTK" entry below, which moved them
+      out of the page entirely so this no longer applies to them.
 
       A real, serious bug was found and fixed while building this:
       returning False from a window's "close-request" handler (the

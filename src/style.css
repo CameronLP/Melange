@@ -69,3 +69,26 @@ headerbar.melange-header image {
     background-color: @theme_selected_bg_color;
     color: @theme_selected_fg_color;
 }
+
+/* Preset-nav arrows, overlaid on the webview (window.py) - previously
+   part of the page itself, moved to real GTK widgets so they don't
+   show up (as inert, non-interactive clutter) in a mirror window,
+   which only mirrors the webview widget's own rendered content.
+   Same look as the original HTML version: circular, translucent
+   black, hidden until the toolbar/cursor auto-reveal makes it visible
+   (see set_nav_arrows_visible in window.py), same fade transition. */
+button.nav-arrow-button {
+    background-color: rgba(0, 0, 0, 0.4);
+    color: #fff;
+    border-radius: 9999px;
+    opacity: 0;
+    transition: opacity 200ms ease, background-color 200ms ease;
+}
+
+button.nav-arrow-button.nav-arrow-visible {
+    opacity: 1;
+}
+
+button.nav-arrow-button:hover {
+    background-color: rgba(0, 0, 0, 0.65);
+}

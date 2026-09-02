@@ -1395,11 +1395,10 @@ function scheduleCycleTick() {
     cycleTimer = setTimeout(
         () => {
             // No separate on/off toggle - routed through the same
-            // "NAV_NEXT" debug message the on-canvas arrows use (see
-            // the click handlers below) rather than calling
-            // nextPreset() directly, so auto-cycling also respects
-            // the preset lock (and its toast) via Python's existing
-            // next_preset().
+            // "NAV_NEXT" debug message the (now GTK-side) nav arrows
+            // use rather than calling nextPreset() directly, so
+            // auto-cycling also respects the preset lock (and its
+            // toast) via Python's existing next_preset().
             debug("NAV_NEXT");
             scheduleCycleTick();
         },
@@ -1496,21 +1495,13 @@ window.previousPreset = function() {
 };
 
 
-// Routed through Python (which calls back into nextPreset/
-// previousPreset itself) rather than calling those directly, so the
-// preset-lock check - and the native toast it shows - only has to
-// live in one place, regardless of whether a change was requested
-// from these arrows or the win.next-preset/win.previous-preset
-// keyboard shortcuts.
-document.getElementById("nav-prev").addEventListener(
-    "click",
-    () => debug("NAV_PREVIOUS")
-);
-
-document.getElementById("nav-next").addEventListener(
-    "click",
-    () => debug("NAV_NEXT")
-);
+// The on-canvas nav arrows used to live here (HTML buttons + these
+// click listeners) - moved to real GTK widgets overlaid on the
+// webview (window.py), so they don't show up as inert clutter in a
+// mirror window. The "NAV_NEXT" debug message they used to send is
+// still used by the cycle timer above (see scheduleCycleTick) - that
+// message name is unrelated to the arrows themselves, just a shared
+// signal meaning "advance, respecting the preset lock."
 
 
 // Called from Python (see load_preset_clicked in window.py) after the

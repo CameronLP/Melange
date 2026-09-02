@@ -67,8 +67,49 @@ class MelangeWindow(Adw.ApplicationWindow):
             on_message=self.on_webview_debug_message
         )
 
+        # The preset-nav arrows used to be part of the page itself
+        # (HTML buttons drawn on the canvas) - moved to real GTK
+        # widgets, overlaid on top of the webview, so a mirror window
+        # (mirror_window.py) - which shows only the webview widget's
+        # own rendered content via Gtk.WidgetPaintable - doesn't also
+        # show a pair of arrows that don't do anything there (a
+        # Gtk.Picture never forwards input back to a paintable's
+        # source, so they'd have been inert, confusing clutter).
+        webview_overlay = Gtk.Overlay()
+        webview_overlay.set_child(self.webview)
+
+        self.prev_arrow_button = Gtk.Button(icon_name="go-previous-symbolic")
+        self.prev_arrow_button.add_css_class("nav-arrow-button")
+        self.prev_arrow_button.set_size_request(56, 56)
+        self.prev_arrow_button.set_halign(Gtk.Align.START)
+        self.prev_arrow_button.set_valign(Gtk.Align.CENTER)
+        self.prev_arrow_button.set_margin_start(12)
+        self.prev_arrow_button.set_tooltip_text("Previous preset")
+
+        self.prev_arrow_button.connect(
+            "clicked",
+            lambda button: self.previous_preset(None)
+        )
+
+        webview_overlay.add_overlay(self.prev_arrow_button)
+
+        self.next_arrow_button = Gtk.Button(icon_name="go-next-symbolic")
+        self.next_arrow_button.add_css_class("nav-arrow-button")
+        self.next_arrow_button.set_size_request(56, 56)
+        self.next_arrow_button.set_halign(Gtk.Align.END)
+        self.next_arrow_button.set_valign(Gtk.Align.CENTER)
+        self.next_arrow_button.set_margin_end(12)
+        self.next_arrow_button.set_tooltip_text("Next preset")
+
+        self.next_arrow_button.connect(
+            "clicked",
+            lambda button: self.next_preset(None)
+        )
+
+        webview_overlay.add_overlay(self.next_arrow_button)
+
         self.content_box.append(
-            self.webview
+            webview_overlay
         )
 
         # Lets the window be dragged from anywhere, not just the
@@ -438,18 +479,13 @@ class MelangeWindow(Adw.ApplicationWindow):
 
             return
 
-        # Sent by the on-canvas nav arrows (index.html/main.js) instead
-        # of calling nextPreset()/previousPreset() directly, so the
-        # lock check (and the native toast it shows) lives in one
-        # place regardless of whether a change was requested via those
-        # arrows or the win.next-preset/win.previous-preset keyboard
-        # shortcuts.
+        # Sent by the cycle timer (main.js scheduleCycleTick) instead
+        # of calling nextPreset() directly, so the lock check (and the
+        # native toast it shows) lives in one place regardless of
+        # whether a change was requested via auto-cycling or the
+        # win.next-preset keyboard shortcut/GTK nav arrow.
         if text == "NAV_NEXT":
             self.next_preset(None)
-            return
-
-        if text == "NAV_PREVIOUS":
-            self.previous_preset(None)
             return
 
         # Distinct from NAV_NEXT so a beat-triggered advance is
@@ -503,6 +539,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.hide_timer = None
 
         self.toolbar_view.set_reveal_top_bars(True)
+        self.set_nav_arrows_visible(True)
         self.set_cursor(None)
 
 
@@ -546,6 +583,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.last_mouse_pos = (x, y)
 
         self.toolbar_view.set_reveal_top_bars(True)
+        self.set_nav_arrows_visible(True)
 
         if self.hide_timer:
             GLib.source_remove(self.hide_timer)
@@ -574,6 +612,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             return False
 
         self.toolbar_view.set_reveal_top_bars(False)
+        self.set_nav_arrows_visible(False)
 
         # Only in fullscreen - windowed mode still needs a visible
         # cursor for ordinary desktop interaction (moving/resizing,
@@ -582,6 +621,17 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.set_cursor(Gdk.Cursor.new_from_name("none"))
 
         return False
+
+    def set_nav_arrows_visible(self, visible):
+
+        css_class = "nav-arrow-visible"
+
+        for button in (self.prev_arrow_button, self.next_arrow_button):
+
+            if visible:
+                button.add_css_class(css_class)
+            else:
+                button.remove_css_class(css_class)
 
     def menu_changed(self, button, param):
 
@@ -613,15 +663,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         if not ok:
             return
 
-        # Skip the leftmost/rightmost 15% - that's where the on-canvas
-        # preset nav arrows live (see index.html's .nav-zone rule).
-        # This gesture runs in the CAPTURE phase (see its setup above)
-        # so it always sees the press before the webview does; since
-        # the whole canvas is one opaque WebKit widget from GTK's
-        # perspective (unlike a real header bar, whose buttons are
-        # separate widgets that claim their own clicks first),
-        # unconditionally starting a move here would eat every click
-        # meant for those buttons before WebKit ever sees it.
+        # Skip the leftmost/rightmost 15% - that's where the nav-arrow
+        # buttons live (see the Gtk.Overlay setup above). This gesture
+        # runs in the CAPTURE phase (see its setup above), which fires
+        # before descendant widgets get a chance to claim the press -
+        # without this carve-out, a click on either arrow button would
+        # both start dragging the window *and* trigger the button, an
+        # ambiguous double-effect from one click.
         width = widget.get_width()
 
         if width > 0 and (x < width * 0.15 or x > width * 0.85):
