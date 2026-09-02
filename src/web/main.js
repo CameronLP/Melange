@@ -377,6 +377,21 @@ async function setupPCM() {
                 this.samplesL = [];
                 this.samplesR = [];
 
+                // This queue never reaches audioContext.destination -
+                // it only feeds the analyser for visualization, never
+                // actual audio playback - so there's no reason to
+                // preserve every sample in order. Without a cap, any
+                // upstream burstiness or drift (GStreamer buffering,
+                // the JS<->Python bridge, main-thread contention from
+                // the render loop) just accumulates forever: the queue
+                // grows, and the delay between real audio and what the
+                // visualizer reacts to grows right along with it.
+                // Capping it and dropping the oldest excess keeps
+                // latency bounded at the cost of occasionally not
+                // rendering every single sample, which is exactly the
+                // right trade-off here.
+                this.maxQueuedSamples = Math.round(sampleRate * 0.05);
+
                 this.port.onmessage = e => {
 
                     const left = new Float32Array(e.data.left);
@@ -385,6 +400,14 @@ async function setupPCM() {
                     for (let i = 0; i < left.length; i++) {
                         this.samplesL.push(left[i]);
                         this.samplesR.push(right[i]);
+                    }
+
+                    if (this.samplesL.length > this.maxQueuedSamples) {
+
+                        const excess = this.samplesL.length - this.maxQueuedSamples;
+
+                        this.samplesL.splice(0, excess);
+                        this.samplesR.splice(0, excess);
                     }
 
                 };
