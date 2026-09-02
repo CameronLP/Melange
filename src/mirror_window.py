@@ -118,6 +118,22 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         self.picture.add_controller(drag_gesture)
 
+        # Same double-click-raises-the-primary behavior, but for the
+        # header bar specifically - drag_gesture above only covers the
+        # picture. This one deliberately doesn't claim the event
+        # sequence, so the header bar's own native double-click-to-
+        # maximize keeps working alongside it rather than being
+        # overridden.
+        header_click = Gtk.GestureClick()
+        header_click.set_button(Gdk.BUTTON_PRIMARY)
+
+        header_click.connect(
+            "pressed",
+            self.on_header_pressed
+        )
+
+        self.header.add_controller(header_click)
+
         # Same auto-hide behavior as the primary window's toolbar -
         # reveal on motion, hide again after a few seconds unless the
         # pointer is actually over the header bar. No WebKit involved
@@ -196,6 +212,11 @@ class MirrorWindow(Adw.ApplicationWindow):
             "close-request",
             self.on_close_request
         )
+
+    def on_header_pressed(self, gesture, n_press, x, y):
+
+        if n_press >= 2:
+            self.primary.present()
 
     def on_window_drag_pressed(self, gesture, n_press, x, y):
 

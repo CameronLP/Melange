@@ -245,8 +245,11 @@
       handling - see `current_preset_name`/`update_mirror_titles`), a
       header button to instantly match the primary window's current
       size, and a header button to double as a quick way to
-      raise/focus the primary (a double-click anywhere in the mirror
-      also does this - single-click still drags). The picture fills
+      raise/focus the primary (a double-click anywhere in the mirror -
+      picture or header bar - also does this; single-click on the
+      picture still drags, and the header-bar version deliberately
+      doesn't claim the click, so the header's own native double-
+      click-to-maximize keeps working alongside it). The picture fills
       the window completely (Gtk.ContentFit.FILL) even if that distorts
       the aspect ratio, rather than the default letterboxed CONTAIN.
       "Close All Mirrors" is available from the primary's menu too.
