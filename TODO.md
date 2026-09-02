@@ -75,6 +75,36 @@
 
 ## In progress / not started
 
+- [ ] `badShaderPattern`'s belt-and-suspenders check (main.js,
+      `window.loadPresetFile`, see the bvecN &&/|| bug in Done) has a
+      false-positive case, found by batch-converting a large random
+      sample (800 files) of a real-world preset collection
+      (`presets-cream-of-the-crop`, external to this repo) through
+      `convertPreset` + `repairBadShader` and checking the result:
+      3/800 (all by the same author, "amandio c, flexi") were flagged
+      and would be refused, but their converted GLSL is actually
+      valid. The regex (`/bvec[234]\s*\([^;{}]*?\)\s*(&&|\|\|)/`) only
+      checks "does a `bvecN(...)` call appear, followed eventually by
+      `&&`/`||` after some balanced parens" - it doesn't verify the
+      `&&`/`||` actually applies to the `bvecN(...)` result itself.
+      These presets' converted shaders legitimately construct a
+      `bvecN(...)` from scalar-bool component expressions where one
+      component happens to itself be a `scalarBool && scalarBool`
+      sub-expression - e.g.
+      `bvec3(tile1, tile2, (bool(...) && tile2))` - which is valid
+      GLSL (scalar && scalar), but trips the regex because a `)` +
+      `&&` sequence still occurs somewhere inside the outer
+      `bvecN(...)` call's argument list. Not fixed - the existing
+      check is deliberately conservative ("refusing to load is much
+      safer than risking the renderer hang"), and a more precise
+      fix would need to track paren nesting depth relative to the
+      bvecN call's own top-level argument boundaries (distinguishing
+      "&&/|| immediately after the bvecN call closes" from "&&/||
+      inside one of its arguments") rather than trying to patch the
+      regex. Low impact (0.4% of a large real-world sample) - noted
+      here rather than fixed blind, since this environment can't
+      actually render the "fixed" GLSL in WebGL to confirm a change
+      doesn't let a genuinely bad case back through.
 - [ ] Add a maximize button to the primary window too - currently only
       the mirror window has one (it needed a dedicated header button
       since it has no native decorations either; the primary's own
