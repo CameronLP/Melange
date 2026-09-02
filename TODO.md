@@ -202,6 +202,12 @@
       runs cleanly on both transitions. Not independently verified:
       actually clicking the button (no GUI interaction capability in
       this environment).
+      Mirror windows (mirror_window.py) got the same button/icon-swap
+      treatment on request, reusing each mirror's own existing
+      win.toggle-fullscreen action the same way. Verified the same way
+      as the primary: creating a mirror and toggling its
+      win.toggle-fullscreen via D-Bus produced no errors entering or
+      exiting fullscreen.
 - [x] Preset-nav arrows moved to GTK - they used to be part of the
       page itself (HTML buttons drawn on the canvas, index.html/
       main.js), which meant a mirror window (showing only the

@@ -82,6 +82,18 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         self.header.pack_end(resize_button)
 
+        # Same style/behavior as the primary window's own header
+        # fullscreen button - reuses this window's existing
+        # win.toggle-fullscreen action (see __init__ below), and its
+        # icon is kept in sync the same way, via notify::fullscreened.
+        self.fullscreen_button = Gtk.Button(
+            icon_name="view-fullscreen-symbolic",
+            tooltip_text="Toggle Fullscreen",
+            action_name="win.toggle-fullscreen"
+        )
+
+        self.header.pack_end(self.fullscreen_button)
+
         # A guaranteed-reliable alternative to the double-click-to-
         # focus-primary handlers below - those depend on correctly
         # disambiguating a double-click from a drag via GTK gesture
@@ -197,6 +209,11 @@ class MirrorWindow(Adw.ApplicationWindow):
         )
 
         self.add_action(fullscreen_action)
+
+        self.connect(
+            "notify::fullscreened",
+            self.update_fullscreen_button_icon
+        )
 
         escape_controller = Gtk.EventControllerKey()
 
@@ -362,6 +379,14 @@ class MirrorWindow(Adw.ApplicationWindow):
             self.unfullscreen()
         else:
             self.fullscreen()
+
+    def update_fullscreen_button_icon(self, window, param):
+
+        self.fullscreen_button.set_icon_name(
+            "view-restore-symbolic"
+            if self.is_fullscreen()
+            else "view-fullscreen-symbolic"
+        )
 
     def on_key_pressed(self, controller, keyval, keycode, state):
 
