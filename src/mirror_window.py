@@ -82,6 +82,26 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         self.header.pack_end(resize_button)
 
+        # A guaranteed-reliable alternative to the double-click-to-
+        # focus-primary handlers below - those depend on correctly
+        # disambiguating a double-click from a drag via GTK gesture
+        # arbitration, which has been reported as still not working
+        # even after fixing one real bug in it (see
+        # on_picture_drag_begin/on_picture_pressed), and can't be
+        # tested directly in the environment this was built in. A
+        # plain button click has none of that ambiguity.
+        find_primary_button = Gtk.Button(
+            icon_name="focus-windows-symbolic",
+            tooltip_text="Find Main Window"
+        )
+
+        find_primary_button.connect(
+            "clicked",
+            lambda button: self.primary.present()
+        )
+
+        self.header.pack_end(find_primary_button)
+
         self.toolbar_view.add_top_bar(self.header)
 
         self.picture = Gtk.Picture()

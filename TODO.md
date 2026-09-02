@@ -245,29 +245,28 @@
       handling - see `current_preset_name`/`update_mirror_titles`), a
       header button to instantly match the primary window's current
       size, and a header button to double as a quick way to
-      raise/focus the primary (a double-click anywhere in the mirror -
-      picture or header bar - also does this; single-click on the
-      picture still drags). Getting the picture's double-click working
-      reliably took two attempts: the first (a single GestureClick's
-      "pressed" handler, calling begin_move() straight away whenever
-      n_press was 1) was reported as not working at all, and the real
-      cause turned out to be that call itself - begin_move() grabs the
-      pointer for an interactive move the moment the *first* press of
-      a would-be double-click happens, before GTK ever gets a chance
-      to recognize a second press following it, so the click sequence
-      gets consumed by the move grab instead of being delivered as a
-      second discrete press. Fixed by splitting drag and click-
-      counting across two separate gesture types: a Gtk.GestureDrag,
-      whose drag-begin only fires once real motion happens past its
-      own built-in threshold (so a plain double-click, with no
-      movement in between, never triggers it at all), handles the
-      actual window move; a separate Gtk.GestureClick (CAPTURE phase)
-      handles double-click detection, now free to see and count both
-      presses correctly since nothing consumes the pointer between
-      them. The header-bar version uses the same CAPTURE-phase
-      GestureClick approach and deliberately doesn't claim the click,
-      so the header's own native double-click-to-maximize keeps
-      working alongside it. The picture fills the window completely
+      raise/focus the primary. A "Find Main Window" header button
+      (guaranteed reliable - a plain button click has no
+      click-vs-drag ambiguity to get wrong) does this unconditionally
+      now, added after two attempts at double-click detection on the
+      picture/header bar were each reported as not actually working:
+      the first (a single GestureClick's "pressed" handler, calling
+      begin_move() straight away whenever n_press was 1) had a real,
+      identified bug - begin_move() grabs the pointer for an
+      interactive move the moment the *first* press of a would-be
+      double-click happens, before GTK ever gets a chance to recognize
+      a second press following it, so the click sequence gets consumed
+      by the move grab instead of delivered as a second discrete
+      press. The fix (splitting drag and click-counting across a
+      Gtk.GestureDrag, which only starts a move once real motion
+      happens, and a separate CAPTURE-phase Gtk.GestureClick for
+      double-click counting) was well-reasoned and didn't error, but
+      was *also* reported as still not working - unverifiable further
+      in this environment, which has no way to simulate real pointer
+      gestures to confirm GTK's gesture arbitration behaves as
+      expected. Both double-click handlers are left in place (harmless
+      if they don't fire), but the button is now the actually-reliable
+      way to do this. The picture fills the window completely
       (Gtk.ContentFit.FILL) even if that distorts the aspect ratio,
       rather than the default letterboxed CONTAIN. "Close All Mirrors"
       is available from the primary's menu too. A single click on the
