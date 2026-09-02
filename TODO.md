@@ -29,7 +29,6 @@
 - [ ] Logo + symbolic icon polish - the scalable app icon was replaced (Bottles-based, data/icons/hicolor/scalable/apps), but the symbolic icon at data/icons/hicolor/symbolic/apps/com.cameronlp.Melange-symbolic.svg is still the original template placeholder and doesn't match
 - [ ] Multiple visualizer windows
 - [ ] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
-- [ ] Settings profiles - save/load named sets of Preferences (sensitivity, mesh size, blend time, beat sensitivity, etc.) so you can switch between e.g. a "party" profile and a "chill" profile instead of manually re-tuning every slider
 - [ ] Reduce memory usage further - real measurement (not guessing) already found and fixed several things: eager loading of the whole baron preset pack at startup, GC churn in the audio hot path, and some unused WebKit persistence/features (see Done). What's left is WebKitGTK's own multi-process baseline itself (UI + network + web-content processes, each a full engine instance) - measured at roughly 500-650MB total for a single window even after the above fixes. Trimming that further means either the WebSocket audio-bridge change above, or the native-rendering direction below; see that for the real lever.
 
 ### Visualizer settings ideas
@@ -95,6 +94,33 @@
 
 ## Done
 
+- [x] Settings profiles - a fourth "Profiles" tab in the Preferences
+      dialog itself (alongside Audio/Playback/Rendering, rather than a
+      separate top-level dialog - profiles are snapshots *of* those
+      other tabs, so they belong inside Preferences, not next to it)
+      lists named, saved snapshots of every Preferences control
+      (sensitivity, cycle interval/jitter, blend time, mesh size,
+      framerate, render scale, anti-aliasing, beat cycle/mode/
+      sensitivity/cooldown/silence floor), with Load/Delete per row
+      and a "Save Current Settings as Profile…" row at the top
+      (Adw.AlertDialog with a name entry). Persisted as JSON at
+      `$XDG_CONFIG_HOME/melange/profiles.json` (the Flatpak-sandboxed
+      config dir - no manifest permission changes needed). Loading a
+      profile calls each control's own existing setter
+      (`Gtk.Scale.set_value`/`Adw.SwitchRow.set_active`/
+      `Adw.ComboRow.set_selected`), which re-fires that control's
+      already-wired change handler - so applying a profile reuses the
+      exact same path a manual slider drag would, rather than needing
+      a second way to push values into the visualizer. Verified: clean
+      startup with the new dialog/actions wired in, the sandboxed
+      config directory gets created on first launch, a hand-written
+      profiles.json with two profiles loads back without error, and
+      every getter/setter pair `profile_fields()` relies on was
+      exercised directly against real widgets outside the full app.
+      Not independently verified by hand: actually clicking Load/Save/
+      Delete in the running dialog (no GUI automation available in
+      this environment - same limitation noted elsewhere in this
+      file).
 - [x] Trimmed unused WebKit settings/persistence (webview.py) -
       audited every `WebKitSettings enable-*` flag against what the
       page actually uses (confirmed via grep: no localStorage/

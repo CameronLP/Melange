@@ -23,6 +23,7 @@ import subprocess
 import threading
 import base64
 import time
+from pathlib import Path
 
 gi.require_version("Gst", "1.0")
 gi.require_version("Gtk", "4.0")
@@ -317,6 +318,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(preferences_action)
 
+        self.profiles = self.load_profiles()
         self.build_preferences_dialog()
 
         self.menu_button.get_popover().add_child(
@@ -643,7 +645,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     # Adw.ActionRow) as the row's suffix, with the current value shown
     # as the row's subtitle instead, updated on every change. format_fn
     # takes the raw float and returns that subtitle text.
-    def build_slider_row(self, title, min_val, max_val, step, initial, format_fn, on_change):
+    def build_slider_row(self, title, min_val, max_val, step, initial, format_fn, on_change, store_as=None):
 
         row = Adw.ActionRow(title=title)
         row.set_subtitle(format_fn(initial))
@@ -669,6 +671,12 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         row.add_suffix(scale)
 
+        # Settings profiles (see profile_fields) need a handle on the
+        # actual input widget to read/write its value directly - the
+        # row itself only exposes the formatted subtitle text.
+        if store_as:
+            setattr(self, store_as, scale)
+
         return row
 
     def build_cycle_interval_control(self):
@@ -680,7 +688,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Cycle Interval",
             0.0, 120.0, 1.0, 0.0,
             format_cycle_interval,
-            lambda value: self.run_js(f"setCycleInterval({value});")
+            lambda value: self.run_js(f"setCycleInterval({value});"),
+            store_as="cycle_interval_scale"
         )
 
     def build_cycle_jitter_control(self):
@@ -692,7 +701,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Cycle Interval Jitter",
             0.0, 50.0, 5.0, 0.0,
             format_cycle_jitter,
-            lambda value: self.run_js(f"setCycleJitter({value});")
+            lambda value: self.run_js(f"setCycleJitter({value});"),
+            store_as="cycle_jitter_scale"
         )
 
     def build_blend_time_control(self):
@@ -704,7 +714,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Transition Blend Time",
             0.0, 10.0, 0.5, 3.0,
             format_blend_time,
-            lambda value: self.run_js(f"setBlendTime({value});")
+            lambda value: self.run_js(f"setBlendTime({value});"),
+            store_as="blend_time_scale"
         )
 
     def build_mesh_size_control(self):
@@ -719,7 +730,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Mesh Size",
             2.0, 128.0, 1.0, 48.0,
             format_mesh_size,
-            lambda value: self.run_js(f"setMeshSize({value});")
+            lambda value: self.run_js(f"setMeshSize({value});"),
+            store_as="mesh_size_scale"
         )
 
     def build_framerate_control(self):
@@ -739,10 +751,11 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Framerate",
             10.0, 60.0, 1.0, 60.0,
             format_framerate,
-            framerate_changed
+            framerate_changed,
+            store_as="framerate_scale"
         )
 
-    def build_toggle_row(self, title, initial, on_change):
+    def build_toggle_row(self, title, initial, on_change, store_as=None):
 
         row = Adw.SwitchRow(title=title)
         row.set_active(initial)
@@ -751,6 +764,9 @@ class MelangeWindow(Adw.ApplicationWindow):
             "notify::active",
             lambda r, param: on_change(r.get_active())
         )
+
+        if store_as:
+            setattr(self, store_as, row)
 
         return row
 
@@ -761,7 +777,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             False,
             lambda enabled: self.run_js(
                 f"setAntiAliasing({'true' if enabled else 'false'});"
-            )
+            ),
+            store_as="anti_aliasing_row"
         )
 
     def build_render_scale_control(self):
@@ -778,7 +795,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Render Resolution Scale",
             0.1, 2.0, 0.05, 1.0,
             format_render_scale,
-            lambda value: self.run_js(f"setRenderScale({value});")
+            lambda value: self.run_js(f"setRenderScale({value});"),
+            store_as="render_scale_scale"
         )
 
     def build_beat_cycle_control(self):
@@ -788,7 +806,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             False,
             lambda enabled: self.run_js(
                 f"setBeatCycle({'true' if enabled else 'false'});"
-            )
+            ),
+            store_as="beat_cycle_row"
         )
 
     def beat_mode_changed(self, row, param):
@@ -815,6 +834,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.beat_mode_changed
         )
 
+        self.beat_mode_row = row
+
         return row
 
     def build_beat_sensitivity_control(self):
@@ -829,7 +850,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Beat Sensitivity",
             1.1, 3.0, 0.1, 1.4,
             format_beat_sensitivity,
-            lambda value: self.run_js(f"setBeatSensitivity({value});")
+            lambda value: self.run_js(f"setBeatSensitivity({value});"),
+            store_as="beat_sensitivity_scale"
         )
 
     def build_beat_cooldown_control(self):
@@ -841,7 +863,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Beat Cooldown",
             0.5, 5.0, 0.5, 2.0,
             format_beat_cooldown,
-            lambda value: self.run_js(f"setBeatCooldown({value});")
+            lambda value: self.run_js(f"setBeatCooldown({value});"),
+            store_as="beat_cooldown_scale"
         )
 
     def build_beat_silence_control(self):
@@ -853,7 +876,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Beat Silence Floor",
             0.0, 150.0, 5.0, 40.0,
             format_beat_silence,
-            lambda value: self.run_js(f"setBeatSilenceFloor({value});")
+            lambda value: self.run_js(f"setBeatSilenceFloor({value});"),
+            store_as="beat_silence_scale"
         )
 
     def theme_button_toggled(self, button, scheme):
@@ -965,6 +989,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         rendering_page.add(rendering_group)
 
+        profiles_page = self.build_profiles_page()
+
         # More than one page here is what gives the dialog its top
         # view-switcher (rather than a single flat list) for free.
         # Theme (light/dark/system) lives in the hamburger menu itself
@@ -973,8 +999,237 @@ class MelangeWindow(Adw.ApplicationWindow):
         dialog.add(audio_page)
         dialog.add(playback_page)
         dialog.add(rendering_page)
+        dialog.add(profiles_page)
 
         self.preferences_dialog = dialog
+
+    # The (key, getter, setter) triples that make up a settings
+    # profile. A single list here rather than scattering profile
+    # awareness across each build_*_control method - adding a new
+    # field to profiles later means adding one line here, not touching
+    # every save/load call site.
+    def profile_fields(self):
+
+        def scale_field(widget):
+            return (widget.get_value, widget.set_value)
+
+        def switch_field(widget):
+            return (widget.get_active, widget.set_active)
+
+        def combo_field(widget):
+            return (widget.get_selected, widget.set_selected)
+
+        return [
+            ("sensitivity", *scale_field(self.sensitivity_scale)),
+            ("cycle_interval", *scale_field(self.cycle_interval_scale)),
+            ("cycle_jitter", *scale_field(self.cycle_jitter_scale)),
+            ("blend_time", *scale_field(self.blend_time_scale)),
+            ("mesh_size", *scale_field(self.mesh_size_scale)),
+            ("framerate", *scale_field(self.framerate_scale)),
+            ("render_scale", *scale_field(self.render_scale_scale)),
+            ("anti_aliasing", *switch_field(self.anti_aliasing_row)),
+            ("beat_cycle", *switch_field(self.beat_cycle_row)),
+            ("beat_mode", *combo_field(self.beat_mode_row)),
+            ("beat_sensitivity", *scale_field(self.beat_sensitivity_scale)),
+            ("beat_cooldown", *scale_field(self.beat_cooldown_scale)),
+            ("beat_silence", *scale_field(self.beat_silence_scale)),
+        ]
+
+    def current_profile_values(self):
+
+        return {
+            key: getter()
+            for key, getter, setter in self.profile_fields()
+        }
+
+    def apply_profile_values(self, values):
+
+        # Setting a widget's value re-fires its own existing
+        # value-changed/notify::active/notify::selected handler, which
+        # already calls run_js(...) - so this reuses the exact same
+        # apply path a manual slider drag would, rather than needing
+        # its own way to push values into the visualizer.
+        for key, getter, setter in self.profile_fields():
+            if key in values:
+                setter(values[key])
+
+    def profiles_file_path(self):
+
+        config_dir = Path(GLib.get_user_config_dir()) / "melange"
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        return config_dir / "profiles.json"
+
+    def load_profiles(self):
+
+        path = self.profiles_file_path()
+
+        if not path.exists():
+            return []
+
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print("Failed to load settings profiles:", e)
+            return []
+
+    def save_profiles(self):
+
+        try:
+            with open(self.profiles_file_path(), "w") as f:
+                json.dump(self.profiles, f, indent=2)
+        except OSError as e:
+            print("Failed to save settings profiles:", e)
+
+    def build_profiles_page(self):
+
+        self.profiles_group = Adw.PreferencesGroup(
+            title="Saved Profiles",
+            description=(
+                "Snapshots of every setting on the other tabs - save "
+                "the current values under a name, then load or delete "
+                "them here."
+            )
+        )
+
+        save_row = Adw.ActionRow(
+            title="Save Current Settings as Profile…",
+            activatable=True
+        )
+
+        save_row.connect("activated", self.save_profile_clicked)
+
+        save_icon = Gtk.Image.new_from_icon_name("list-add-symbolic")
+        save_row.add_suffix(save_icon)
+
+        self.profiles_group.add(save_row)
+
+        # Populated by refresh_profiles_list, tracked separately from
+        # save_row so a refresh can remove exactly the profile rows
+        # without touching the always-present save row above them.
+        self.profile_rows = []
+        self.refresh_profiles_list()
+
+        page = Adw.PreferencesPage(
+            title="Profiles",
+            icon_name="bookmark-new-symbolic"
+        )
+
+        page.add(self.profiles_group)
+
+        return page
+
+    def build_profile_row(self, profile):
+
+        row = Adw.ActionRow(title=profile["name"])
+
+        load_button = Gtk.Button(icon_name="emblem-ok-symbolic")
+        load_button.add_css_class("flat")
+        load_button.set_valign(Gtk.Align.CENTER)
+        load_button.set_tooltip_text("Load")
+
+        load_button.connect(
+            "clicked",
+            lambda b, name=profile["name"]: self.load_profile_by_name(name)
+        )
+
+        row.add_suffix(load_button)
+
+        remove_button = Gtk.Button(icon_name="user-trash-symbolic")
+        remove_button.add_css_class("flat")
+        remove_button.set_valign(Gtk.Align.CENTER)
+        remove_button.set_tooltip_text("Delete")
+
+        remove_button.connect(
+            "clicked",
+            lambda b, name=profile["name"]: self.delete_profile_by_name(name)
+        )
+
+        row.add_suffix(remove_button)
+
+        return row
+
+    def save_profile_clicked(self, row):
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("Profile name")
+
+        dialog = Adw.AlertDialog(
+            heading="Save Profile",
+            body="Save the current Preferences as a named profile."
+        )
+
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("save", "Save")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+
+        dialog.connect(
+            "response",
+            lambda d, response: self.on_save_profile_response(response, entry)
+        )
+
+        dialog.present(self)
+        entry.grab_focus()
+
+    def on_save_profile_response(self, response, entry):
+
+        if response != "save":
+            return
+
+        name = entry.get_text().strip()
+
+        if not name:
+            self.show_toast("Profile needs a name")
+            return
+
+        values = self.current_profile_values()
+
+        # Saving over an existing name replaces it rather than
+        # silently creating a duplicate entry.
+        self.profiles = [p for p in self.profiles if p["name"] != name]
+        self.profiles.append({"name": name, "values": values})
+
+        self.save_profiles()
+        self.refresh_profiles_list()
+        self.show_toast(f"Saved profile \"{name}\"")
+
+    def load_profile_by_name(self, name):
+
+        profile = next(
+            (p for p in self.profiles if p["name"] == name),
+            None
+        )
+
+        if profile is None:
+            return
+
+        self.apply_profile_values(profile["values"])
+        self.show_toast(f"Loaded profile \"{name}\"")
+
+    def delete_profile_by_name(self, name):
+
+        self.profiles = [p for p in self.profiles if p["name"] != name]
+
+        self.save_profiles()
+        self.refresh_profiles_list()
+        self.show_toast(f"Deleted profile \"{name}\"")
+
+    def refresh_profiles_list(self):
+
+        for row in self.profile_rows:
+            self.profiles_group.remove(row)
+
+        self.profile_rows = [
+            self.build_profile_row(profile)
+            for profile in self.profiles
+        ]
+
+        for row in self.profile_rows:
+            self.profiles_group.add(row)
 
     def show_toast(self, text):
 
@@ -1360,7 +1615,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Sensitivity",
             0.0, 4.0, 0.1, 1.0,
             format_sensitivity,
-            lambda value: self.run_js(f"setSensitivity({value});")
+            lambda value: self.run_js(f"setSensitivity({value});"),
+            store_as="sensitivity_scale"
         )
 
 
