@@ -11,7 +11,6 @@
 - [ ] Logo + symbolic icon polish - the scalable app icon was replaced (Bottles-based, data/icons/hicolor/scalable/apps), but the symbolic icon at data/icons/hicolor/symbolic/apps/com.cameronlp.Melange-symbolic.svg is still the original template placeholder and doesn't match
 - [ ] Multiple visualizer windows
 - [ ] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
-- [ ] Investigate visualizer sensitivity - the gain slider exists (main.js sensitivityGain between the audio source and Butterchurn) but hasn't been deeply verified; the earlier PCM-worklet truncation fix (main.js, fixed a bug dropping most of each system-audio chunk) may have already addressed some of what looked like a sensitivity/reactivity problem - worth re-checking whether anything's still off across different presets/audio sources
 
 ### Visualizer settings ideas
 
@@ -56,3 +55,4 @@
 - [x] Fullscreen: Esc to exit, toolbar auto-hide (cursor auto-hide still open, see above)
 - [x] Baron preset pack merged into the built-in preset list
 - [x] Open native Butterchurn (.json) preset files, not just .milk
+- [x] Investigate visualizer sensitivity - real bug found: the system-audio capture is genuine interleaved stereo (window.py, channels=2), but receiveAudio (main.js) was decoding it as one flat mono stream, alternating L/R samples together as if they were sequential samples of the same channel. That corrupted the frequency content Butterchurn's bass/mid/treb analysis runs on for every preset, not just stereo-aware ones. Fixed by de-interleaving properly and feeding true stereo through the custom PCM worklet.

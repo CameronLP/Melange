@@ -364,20 +364,27 @@ async function setupPCM() {
             constructor() {
                 super();
 
-                // Flat per-sample queue, not per-chunk: incoming PCM
+                // Flat per-sample queues, not per-chunk: incoming PCM
                 // chunks are almost always bigger than the 128-sample
                 // render quantum, so shifting whole chunks off and
                 // only reading their first 128 samples silently
-                // dropped the rest of every chunk.
-                this.samples = [];
+                // dropped the rest of every chunk. Separate L/R queues
+                // since the source audio is genuinely stereo (see
+                // receiveAudio, which de-interleaves it before it gets
+                // here) - collapsing both channels into one shared
+                // queue would still alternate L/R samples as if they
+                // were one continuous channel.
+                this.samplesL = [];
+                this.samplesR = [];
 
                 this.port.onmessage = e => {
 
-                    const data =
-                        new Float32Array(e.data);
+                    const left = new Float32Array(e.data.left);
+                    const right = new Float32Array(e.data.right);
 
-                    for (let i = 0; i < data.length; i++) {
-                        this.samples.push(data[i]);
+                    for (let i = 0; i < left.length; i++) {
+                        this.samplesL.push(left[i]);
+                        this.samplesR.push(right[i]);
                     }
 
                 };
@@ -386,13 +393,19 @@ async function setupPCM() {
 
             process(inputs, outputs) {
 
-                const out = outputs[0][0];
+                const outL = outputs[0][0];
+                const outR = outputs[0][1];
 
-                for (let i = 0; i < out.length; i++) {
+                for (let i = 0; i < outL.length; i++) {
 
-                    out[i] =
-                        this.samples.length
-                        ? this.samples.shift()
+                    outL[i] =
+                        this.samplesL.length
+                        ? this.samplesL.shift()
+                        : 0;
+
+                    outR[i] =
+                        this.samplesR.length
+                        ? this.samplesR.shift()
                         : 0;
                 }
 
@@ -424,7 +437,10 @@ async function setupPCM() {
             pcmNode =
                 new AudioWorkletNode(
                     audioContext,
-                    "pcm-player"
+                    "pcm-player",
+                    {
+                        outputChannelCount: [2]
+                    }
                 );
 
 
@@ -937,6 +953,15 @@ window.setAudioSource = async function(type) {
 
 
 
+// Python's GStreamer pipeline captures genuine interleaved stereo
+// (channels=2 - see start_system_audio in window.py), i.e. the raw
+// bytes here are L,R,L,R,... samples, not a sequence of samples from
+// one channel. Treating them as one flat mono stream (as this used to
+// do) fed alternating left/right values into the analyser as if they
+// were consecutive samples of the same waveform - not just losing
+// real stereo reactivity, but actively corrupting the frequency
+// content Butterchurn's bass/mid/treb analysis runs on for every
+// preset, not only stereo-aware ones.
 window.receiveAudio = function(encoded) {
 
     const raw = atob(encoded);
@@ -956,27 +981,20 @@ window.receiveAudio = function(encoded) {
     }
 
 
-    // Convert s16 -> float32
-    const floats =
-        new Float32Array(int16.length);
+    // De-interleave s16 stereo -> two float32 channels.
+    const frameCount = int16.length / 2;
 
+    const left = new Float32Array(frameCount);
+    const right = new Float32Array(frameCount);
 
-    let max = 0;
-
-    for (let i=0; i<int16.length; i++) {
-
-        floats[i] =
-            int16[i] / 32768.0;
-
-        max = Math.max(
-            max,
-            Math.abs(floats[i])
-        );
+    for (let i = 0; i < frameCount; i++) {
+        left[i] = int16[i * 2] / 32768.0;
+        right[i] = int16[i * 2 + 1] / 32768.0;
     }
 
 
     if (pcmNode) {
-        pcmNode.port.postMessage(floats);
+        pcmNode.port.postMessage({ left, right });
     }
 
 };
