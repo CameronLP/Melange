@@ -34,11 +34,63 @@
             <property name="action-name">win.shuffle-preset</property>
           </object>
         </child>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Exit Fullscreen</property>
+            <property name="accelerator">Escape</property>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="AdwShortcutsSection">
+        <property name="title" translatable="yes">Presets</property>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Load Preset File</property>
+            <property name="action-name">win.load-preset</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Browse Presets</property>
+            <property name="action-name">win.browse-presets</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Show Queue</property>
+            <property name="action-name">win.show-queue</property>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="AdwShortcutsSection">
+        <property name="title" translatable="yes">Windows</property>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">New Mirror Window</property>
+            <property name="action-name">win.new-mirror-window</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Close All Mirrors</property>
+            <property name="action-name">win.close-all-mirrors</property>
+          </object>
+        </child>
       </object>
     </child>
     <child>
       <object class="AdwShortcutsSection">
         <property name="title" translatable="yes">General</property>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Preferences</property>
+            <property name="action-name">win.preferences</property>
+          </object>
+        </child>
         <child>
           <object class="AdwShortcutsItem">
             <property name="title" translatable="yes" context="shortcut window">Show Shortcuts</property>

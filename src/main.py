@@ -90,6 +90,20 @@ class MelangeApplication(Adw.Application):
         self.set_accels_for_action("win.lock-preset", ["l"])
         self.set_accels_for_action("win.shuffle-preset", ["s"])
 
+        # Previously only reachable via the hamburger menu/header
+        # buttons - filled in on request. Picked to avoid colliding
+        # with anything above: Ctrl+O/Ctrl+F/Ctrl+, follow well-worn
+        # cross-app conventions (Open/Find/Preferences); "q" bare (not
+        # Ctrl+Q, already Quit) and Ctrl+M/Ctrl+Shift+M are this app's
+        # own, chosen to be mnemonic (Queue, Mirror) without reusing
+        # anything already bound.
+        self.set_accels_for_action("win.load-preset", ["<Primary>o"])
+        self.set_accels_for_action("win.browse-presets", ["<Primary>f"])
+        self.set_accels_for_action("win.show-queue", ["q"])
+        self.set_accels_for_action("win.preferences", ["<Primary>comma"])
+        self.set_accels_for_action("win.new-mirror-window", ["<Primary>m"])
+        self.set_accels_for_action("win.close-all-mirrors", ["<Primary><Shift>m"])
+
 
     def do_activate(self):
 

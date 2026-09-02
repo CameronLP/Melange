@@ -42,9 +42,15 @@ Preferences — Audio, Playback, and Rendering tabs:
 | `L` | Toggle preset lock |
 | `S` | Toggle shuffle |
 | `F11` | Toggle fullscreen |
+| `Esc` | Exit fullscreen |
+| `Ctrl+O` | Load preset file |
+| `Ctrl+F` | Browse presets |
+| `Q` | Show queue |
+| `Ctrl+M` | New mirror window |
+| `Ctrl+Shift+M` | Close all mirrors |
+| `Ctrl+,` | Preferences |
 | `Ctrl+?` | Show keyboard shortcuts |
 | `Ctrl+Q` | Quit |
-| `Esc` | Exit fullscreen |
 
 Cycle interval, transition blend time, mesh size, sensitivity,
 framerate, render resolution scale, anti-aliasing, and (experimental)

@@ -162,6 +162,30 @@
 
 ## Done
 
+- [x] Fleshed out keyboard shortcuts - most actions previously only
+      reachable via the hamburger menu/header buttons now have
+      accelerators too (main.py): Ctrl+O (load preset file), Ctrl+F
+      (browse presets), Q (show queue), Ctrl+M (new mirror window),
+      Ctrl+Shift+M (close all mirrors), Ctrl+, (preferences) - picked
+      to follow well-worn cross-app conventions where one exists
+      (Open/Find/Preferences) and to avoid colliding with anything
+      already bound otherwise. The Keyboard Shortcuts dialog
+      (shortcuts-dialog.ui) picks up each one's actual bound key
+      automatically (AdwShortcutsItem's action-name property reads it
+      from the accelerator registered for that action, so the two
+      can't drift out of sync) - reorganized into Visualizer/Presets/
+      Windows/General sections now that there's enough to warrant it,
+      and added an explicit-accelerator entry (not action-based, since
+      Escape-to-exit-fullscreen isn't a GAction) for Escape, which was
+      previously undocumented there despite being real, working
+      behavior. README's shortcuts table updated to match. Verified:
+      clean template build (would fail loudly on a bad accelerator
+      string or malformed .ui), clean startup, opening the Shortcuts
+      dialog itself produced no errors, and every action referenced
+      from it is confirmed still correctly registered
+      (org.gtk.Actions.List). Not independently verified: actually
+      pressing each new key combo (no keyboard-input-injection
+      capability in this environment).
 - [x] Default Cycle Interval to 30s instead of Off - the Preferences
       slider's initial value changed to 30.0 (window.py), and main.js
       now calls `window.setCycleInterval(30)` at startup so the timer
