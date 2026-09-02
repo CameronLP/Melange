@@ -660,10 +660,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         scale.set_valign(Gtk.Align.CENTER)
         scale.set_draw_value(False)
 
-        # A small unlabeled tick at the default value, so it's visible
-        # at a glance where "default" is without needing a reset button.
-        scale.add_mark(initial, Gtk.PositionType.BOTTOM, None)
-
         def value_changed(scale):
             value = scale.get_value()
             row.set_subtitle(format_fn(value))
