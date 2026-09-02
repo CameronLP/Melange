@@ -91,8 +91,10 @@
       this one would need a different transport (e.g. a local
       WebSocket from Python to a JS-side listener) to actually avoid,
       which is a bigger change than fits alongside the other two.
-- [ ] Better preset organization + a larger preset browser window
-- [ ] Favorite presets
+- [ ] A larger preset browser window - the dialog itself is still a
+      fixed 560x560 even now that it holds three tabs (Presets/
+      Favorites/Queue, see Done) rather than just one list; worth
+      revisiting now that there's more to fit.
 - [ ] Optional "now playing" overlay in the corner of the canvas
 - [ ] X-Y scope visualizer
 - [ ] Frequency-range control for what feeds the visualizer (so presets that only react to bass, etc. can be tuned)
@@ -104,7 +106,7 @@
 
 - [ ] Silence auto-pause - freeze/dim rendering when no audio is detected for a while, to save CPU/GPU
 - [ ] Global post-processing tint/gamma - a brightness/color adjustment layered on top of whatever the preset renders
-- [ ] Shuffle pool weighting/exclusion - let shuffle skip specific packs (e.g. exclude baron, or "only my favorites" once favorites exist)
+- [ ] Shuffle pool weighting/exclusion - let shuffle skip specific packs (e.g. exclude baron), or restrict it to favorites only now that those exist
 
 ### Bigger feature ideas
 
@@ -162,6 +164,55 @@
 
 ## Done
 
+- [x] Favorite presets - a star toggle in the corner of the
+      visualizer (Gtk.Overlay, same pattern as the nav arrows -
+      starred-symbolic/non-starred-symbolic, reflects and toggles
+      favorite status for whatever preset is currently showing,
+      hover-reveals with the toolbar) plus one on every row in the
+      preset browser. Favorites are a purely Python-side concept
+      (window.py) unlike the queue - JS never needs to know what's
+      favorited, since it doesn't drive any playback decision the way
+      the queue does - persisted as JSON at
+      `$XDG_CONFIG_HOME/melange/favorites.json` alongside profiles/
+      playlists. Also bound to a new `F` keyboard shortcut
+      (win.toggle-favorite) and added to the Keyboard Shortcuts
+      dialog/README.
+
+      Restructured the preset browser (previously a single searchable
+      list) into a tabbed dialog - Presets/Favorites/Queue
+      (Adw.ViewStack + Adw.ViewSwitcher in the header, same tabbed
+      pattern already used for Preferences) - on request, so Favorites
+      has a proper home and Queue isn't a separate dialog anymore.
+      Presets and Favorites share the same search/filter/row-rendering
+      code (build_preset_search_list), just backed by a different
+      Gtk.StringList; each row now has both a favorite-star and the
+      existing "add to queue" button. The Queue tab reuses the
+      existing queue list/drag-reorder code verbatim - only its
+      Loop/Shuffle/Playlists controls moved, from that dialog's own
+      header (which doesn't exist anymore) to a small button row above
+      the list, since Adw.ViewStack pages share one header (the
+      switcher) rather than each page bringing its own.
+      `win.show-queue` (and its `Q` shortcut) now opens the browser
+      with the Queue tab pre-selected instead of a separate dialog -
+      same action name, so the shortcut and the "_Queue…" menu item
+      didn't need to change, just what happens when they fire.
+
+      Verified end-to-end via D-Bus: clean startup, opening the
+      browser (which builds all three tabs at once) produces no
+      errors, win.show-queue correctly switches to the Queue tab,
+      the relocated Loop Queue/Shuffle Queue stateful toggles work
+      (via SetState, not Activate - a real D-Bus invocation mistake on
+      my own part caught and corrected during testing, not a bug in
+      the app), toggle-favorite persists correctly to disk, and
+      reopening the (now-cached, built-once) dialog afterward still
+      works. A separate false alarm was caught and correctly
+      diagnosed rather than chased as a bug: an early manual toggle
+      test appeared to show removal failing, but was actually the new
+      30s default auto-cycle changing the current preset *during* the
+      test's own investigation time, so two consecutive toggles were
+      silently operating on two different presets - confirmed by
+      printing current_preset_name directly and re-testing with calls
+      issued back-to-back.
 - [x] "Mirror Windows" submenu listing currently open mirrors - on
       request, consolidated all mirror-related menu entries (New
       Mirror Window, Close All Mirrors, and this) into one submenu

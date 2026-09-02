@@ -109,6 +109,25 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         webview_overlay.add_overlay(self.next_arrow_button)
 
+        # Favorite-toggle for whatever's currently showing - bottom
+        # corner rather than top, so it doesn't compete for space with
+        # the header bar when that's revealed.
+        self.favorite_button = Gtk.Button(icon_name="non-starred-symbolic")
+        self.favorite_button.add_css_class("nav-arrow-button")
+        self.favorite_button.set_size_request(48, 48)
+        self.favorite_button.set_halign(Gtk.Align.END)
+        self.favorite_button.set_valign(Gtk.Align.END)
+        self.favorite_button.set_margin_end(12)
+        self.favorite_button.set_margin_bottom(12)
+        self.favorite_button.set_tooltip_text("Add to Favorites")
+
+        self.favorite_button.connect(
+            "clicked",
+            self.favorite_button_clicked
+        )
+
+        webview_overlay.add_overlay(self.favorite_button)
+
         self.content_box.append(
             webview_overlay
         )
@@ -140,9 +159,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.preset_names = []
         self.preset_list_store = None
         self.preset_browser_dialog = None
+        self.browser_view_stack = None
+        self.favorites = self.load_favorites()
+        self.favorites_list_store = None
         self.preset_queue = []
         self.queue_list_store = None
-        self.queue_dialog = None
         self.playlists = self.load_playlists()
         self.playlists_dialog = None
         self.mirror_windows = []
@@ -415,6 +436,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(close_all_mirrors_action)
 
+        toggle_favorite_action = Gio.SimpleAction.new("toggle-favorite", None)
+
+        toggle_favorite_action.connect(
+            "activate",
+            self.toggle_favorite_action_activated
+        )
+
+        self.add_action(toggle_favorite_action)
+
         # One parameterized action rather than a separate action per
         # open mirror - avoids having to register/unregister actions
         # dynamically in step with the menu itself as mirrors come
@@ -485,6 +515,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.current_preset_name = preset_name
             self.set_title(f'Melange - "{preset_name}"')
             self.update_mirror_titles()
+            self.update_favorite_button_icon()
             return
 
         # A failed Load Preset (bad MilkDrop conversion, invalid
@@ -717,7 +748,13 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         css_class = "nav-arrow-visible"
 
-        for button in (self.prev_arrow_button, self.next_arrow_button):
+        buttons = (
+            self.prev_arrow_button,
+            self.next_arrow_button,
+            self.favorite_button
+        )
+
+        for button in buttons:
 
             if visible:
                 button.add_css_class(css_class)
@@ -1575,11 +1612,51 @@ class MelangeWindow(Adw.ApplicationWindow):
         if self.preset_browser_dialog is None:
             self.build_preset_browser_dialog()
 
+        self.browser_view_stack.set_visible_child_name("presets")
         self.preset_browser_dialog.present(self)
 
     def build_preset_browser_dialog(self):
 
-        self.preset_list_store = Gtk.StringList.new(self.preset_names)
+        view_stack = Adw.ViewStack()
+
+        view_stack.add_titled_with_icon(
+            self.build_presets_tab(),
+            "presets", "Presets", "view-list-symbolic"
+        )
+
+        view_stack.add_titled_with_icon(
+            self.build_favorites_tab(),
+            "favorites", "Favorites", "starred-symbolic"
+        )
+
+        view_stack.add_titled_with_icon(
+            self.build_queue_tab(),
+            "queue", "Queue", "view-continuous-symbolic"
+        )
+
+        switcher = Adw.ViewSwitcher()
+        switcher.set_stack(view_stack)
+        switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
+
+        header = Adw.HeaderBar()
+        header.set_title_widget(switcher)
+
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(header)
+        toolbar_view.set_content(view_stack)
+
+        dialog = Adw.Dialog()
+        dialog.set_title("Presets")
+        dialog.set_content_width(560)
+        dialog.set_content_height(560)
+        dialog.set_child(toolbar_view)
+
+        self.preset_browser_dialog = dialog
+        self.browser_view_stack = view_stack
+
+    # Shared by the Presets and Favorites tabs - same search/filter/
+    # row-rendering behavior, only the backing Gtk.StringList differs.
+    def build_preset_search_list(self, list_store):
 
         expression = Gtk.PropertyExpression.new(
             Gtk.StringObject,
@@ -1591,7 +1668,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         string_filter.set_match_mode(Gtk.StringFilterMatchMode.SUBSTRING)
 
         filter_model = Gtk.FilterListModel.new(
-            self.preset_list_store,
+            list_store,
             string_filter
         )
 
@@ -1626,21 +1703,23 @@ class MelangeWindow(Adw.ApplicationWindow):
         box.append(search_entry)
         box.append(scrolled)
 
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(Adw.HeaderBar())
-        toolbar_view.set_content(box)
+        return box
 
-        dialog = Adw.Dialog()
-        dialog.set_title("Presets")
-        dialog.set_content_width(560)
-        dialog.set_content_height(560)
-        dialog.set_child(toolbar_view)
+    def build_presets_tab(self):
 
-        self.preset_browser_dialog = dialog
+        self.preset_list_store = Gtk.StringList.new(self.preset_names)
+
+        return self.build_preset_search_list(self.preset_list_store)
+
+    def build_favorites_tab(self):
+
+        self.favorites_list_store = Gtk.StringList.new(self.favorites)
+
+        return self.build_preset_search_list(self.favorites_list_store)
 
     def preset_row_setup(self, factory, list_item):
 
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
 
         box.set_margin_start(6)
         box.set_margin_end(6)
@@ -1650,13 +1729,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         # max_width_chars keeps the label's requested (natural) size
         # small - without it, GTK sizes the row to fit the full preset
         # name (some are 100+ characters) regardless of ellipsize,
-        # pushing the button off the edge of the dialog. hexpand still
+        # pushing the buttons off the edge of the dialog. hexpand still
         # lets it fill whatever width is actually available.
         label = Gtk.Label(xalign=0, hexpand=True)
         label.set_ellipsize(Pango.EllipsizeMode.END)
         label.set_max_width_chars(1)
 
         box.append(label)
+
+        favorite_button = Gtk.Button(icon_name="non-starred-symbolic")
+
+        favorite_button.add_css_class("flat")
+        favorite_button.set_tooltip_text("Add to Favorites")
+
+        box.append(favorite_button)
 
         queue_button = Gtk.Button(icon_name="list-add-symbolic")
 
@@ -1672,6 +1758,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         # different items as you scroll, so bind gets called many
         # times for the same row/button pair.
         list_item.preset_label = label
+        list_item.favorite_button = favorite_button
+        list_item.favorite_button_handler = None
         list_item.queue_button = queue_button
         list_item.queue_button_handler = None
 
@@ -1682,12 +1770,36 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         list_item.preset_label.set_label(name)
 
+        if list_item.favorite_button_handler is not None:
+            list_item.favorite_button.disconnect(list_item.favorite_button_handler)
+
+        list_item.favorite_button.set_icon_name(
+            "starred-symbolic" if self.is_favorite(name) else "non-starred-symbolic"
+        )
+
+        list_item.favorite_button_handler = list_item.favorite_button.connect(
+            "clicked",
+            lambda button, n=name: self.favorite_row_clicked(button, n)
+        )
+
         if list_item.queue_button_handler is not None:
             list_item.queue_button.disconnect(list_item.queue_button_handler)
 
         list_item.queue_button_handler = list_item.queue_button.connect(
             "clicked",
             lambda button: self.enqueue_preset(name)
+        )
+
+    def favorite_row_clicked(self, button, name):
+
+        favorited = self.toggle_favorite(name)
+
+        # refresh_favorites_list (called by toggle_favorite) already
+        # handles the Favorites tab - this row's own icon still needs
+        # a direct update for the Presets tab case, where the row
+        # stays in place rather than being spliced out.
+        button.set_icon_name(
+            "starred-symbolic" if favorited else "non-starred-symbolic"
         )
 
     def preset_row_activated(self, list_view, position):
@@ -1706,12 +1818,13 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def show_queue_clicked(self, action, param):
 
-        if self.queue_dialog is None:
-            self.build_queue_dialog()
+        if self.preset_browser_dialog is None:
+            self.build_preset_browser_dialog()
 
-        self.queue_dialog.present(self)
+        self.browser_view_stack.set_visible_child_name("queue")
+        self.preset_browser_dialog.present(self)
 
-    def build_queue_dialog(self):
+    def build_queue_tab(self):
 
         self.queue_list_store = Gtk.StringList.new(self.preset_queue)
 
@@ -1728,27 +1841,21 @@ class MelangeWindow(Adw.ApplicationWindow):
         scrolled.set_child(list_view)
         scrolled.set_vexpand(True)
 
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box.set_margin_start(12)
-        box.set_margin_end(12)
-        box.set_margin_top(12)
-        box.set_margin_bottom(12)
+        # Loop/Shuffle/Playlists used to live in this tab's own dialog
+        # header, back when it was its own separate dialog - now a
+        # small button row above the list instead, since the Presets/
+        # Favorites/Queue tabs share one header (the tab switcher)
+        # rather than each page bringing its own.
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        controls.set_halign(Gtk.Align.END)
 
-        box.append(scrolled)
-
-        header = Adw.HeaderBar()
-
-        # A stateful action rather than a plain "clicked" handler, same
-        # as shuffle/lock-preset - action_name gives the ToggleButton
-        # free two-way sync with win.loop-queue's state, including
-        # reflecting it correctly if it's ever toggled some other way.
         loop_button = Gtk.ToggleButton(
             icon_name="media-playlist-repeat-symbolic",
             tooltip_text="Loop Queue",
             action_name="win.loop-queue"
         )
 
-        header.pack_end(loop_button)
+        controls.append(loop_button)
 
         shuffle_button = Gtk.ToggleButton(
             icon_name="media-playlist-shuffle-symbolic",
@@ -1756,7 +1863,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             action_name="win.shuffle-queue"
         )
 
-        header.pack_end(shuffle_button)
+        controls.append(shuffle_button)
 
         playlists_button = Gtk.Button(
             icon_name="view-list-symbolic",
@@ -1768,19 +1875,18 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.show_playlists_clicked
         )
 
-        header.pack_end(playlists_button)
+        controls.append(playlists_button)
 
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(header)
-        toolbar_view.set_content(box)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
 
-        dialog = Adw.Dialog()
-        dialog.set_title("Queue")
-        dialog.set_content_width(560)
-        dialog.set_content_height(480)
-        dialog.set_child(toolbar_view)
+        box.append(controls)
+        box.append(scrolled)
 
-        self.queue_dialog = dialog
+        return box
 
     def queue_row_setup(self, factory, list_item):
 
@@ -1940,6 +2046,98 @@ class MelangeWindow(Adw.ApplicationWindow):
                 json.dump(self.playlists, f, indent=2)
         except OSError as e:
             print("Failed to save playlists:", e)
+
+    def favorites_file_path(self):
+
+        config_dir = Path(GLib.get_user_config_dir()) / "melange"
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        return config_dir / "favorites.json"
+
+    def load_favorites(self):
+
+        path = self.favorites_file_path()
+
+        if not path.exists():
+            return []
+
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print("Failed to load favorites:", e)
+            return []
+
+    def save_favorites(self):
+
+        try:
+            with open(self.favorites_file_path(), "w") as f:
+                json.dump(self.favorites, f, indent=2)
+        except OSError as e:
+            print("Failed to save favorites:", e)
+
+    def is_favorite(self, name):
+
+        return name in self.favorites
+
+    # Unlike the queue/playlists, favorites are a purely Python-side
+    # concept - JS never needs to know what's favorited (it doesn't
+    # drive any playback decision the way the queue does), so there's
+    # no debug-message round trip here, just a direct list mutation +
+    # save, same as the profiles/playlists file-backed lists.
+    def toggle_favorite(self, name):
+
+        if name in self.favorites:
+            self.favorites.remove(name)
+            favorited = False
+        else:
+            self.favorites.append(name)
+            favorited = True
+
+        self.save_favorites()
+        self.refresh_favorites_list()
+
+        if name == self.current_preset_name:
+            self.update_favorite_button_icon()
+
+        return favorited
+
+    def refresh_favorites_list(self):
+
+        if self.favorites_list_store is not None:
+            self.favorites_list_store.splice(
+                0,
+                self.favorites_list_store.get_n_items(),
+                self.favorites
+            )
+
+    def favorite_button_clicked(self, button):
+
+        self.toggle_favorite_action_activated(None, None)
+
+    def toggle_favorite_action_activated(self, action, param):
+
+        if not self.current_preset_name:
+            return
+
+        favorited = self.toggle_favorite(self.current_preset_name)
+
+        self.show_toast(
+            f'Added to favorites: "{self.current_preset_name}"'
+            if favorited
+            else f'Removed from favorites: "{self.current_preset_name}"'
+        )
+
+    def update_favorite_button_icon(self):
+
+        starred = (
+            self.current_preset_name is not None
+            and self.is_favorite(self.current_preset_name)
+        )
+
+        self.favorite_button.set_icon_name(
+            "starred-symbolic" if starred else "non-starred-symbolic"
+        )
 
     def show_playlists_clicked(self, button):
 

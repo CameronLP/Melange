@@ -36,6 +36,12 @@
         </child>
         <child>
           <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Toggle Favorite</property>
+            <property name="action-name">win.toggle-favorite</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem">
             <property name="title" translatable="yes" context="shortcut window">Exit Fullscreen</property>
             <property name="accelerator">Escape</property>
           </object>

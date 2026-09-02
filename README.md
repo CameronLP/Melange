@@ -23,7 +23,9 @@ Preferences — Audio, Playback, and Rendering tabs:
   (per-application/output capture) or a microphone
 - Built-in preset library (butterchurn-presets +
   [butterchurn-presets-baron](https://github.com/uvmain/butterchurn-presets-baron),
-  ~800 presets total) plus a searchable native preset browser
+  ~800 presets total) plus a searchable native preset browser with
+  Presets/Favorites/Queue tabs
+- Favorite presets, from an on-canvas star or per-row in the browser
 - Load your own `.milk` (MilkDrop) or `.json` (Butterchurn) preset files
 - Adjustable sensitivity, transition blend time, mesh resolution, and
   framerate cap
@@ -41,6 +43,7 @@ Preferences — Audio, Playback, and Rendering tabs:
 | `←` | Previous preset |
 | `L` | Toggle preset lock |
 | `S` | Toggle shuffle |
+| `F` | Toggle favorite |
 | `F11` | Toggle fullscreen |
 | `Esc` | Exit fullscreen |
 | `Ctrl+O` | Load preset file |

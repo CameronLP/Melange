@@ -103,6 +103,7 @@ class MelangeApplication(Adw.Application):
         self.set_accels_for_action("win.preferences", ["<Primary>comma"])
         self.set_accels_for_action("win.new-mirror-window", ["<Primary>m"])
         self.set_accels_for_action("win.close-all-mirrors", ["<Primary><Shift>m"])
+        self.set_accels_for_action("win.toggle-favorite", ["f"])
 
 
     def do_activate(self):
