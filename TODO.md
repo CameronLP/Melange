@@ -182,6 +182,32 @@
       the pixels visually match, and the toolbar auto-hide/drag/
       double-click-to-focus interactions (no screenshot or input-
       injection capability in this environment for any of these).
+- [x] Fixed mirror-window maximize on a rotated secondary monitor -
+      reported as "maximize doesn't work" on a 1080p secondary screen
+      rotated 90 degrees; follow-up questions narrowed it down to
+      mirror-only (the primary window maximizes fine on that same
+      screen) and to the picture's content specifically (the window
+      itself resizes to the correct dimensions, only the mirrored
+      content breaks) - the same underlying class of problem as the
+      earlier maximize-freeze fix, just not fully covered by that
+      fix's plain queue_draw(). Likely cause: maximizing onto a
+      monitor with a different transform/scale than the primary
+      window's own forces GTK to rebuild GL-backed render state that
+      an existing WidgetPaintable instance doesn't automatically
+      follow. Fixed by recreating the paintable outright
+      (`refresh_paintable`) rather than just requesting a redraw,
+      triggered on both notify::maximized (confirmed relevant to the
+      report) and notify::scale-factor (a broader net for the same
+      class of issue when a mirror moves to a differently-scaled
+      monitor without literally maximizing there - not confirmed
+      relevant to this specific report, added defensively since it's
+      cheap and non-conflicting). Verified the mechanism fires at
+      exactly the right moment with no errors (a temporary debug
+      action + print confirmed refresh_paintable runs right after
+      is_maximized() flips to True) - not independently verified
+      whether it resolves the actual visual symptom, since a rotated
+      secondary monitor isn't available to test against in this
+      environment.
 - [x] Shuffle Queue - a Gtk.ToggleButton in the Queue dialog's header
       (win.shuffle-queue, same stateful-action pattern as Loop Queue).
       Turning it on shuffles presetQueue in place (Fisher-Yates), then

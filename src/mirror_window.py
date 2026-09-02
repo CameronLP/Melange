@@ -93,9 +93,7 @@ class MirrorWindow(Adw.ApplicationWindow):
         # asked for this specifically.
         self.picture.set_content_fit(Gtk.ContentFit.FILL)
 
-        self.picture.set_paintable(
-            Gtk.WidgetPaintable.new(primary.webview)
-        )
+        self.refresh_paintable()
 
         self.toolbar_view.set_content(self.picture)
 
@@ -156,16 +154,29 @@ class MirrorWindow(Adw.ApplicationWindow):
         self.add_controller(escape_controller)
 
         # Workaround: maximizing was observed to leave the picture
-        # showing a frozen last frame instead of continuing to track
-        # the live source - forcing a redraw right as the maximized
-        # state changes clears it. The FILL content-fit above may
-        # already address the underlying cause (CONTAIN's aspect-
-        # locked size negotiation is a more complex layout path than
-        # FILL's "just fill whatever space you're given"), but this is
-        # kept as a direct fix for the specific symptom regardless.
+        # showing broken/frozen content instead of continuing to track
+        # the live source - worse on a rotated secondary monitor,
+        # where the window itself resizes correctly but the picture's
+        # content doesn't. A plain queue_draw() (an earlier, weaker
+        # version of this fix) wasn't enough there - the paintable's
+        # backing render state seems to need a genuine reset, not just
+        # a repaint request, likely because maximizing onto a monitor
+        # with a different transform/scale than the primary window's
+        # own forces GTK to rebuild GL-backed render state that a
+        # WidgetPaintable instance doesn't automatically follow.
+        # Recreating the paintable outright (rather than reusing the
+        # same instance) is the more thorough reset. Also covers
+        # scale-factor changes generally (dragging the mirror onto a
+        # differently-scaled monitor, not just maximizing there), since
+        # that's the same underlying class of problem.
         self.connect(
             "notify::maximized",
-            lambda *args: self.picture.queue_draw()
+            lambda *args: self.refresh_paintable()
+        )
+
+        self.connect(
+            "notify::scale-factor",
+            lambda *args: self.refresh_paintable()
         )
 
         self.connect(
@@ -240,6 +251,12 @@ class MirrorWindow(Adw.ApplicationWindow):
             self.set_cursor(Gdk.Cursor.new_from_name("none"))
 
         return False
+
+    def refresh_paintable(self):
+
+        self.picture.set_paintable(
+            Gtk.WidgetPaintable.new(self.primary.webview)
+        )
 
     def update_title(self, preset_name):
 
