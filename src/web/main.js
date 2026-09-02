@@ -1122,6 +1122,16 @@ window.setBlendTime = function(seconds) {
 // reports, same pattern as the preset browser and PRESET_LIST:.
 let presetQueue = [];
 
+// When off (default), the queue drains and disappears as it plays,
+// same as before. When on, nextPreset() rotates a played item to the
+// back of the queue instead of discarding it - the queue's visible
+// contents/order never actually shrink, so it just plays on repeat.
+let queueLoopEnabled = false;
+
+window.setQueueLoop = function(enabled) {
+    queueLoopEnabled = !!enabled;
+};
+
 function announceQueue() {
     debug("QUEUE:" + JSON.stringify(presetQueue));
 }
@@ -1134,6 +1144,16 @@ window.enqueuePreset = function(name) {
     }
 
     presetQueue.push(name);
+    announceQueue();
+};
+
+// Replaces the queue wholesale (used to load a saved playlist) -
+// unknown names are dropped rather than rejecting the whole list, in
+// case a playlist references a preset that's no longer available
+// (e.g. a since-removed custom .milk/.json file).
+window.setQueue = function(presetNames) {
+
+    presetQueue = presetNames.filter(name => nameSet.has(name));
     announceQueue();
 };
 
@@ -1378,6 +1398,10 @@ window.nextPreset = function() {
     if (presetQueue.length > 0) {
 
         const name = presetQueue.shift();
+
+        if (queueLoopEnabled) {
+            presetQueue.push(name);
+        }
 
         announceQueue();
 

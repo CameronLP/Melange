@@ -44,7 +44,6 @@
 - [ ] MIDI controller support - map physical knobs/pads to sensitivity, blend time, next/prev preset
 - [ ] D-Bus remote control - expose next/prev/lock/shuffle over D-Bus for external tools (Stream Deck, macros, scripts) to drive without focus
 - [ ] System tray / background mode - stay running and controllable when the window is closed/unfocused
-- [ ] Save/load playlists - save the current Queue (see Done, below) as a named, persisted playlist you can reload later, rather than it existing only for the current session
 - [ ] Native rendering via libprojectM instead of Butterchurn/WebKitGTK -
       the big lever for memory, not an incremental one: WebKitGTK's
       multi-process browser-engine architecture (UI + network +
@@ -94,6 +93,31 @@
 
 ## Done
 
+- [x] Save/load playlists + Loop Queue - a "Playlists…" button in the
+      Queue dialog opens a Profiles-tab-style list (a "Save Current
+      Queue as Playlist…" row at the top, then a row per saved
+      playlist with Load/Delete), persisted as JSON at
+      `$XDG_CONFIG_HOME/melange/playlists.json` next to profiles.json.
+      Loading a playlist replaces the queue wholesale via a new JS
+      `setQueue()` (unknown/removed preset names are dropped rather
+      than rejecting the whole playlist) and goes through the same
+      announceQueue()/QUEUE: round trip every other queue mutation
+      does, rather than Python writing self.preset_queue directly.
+      Also added a Loop Queue toggle (win.loop-queue, a stateful
+      action bound straight to a Gtk.ToggleButton in the Queue
+      dialog's header via action_name) - off keeps today's behavior
+      (the queue drains and empties as it plays), on rotates each
+      played item to the back instead of discarding it, so the same
+      queue/playlist repeats indefinitely without falling through to
+      shuffle/sequential once it's been played through. Verified:
+      clean startup both with no saved playlists and with a
+      hand-written playlists.json: every widget-construction step
+      build_playlists_dialog/build_playlist_row use (including
+      Adw.PreferencesGroup.add/remove used standalone, outside a
+      PreferencesPage) was also exercised in isolation to confirm no
+      errors. Not independently verified by hand: actually clicking
+      through Save/Load/Delete/Loop in the running dialogs (no GUI
+      automation available in this environment).
 - [x] Settings profiles - a fourth "Profiles" tab in the Preferences
       dialog itself (alongside Audio/Playback/Rendering, rather than a
       separate top-level dialog - profiles are snapshots *of* those

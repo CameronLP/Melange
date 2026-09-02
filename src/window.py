@@ -100,6 +100,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.preset_queue = []
         self.queue_list_store = None
         self.queue_dialog = None
+        self.playlists = self.load_playlists()
+        self.playlists_dialog = None
 
         self.start_system_audio()
 
@@ -282,6 +284,19 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         self.add_action(show_queue_action)
+
+        loop_queue_action = Gio.SimpleAction.new_stateful(
+            "loop-queue",
+            None,
+            GLib.Variant("b", False)
+        )
+
+        loop_queue_action.connect(
+            "change-state",
+            self.loop_queue_changed
+        )
+
+        self.add_action(loop_queue_action)
 
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
@@ -634,6 +649,18 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.show_toast(
             "Shuffle on" if enabled else "Shuffle off"
+        )
+
+    def loop_queue_changed(self, action, value):
+
+        action.set_state(value)
+
+        enabled = value.get_boolean()
+
+        self.run_js(f"setQueueLoop({'true' if enabled else 'false'});")
+
+        self.show_toast(
+            "Queue loop on" if enabled else "Queue loop off"
         )
 
     # No separate on/off action - the slider's own bottom end (0)
@@ -1407,8 +1434,34 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         box.append(scrolled)
 
+        header = Adw.HeaderBar()
+
+        # A stateful action rather than a plain "clicked" handler, same
+        # as shuffle/lock-preset - action_name gives the ToggleButton
+        # free two-way sync with win.loop-queue's state, including
+        # reflecting it correctly if it's ever toggled some other way.
+        loop_button = Gtk.ToggleButton(
+            icon_name="media-playlist-repeat-symbolic",
+            tooltip_text="Loop Queue",
+            action_name="win.loop-queue"
+        )
+
+        header.pack_end(loop_button)
+
+        playlists_button = Gtk.Button(
+            icon_name="view-list-symbolic",
+            tooltip_text="Playlists…"
+        )
+
+        playlists_button.connect(
+            "clicked",
+            self.show_playlists_clicked
+        )
+
+        header.pack_end(playlists_button)
+
         toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(Adw.HeaderBar())
+        toolbar_view.add_top_bar(header)
         toolbar_view.set_content(box)
 
         dialog = Adw.Dialog()
@@ -1548,6 +1601,214 @@ class MelangeWindow(Adw.ApplicationWindow):
     def remove_queue_item(self, position):
 
         self.run_js(f"removeQueueItem({position});")
+
+    def playlists_file_path(self):
+
+        config_dir = Path(GLib.get_user_config_dir()) / "melange"
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        return config_dir / "playlists.json"
+
+    def load_playlists(self):
+
+        path = self.playlists_file_path()
+
+        if not path.exists():
+            return []
+
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print("Failed to load playlists:", e)
+            return []
+
+    def save_playlists(self):
+
+        try:
+            with open(self.playlists_file_path(), "w") as f:
+                json.dump(self.playlists, f, indent=2)
+        except OSError as e:
+            print("Failed to save playlists:", e)
+
+    def show_playlists_clicked(self, button):
+
+        if self.playlists_dialog is None:
+            self.build_playlists_dialog()
+
+        self.playlists_dialog.present(self)
+
+    def build_playlists_dialog(self):
+
+        self.playlists_group = Adw.PreferencesGroup()
+
+        save_row = Adw.ActionRow(
+            title="Save Current Queue as Playlist…",
+            activatable=True
+        )
+
+        save_row.connect("activated", self.save_playlist_clicked)
+        save_row.add_suffix(
+            Gtk.Image.new_from_icon_name("document-save-symbolic")
+        )
+
+        self.playlists_group.add(save_row)
+
+        # Tracked separately from save_row, same reasoning as
+        # profile_rows in build_profiles_page - a refresh needs to
+        # remove exactly the playlist rows, not the always-present
+        # save row above them.
+        self.playlist_rows = []
+        self.refresh_playlists_list()
+
+        clamp = Adw.Clamp()
+        clamp.set_child(self.playlists_group)
+        clamp.set_margin_start(12)
+        clamp.set_margin_end(12)
+        clamp.set_margin_top(12)
+        clamp.set_margin_bottom(12)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_child(clamp)
+        scrolled.set_vexpand(True)
+
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(Adw.HeaderBar())
+        toolbar_view.set_content(scrolled)
+
+        dialog = Adw.Dialog()
+        dialog.set_title("Playlists")
+        dialog.set_content_width(420)
+        dialog.set_content_height(480)
+        dialog.set_child(toolbar_view)
+
+        self.playlists_dialog = dialog
+
+    def build_playlist_row(self, playlist):
+
+        count = len(playlist["presets"])
+
+        row = Adw.ActionRow(
+            title=playlist["name"],
+            subtitle=f"{count} preset{'s' if count != 1 else ''}"
+        )
+
+        load_button = Gtk.Button(icon_name="document-open-symbolic")
+        load_button.add_css_class("flat")
+        load_button.set_valign(Gtk.Align.CENTER)
+        load_button.set_tooltip_text("Load")
+
+        load_button.connect(
+            "clicked",
+            lambda b, name=playlist["name"]: self.load_playlist_by_name(name)
+        )
+
+        row.add_suffix(load_button)
+
+        remove_button = Gtk.Button(icon_name="user-trash-symbolic")
+        remove_button.add_css_class("flat")
+        remove_button.set_valign(Gtk.Align.CENTER)
+        remove_button.set_tooltip_text("Delete")
+
+        remove_button.connect(
+            "clicked",
+            lambda b, name=playlist["name"]: self.delete_playlist_by_name(name)
+        )
+
+        row.add_suffix(remove_button)
+
+        return row
+
+    def save_playlist_clicked(self, row):
+
+        if not self.preset_queue:
+            self.show_toast("Queue is empty")
+            return
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("Playlist name")
+
+        dialog = Adw.AlertDialog(
+            heading="Save Playlist",
+            body="Save the current Queue as a named playlist."
+        )
+
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("save", "Save")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
+
+        dialog.connect(
+            "response",
+            lambda d, response: self.on_save_playlist_response(response, entry)
+        )
+
+        dialog.present(self)
+        entry.grab_focus()
+
+    def on_save_playlist_response(self, response, entry):
+
+        if response != "save":
+            return
+
+        name = entry.get_text().strip()
+
+        if not name:
+            self.show_toast("Playlist needs a name")
+            return
+
+        # Saving over an existing name replaces it rather than
+        # silently creating a duplicate entry.
+        self.playlists = [p for p in self.playlists if p["name"] != name]
+
+        self.playlists.append({
+            "name": name,
+            "presets": list(self.preset_queue)
+        })
+
+        self.save_playlists()
+        self.refresh_playlists_list()
+        self.show_toast(f"Saved playlist \"{name}\"")
+
+    def load_playlist_by_name(self, name):
+
+        playlist = next(
+            (p for p in self.playlists if p["name"] == name),
+            None
+        )
+
+        if playlist is None:
+            return
+
+        # setQueue (JS) replaces the queue wholesale, then reports back
+        # via announceQueue()/QUEUE: same as every other queue mutation
+        # - Python's self.preset_queue and queue_list_store update from
+        # that round trip, not directly here.
+        self.run_js(f"setQueue({json.dumps(playlist['presets'])});")
+        self.show_toast(f"Loaded playlist \"{name}\"")
+
+    def delete_playlist_by_name(self, name):
+
+        self.playlists = [p for p in self.playlists if p["name"] != name]
+
+        self.save_playlists()
+        self.refresh_playlists_list()
+        self.show_toast(f"Deleted playlist \"{name}\"")
+
+    def refresh_playlists_list(self):
+
+        for row in self.playlist_rows:
+            self.playlists_group.remove(row)
+
+        self.playlist_rows = [
+            self.build_playlist_row(playlist)
+            for playlist in self.playlists
+        ]
+
+        for row in self.playlist_rows:
+            self.playlists_group.add(row)
 
     def load_preset_clicked(self, action, param):
 
