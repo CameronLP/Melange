@@ -99,33 +99,51 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         self.set_content(self.toolbar_view)
 
-        # Same "drag from anywhere, not just the header bar" pattern
-        # as the primary window - but simpler, since there's no
-        # equivalent here to the primary's on-canvas nav-zone carve-out
-        # (that exists so WebKit's own click handling still reaches
-        # those buttons; a Gtk.Picture isn't interactive at all, so
-        # nothing here needs to claim clicks first). A single click
-        # drags the window; a double click instead raises/focuses the
-        # primary window, so a mirror on a second monitor still gives
-        # quick access back to the controls.
-        drag_gesture = Gtk.GestureClick()
+        # Drag-from-anywhere (not just the header bar), plus
+        # double-click to raise/focus the primary - split across two
+        # separate gesture types rather than one GestureClick calling
+        # begin_move() straight from "pressed", which was tried first
+        # and didn't work: begin_move() grabs the pointer for an
+        # interactive move the moment the *first* press of a would-be
+        # double-click happens, before GTK ever gets a chance to
+        # recognize a second press following it - the click sequence
+        # gets consumed by the move grab instead of being delivered as
+        # a second discrete press. Gtk.GestureDrag only fires
+        # drag-begin once real motion happens past its own built-in
+        # threshold, so a plain double-click (no movement in between)
+        # never triggers it at all, leaving the separate GestureClick
+        # below free to see both presses and count them correctly.
+        drag_gesture = Gtk.GestureDrag()
         drag_gesture.set_button(Gdk.BUTTON_PRIMARY)
 
         drag_gesture.connect(
-            "pressed",
-            self.on_window_drag_pressed
+            "drag-begin",
+            self.on_picture_drag_begin
         )
 
         self.picture.add_controller(drag_gesture)
 
+        click_gesture = Gtk.GestureClick()
+        click_gesture.set_button(Gdk.BUTTON_PRIMARY)
+        click_gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+
+        click_gesture.connect(
+            "pressed",
+            self.on_picture_pressed
+        )
+
+        self.picture.add_controller(click_gesture)
+
         # Same double-click-raises-the-primary behavior, but for the
-        # header bar specifically - drag_gesture above only covers the
-        # picture. This one deliberately doesn't claim the event
-        # sequence, so the header bar's own native double-click-to-
-        # maximize keeps working alongside it rather than being
-        # overridden.
+        # header bar specifically - nothing above covers it. CAPTURE
+        # phase so this reliably sees every press (and can count a
+        # real double-click) ahead of the header bar's own internal
+        # click/drag handling, without claiming the sequence itself -
+        # its native double-click-to-maximize keeps working alongside
+        # this rather than being overridden.
         header_click = Gtk.GestureClick()
         header_click.set_button(Gdk.BUTTON_PRIMARY)
+        header_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
 
         header_click.connect(
             "pressed",
@@ -218,11 +236,12 @@ class MirrorWindow(Adw.ApplicationWindow):
         if n_press >= 2:
             self.primary.present()
 
-    def on_window_drag_pressed(self, gesture, n_press, x, y):
+    def on_picture_pressed(self, gesture, n_press, x, y):
 
         if n_press >= 2:
             self.primary.present()
-            return
+
+    def on_picture_drag_begin(self, gesture, start_x, start_y):
 
         # Reported: clicking the mirror while it's maximized made the
         # picture go blank/grey. begin_move() on an already-maximized
@@ -243,8 +262,8 @@ class MirrorWindow(Adw.ApplicationWindow):
         self.get_surface().begin_move(
             gesture.get_current_event_device(),
             gesture.get_current_button(),
-            bounds.get_x() + x,
-            bounds.get_y() + y,
+            bounds.get_x() + start_x,
+            bounds.get_y() + start_y,
             gesture.get_current_event_time()
         )
 

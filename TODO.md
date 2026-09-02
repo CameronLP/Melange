@@ -247,14 +247,32 @@
       size, and a header button to double as a quick way to
       raise/focus the primary (a double-click anywhere in the mirror -
       picture or header bar - also does this; single-click on the
-      picture still drags, and the header-bar version deliberately
-      doesn't claim the click, so the header's own native double-
-      click-to-maximize keeps working alongside it). The picture fills
-      the window completely (Gtk.ContentFit.FILL) even if that distorts
-      the aspect ratio, rather than the default letterboxed CONTAIN.
-      "Close All Mirrors" is available from the primary's menu too.
-      A single click on the mirror is skipped (rather than attempting
-      to drag it) when it's already maximized - dragging a maximized
+      picture still drags). Getting the picture's double-click working
+      reliably took two attempts: the first (a single GestureClick's
+      "pressed" handler, calling begin_move() straight away whenever
+      n_press was 1) was reported as not working at all, and the real
+      cause turned out to be that call itself - begin_move() grabs the
+      pointer for an interactive move the moment the *first* press of
+      a would-be double-click happens, before GTK ever gets a chance
+      to recognize a second press following it, so the click sequence
+      gets consumed by the move grab instead of being delivered as a
+      second discrete press. Fixed by splitting drag and click-
+      counting across two separate gesture types: a Gtk.GestureDrag,
+      whose drag-begin only fires once real motion happens past its
+      own built-in threshold (so a plain double-click, with no
+      movement in between, never triggers it at all), handles the
+      actual window move; a separate Gtk.GestureClick (CAPTURE phase)
+      handles double-click detection, now free to see and count both
+      presses correctly since nothing consumes the pointer between
+      them. The header-bar version uses the same CAPTURE-phase
+      GestureClick approach and deliberately doesn't claim the click,
+      so the header's own native double-click-to-maximize keeps
+      working alongside it. The picture fills the window completely
+      (Gtk.ContentFit.FILL) even if that distorts the aspect ratio,
+      rather than the default letterboxed CONTAIN. "Close All Mirrors"
+      is available from the primary's menu too. A single click on the
+      mirror is skipped (rather than attempting to drag it) when it's
+      already maximized - dragging a maximized
       surface is meaningless and was a likely trigger for a real
       corrupted-picture symptom, see the rotated-monitor freeze entry
       under Urgent, which also covers a still-unresolved freeze issue
