@@ -109,32 +109,79 @@
       instance would (see the RAM investigation elsewhere in this
       file). The primary "controls" mirrors in the simplest possible
       sense - they have no independent state or behavior at all, only
-      ever showing whatever the primary is currently rendering.
+      ever showing whatever the primary is currently rendering. Since
+      it's the primary's actual live webview being shown, not a copy,
+      anything the page renders (including the on-canvas preset-nav
+      arrows) appears in the mirror too - there's only one underlying
+      DOM - but Gtk.Picture doesn't forward input back to a
+      paintable's source, so those arrows (and everything else in the
+      page) are inert there, purely visual.
+
+      A real, serious bug was found and fixed while building this:
+      returning False from a window's "close-request" handler (the
+      usual "let the default handler run" convention) turned out to
+      leave the window fully alive rather than closing it - confirmed
+      via get_visible() staying True regardless of whether an explicit
+      self.destroy() was also called first. This wasn't just a mirror
+      issue - the same broken pattern had been added to the *primary*
+      window's own close-request handler (for the mirror-cascade
+      logic below), meaning closing the main window would have stopped
+      working entirely. Fixed by destroying from a deferred idle
+      callback and returning True instead, verified on both windows:
+      get_visible() correctly flips to False, and - critically -
+      closing the primary while a mirror is open now cascades through
+      both and the whole process exits cleanly (checked via the actual
+      process list, not just widget state). A related crash (toggling
+      fullscreen on a mirror, but only *after* it had been through the
+      broken close path) turned out to be a downstream symptom of this
+      same bug, not a fullscreen-specific issue - confirmed by
+      reproducing fullscreen toggling safely many times over on a
+      mirror that was never touched by the broken close path.
+
       Mirrors get their own F11 fullscreen + Escape-to-exit (so each
       can be fullscreened independently once dragged to its target
       monitor - GTK/Wayland doesn't let an app auto-position a window
       onto a specific monitor, so that drag is a manual step, not
-      something this automates) and unregister themselves from the
-      primary's tracking list on close; closing the primary cascades
-      to close all its mirrors, since a mirror has nothing left to
-      show once the window it mirrors is gone.
+      something this automates), the same draggable-from-anywhere and
+      toolbar-auto-hide behavior as the primary window (simpler here
+      since Gtk.Picture, unlike WebKit, doesn't swallow input events -
+      no CAPTURE-phase controllers or synthetic-motion filtering
+      needed), a title that includes its mirror number and the current
+      preset name (kept in sync via the primary's own PRESET_NAME
+      handling - see `current_preset_name`/`update_mirror_titles`), a
+      header button to instantly match the primary window's current
+      size, and a header button to double as a quick way to
+      raise/focus the primary (a double-click anywhere in the mirror
+      also does this - single-click still drags). The picture fills
+      the window completely (Gtk.ContentFit.FILL) even if that distorts
+      the aspect ratio, rather than the default letterboxed CONTAIN.
+      "Close All Mirrors" is available from the primary's menu too.
+      A `notify::maximized` handler forces a redraw as a defensive fix
+      for maximizing a mirror leaving the picture showing a frozen
+      frame - the FILL content-fit above may already address the
+      underlying cause, since CONTAIN's aspect-locked size negotiation
+      is a more complex layout path, but this covers the symptom
+      directly either way.
+
       Verified: confirmed Gtk.WidgetPaintable correctly tracks a live
       WebKit.WebView (intrinsic size matched the source, both widgets
       realized/mapped, no errors) via a throwaway test run through the
-      app's real launch path before building the feature on top of
-      it. End-to-end: activating win.new-mirror-window (via
-      org.gtk.Actions over D-Bus, since window-level actions turned
-      out to be introspectable that way) created exactly one new
-      window with only `toggle-fullscreen` in its action list (as
-      expected for a mirror) and, critically, did NOT spawn a second
-      WebKitWebProcess - confirming no duplicate render instance.
-      Fullscreen toggle on the mirror produced no errors. Not
-      independently verified by hand: actually dragging a mirror to a
-      second monitor and confirming the pixels visually match (no
-      screenshot capability in this environment) and manually
-      confirming the primary-closes-cascades-to-mirrors path (no
-      D-Bus-exposed way to trigger a window's close-request directly)
-      - the close-cascade logic was verified by code review only.
+      app's real launch path before building the feature on top of it.
+      End-to-end, repeatedly, via org.gtk.Actions over D-Bus (window-
+      level actions turned out to be introspectable that way): mirror
+      creation spawns no second WebKitWebProcess; fullscreen toggling
+      a healthy mirror in and out produces no errors; close-all-
+      mirrors and closing the primary with a mirror open both
+      correctly tear everything down and the process fully exits.
+      D-Bus action-group objects were found to keep responding to
+      calls for a while after their owning window is destroyed - a
+      red herring in this environment's testing methodology, not a
+      real bug (get_visible() is the reliable signal, not whether the
+      D-Bus path still answers). Not independently verified by hand:
+      actually dragging a mirror to a second monitor and confirming
+      the pixels visually match, and the toolbar auto-hide/drag/
+      double-click-to-focus interactions (no screenshot or input-
+      injection capability in this environment for any of these).
 - [x] Shuffle Queue - a Gtk.ToggleButton in the Queue dialog's header
       (win.shuffle-queue, same stateful-action pattern as Loop Queue).
       Turning it on shuffles presetQueue in place (Fisher-Yates), then

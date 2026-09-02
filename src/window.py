@@ -104,6 +104,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.playlists = self.load_playlists()
         self.playlists_dialog = None
         self.mirror_windows = []
+        self.current_preset_name = None
+
+        # Never reused, even as mirrors close - so "Mirror 2" still
+        # means the same window it always did rather than shifting
+        # around as other mirrors come and go.
+        self.next_mirror_number = 1
 
         self.connect(
             "close-request",
@@ -327,6 +333,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(new_mirror_window_action)
 
+        close_all_mirrors_action = Gio.SimpleAction.new("close-all-mirrors", None)
+
+        close_all_mirrors_action.connect(
+            "activate",
+            self.close_all_mirrors_clicked
+        )
+
+        self.add_action(close_all_mirrors_action)
+
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
             None,
@@ -376,7 +391,9 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if text.startswith("PRESET_NAME:"):
             preset_name = text[len("PRESET_NAME:"):]
+            self.current_preset_name = preset_name
             self.set_title(f'Melange - "{preset_name}"')
+            self.update_mirror_titles()
             return
 
         # A failed Load Preset (bad MilkDrop conversion, invalid
@@ -636,15 +653,50 @@ class MelangeWindow(Adw.ApplicationWindow):
         for mirror in list(self.mirror_windows):
             mirror.close()
 
-        return False
+        # Returning False here (the usual "let the default handler
+        # run" convention for this signal) was found - while building
+        # the mirror-window close path above - to leave the window
+        # fully alive rather than actually closing it. Destroying from
+        # an idle callback (deferring past this signal's own emission)
+        # and returning True is what actually works; see the identical
+        # fix and its verification in mirror_window.py.
+        GLib.idle_add(self.destroy)
+
+        return True
 
     def new_mirror_window_clicked(self, action, param):
 
-        mirror = MirrorWindow(primary=self)
+        mirror = MirrorWindow(
+            primary=self,
+            mirror_number=self.next_mirror_number
+        )
+
+        self.next_mirror_number += 1
 
         self.mirror_windows.append(mirror)
 
+        # So a newly opened mirror shows the right title immediately,
+        # rather than a placeholder until the next preset change.
+        mirror.update_title(self.current_preset_name)
+
         mirror.present()
+
+    def update_mirror_titles(self):
+
+        for mirror in self.mirror_windows:
+            mirror.update_title(self.current_preset_name)
+
+    def close_all_mirrors_clicked(self, action, param):
+
+        if not self.mirror_windows:
+            self.show_toast("No mirror windows open")
+            return
+
+        # mirror.close() (via MirrorWindow.on_close_request) removes
+        # each one from self.mirror_windows as it closes - iterate a
+        # copy so that mutation doesn't skip entries.
+        for mirror in list(self.mirror_windows):
+            mirror.close()
 
     def on_key_pressed(self, controller, keyval, keycode, state):
 

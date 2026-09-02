@@ -114,6 +114,11 @@
         <attribute name="action">win.new-mirror-window</attribute>
       </item>
 
+      <item>
+        <attribute name="label" translatable="yes">Close All Mirrors</attribute>
+        <attribute name="action">win.close-all-mirrors</attribute>
+      </item>
+
     </section>
 
 
