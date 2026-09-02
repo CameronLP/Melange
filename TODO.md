@@ -4,6 +4,56 @@
 
 - [ ] Look for any remaining audio-visual latency/lag - the PCM AudioWorklet's unbounded sample queue (main.js) was found and fixed (capped at 50ms, see Done), which was the most likely source of the originally reported ~0.5s pause/resume delay. Not yet re-verified end-to-end, and there are other unexamined points earlier in the pipeline that could still add lag: GStreamer buffer/latency-time on the capture pipeline (start_system_audio, window.py), GLib.idle_add scheduling in on_audio_sample, and WebKit's evaluate_javascript IPC round-trip for each chunk.
 - [ ] Some presets still don't seem to react much to audio - real bugs affecting reactivity have already been found and fixed (mono/stereo interleaving corruption, PCM worklet chunk truncation, unbounded queue latency - see Done), but the complaint has resurfaced since. Worth checking again whether this is a genuine remaining bug or just preset-design diversity (many community MilkDrop/Butterchurn presets are deliberately more ambient/subtle than others) - not yet determined which.
+- [ ] **UNRESOLVED**: mirror window (mirror_window.py, see Done for
+      the feature itself) shows broken/frozen content when maximized
+      on a specific real setup - a 1080p secondary monitor rotated 90
+      degrees. Confirmed (via the user, since this environment has no
+      rotated monitor to test against): the primary window maximizes
+      correctly on that same screen, and the mirror *window itself*
+      resizes to the correct dimensions - only the mirrored picture's
+      content breaks. A related, separate symptom was also reported
+      and fixed with higher confidence: clicking the mirror while
+      maximized made the picture go blank/grey, traced to
+      `on_window_drag_pressed` calling `begin_move()` on an
+      already-maximized surface (a meaningless request) - now skipped
+      whenever `is_maximized()` is true.
+
+      For the freeze itself, three targeted fixes were tried, each
+      confirmed (via temporary debug instrumentation) to fire
+      correctly with no errors, and each reported as insufficient on
+      its own:
+      1. `notify::maximized` -> recreate the `Gtk.WidgetPaintable`
+         outright (`refresh_paintable`) rather than just
+         `queue_draw()` - a plain redraw request was tried first and
+         confirmed not to help, hence the stronger reset.
+      2. `notify::scale-factor` -> same reset, added defensively for
+         monitor changes generally, not confirmed relevant to this
+         specific report.
+      3. `notify::is-active` -> same reset, added because the user
+         directly observed that clicking a *different* window (so the
+         frozen mirror loses active state) unfroze it on its own, with
+         no maximize/scale-factor change involved.
+      A fourth approach - an unconditional `refresh_paintable()` every
+      2 seconds via a timer, as a guaranteed self-healing fallback
+      regardless of the exact trigger - was tried and explicitly
+      confirmed by the user to still not fix it, then removed per
+      their request rather than left in as dead weight.
+
+      All three signal-based triggers above are still in place (they
+      don't hurt, and might help *some* cases even if not this exact
+      one). What's not yet tried: this could be a WebKitGTK/Mesa/
+      Wayland-compositor-level interaction with rotated output
+      transforms specifically (not a GTK-widget-level state GTK
+      itself exposes a signal for at all, which would explain why
+      every GObject-property-notify-based trigger has come up short),
+      in which case no amount of `Gtk.WidgetPaintable`-recreation
+      timing is the real fix - something more fundamental (e.g.
+      forcing the mirror window's GDK surface itself to fully
+      reallocate, or moving away from WidgetPaintable-based mirroring
+      for this case) would be. Genuinely blocked on further progress
+      without either access to a rotated-output setup to test against
+      directly, or a way to capture WebKit/Mesa/Mutter-level logs from
+      that specific machine at the moment it happens.
 
 ## In progress / not started
 
@@ -156,12 +206,12 @@
       the window completely (Gtk.ContentFit.FILL) even if that distorts
       the aspect ratio, rather than the default letterboxed CONTAIN.
       "Close All Mirrors" is available from the primary's menu too.
-      A `notify::maximized` handler forces a redraw as a defensive fix
-      for maximizing a mirror leaving the picture showing a frozen
-      frame - the FILL content-fit above may already address the
-      underlying cause, since CONTAIN's aspect-locked size negotiation
-      is a more complex layout path, but this covers the symptom
-      directly either way.
+      A single click on the mirror is skipped (rather than attempting
+      to drag it) when it's already maximized - dragging a maximized
+      surface is meaningless and was a likely trigger for a real
+      corrupted-picture symptom, see the rotated-monitor freeze entry
+      under Urgent, which also covers a still-unresolved freeze issue
+      specific to this feature.
 
       Verified: confirmed Gtk.WidgetPaintable correctly tracks a live
       WebKit.WebView (intrinsic size matched the source, both widgets
@@ -182,66 +232,6 @@
       the pixels visually match, and the toolbar auto-hide/drag/
       double-click-to-focus interactions (no screenshot or input-
       injection capability in this environment for any of these).
-- [x] Fixed mirror-window maximize on a rotated secondary monitor -
-      reported as "maximize doesn't work" on a 1080p secondary screen
-      rotated 90 degrees; follow-up questions narrowed it down to
-      mirror-only (the primary window maximizes fine on that same
-      screen) and to the picture's content specifically (the window
-      itself resizes to the correct dimensions, only the mirrored
-      content breaks) - the same underlying class of problem as the
-      earlier maximize-freeze fix, just not fully covered by that
-      fix's plain queue_draw(). Likely cause: maximizing onto a
-      monitor with a different transform/scale than the primary
-      window's own forces GTK to rebuild GL-backed render state that
-      an existing WidgetPaintable instance doesn't automatically
-      follow. Fixed by recreating the paintable outright
-      (`refresh_paintable`) rather than just requesting a redraw,
-      triggered on both notify::maximized (confirmed relevant to the
-      report) and notify::scale-factor (a broader net for the same
-      class of issue when a mirror moves to a differently-scaled
-      monitor without literally maximizing there - not confirmed
-      relevant to this specific report, added defensively since it's
-      cheap and non-conflicting). Verified the mechanism fires at
-      exactly the right moment with no errors (a temporary debug
-      action + print confirmed refresh_paintable runs right after
-      is_maximized() flips to True) - not independently verified
-      whether it resolves the actual visual symptom, since a rotated
-      secondary monitor isn't available to test against in this
-      environment.
-      Follow-up report gave a better clue than the original repro:
-      clicking a different window (so the frozen mirror loses active
-      state) unfroze it on its own, with no maximize/scale-factor
-      change involved - meaning an active-state change alone is
-      enough for GTK to reconcile the broken render state. Added
-      notify::is-active as a third trigger for the same
-      refresh_paintable() reset, confirmed firing correctly (verified
-      the same way as the other two triggers, temporary debug print
-      removed after). This one should matter beyond the original
-      report too - a mirror stuck this way now recovers as soon as
-      its focus changes for any reason, not just the two narrower
-      triggers.
-      Still reported as freezing even with all three triggers, plus a
-      second symptom: clicking the mirror while maximized made the
-      picture go blank/grey. The second one has a clear likely cause -
-      single-click on the mirror calls begin_move() to drag the window
-      (on_window_drag_pressed), and dragging an already-maximized
-      surface is a meaningless request that's a plausible trigger for
-      exactly this kind of corruption - fixed by skipping the move
-      attempt entirely whenever is_maximized() is true (dragging a
-      maximized window has nowhere to go anyway). For the freeze
-      itself, rather than continue guessing at the exact GTK signal
-      responsible with no way to reproduce or debug it directly in
-      this environment, added an unconditional periodic
-      refresh_paintable() (every 2s, via a timer stopped in
-      on_close_request to avoid it firing into a destroyed window) as
-      a guaranteed self-healing fallback on top of the three targeted
-      triggers - a stuck mirror now recovers within a couple of
-      seconds regardless of what actually caused it. Verified the
-      timer runs cleanly through several cycles with no errors and
-      stops correctly on close (no errors even after waiting past
-      another interval post-close). Still not independently verified
-      whether either fix resolves the actual visual symptoms on real
-      rotated-monitor hardware.
 - [x] Shuffle Queue - a Gtk.ToggleButton in the Queue dialog's header
       (win.shuffle-queue, same stateful-action pattern as Loop Queue).
       Turning it on shuffles presetQueue in place (Fisher-Yates), then

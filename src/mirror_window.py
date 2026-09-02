@@ -192,31 +192,10 @@ class MirrorWindow(Adw.ApplicationWindow):
             lambda *args: self.refresh_paintable()
         )
 
-        # Belt-and-suspenders on top of the three targeted triggers
-        # above: still reported as freezing despite those, on a
-        # rotated secondary monitor this environment has no way to
-        # reproduce or debug directly. Rather than keep guessing at
-        # which exact GTK signal the real trigger is, unconditionally
-        # re-binding the paintable every couple of seconds guarantees
-        # a stuck mirror recovers within a couple of seconds
-        # regardless of what actually caused it - at the cost of a
-        # small, harmless periodic re-bind while everything's working
-        # fine too.
-        self.refresh_timer = GLib.timeout_add_seconds(
-            2,
-            self.periodic_refresh
-        )
-
         self.connect(
             "close-request",
             self.on_close_request
         )
-
-    def periodic_refresh(self):
-
-        self.refresh_paintable()
-
-        return True
 
     def on_window_drag_pressed(self, gesture, n_press, x, y):
 
@@ -333,10 +312,6 @@ class MirrorWindow(Adw.ApplicationWindow):
         return False
 
     def on_close_request(self, window):
-
-        if self.refresh_timer is not None:
-            GLib.source_remove(self.refresh_timer)
-            self.refresh_timer = None
 
         if self in self.primary.mirror_windows:
             self.primary.mirror_windows.remove(self)
