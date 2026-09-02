@@ -68,6 +68,22 @@
 
 ## Done
 
+- [x] Trimmed unused WebKit settings/persistence (webview.py) -
+      audited every `WebKitSettings enable-*` flag against what the
+      page actually uses (confirmed via grep: no localStorage/
+      IndexedDB, no `<video>`/MediaSource, no links, no real
+      navigation - presets switch entirely via JS, not URL changes -
+      and native GTK fullscreen is used instead of the JS Fullscreen
+      API). Disabled html5_database, html5_local_storage, page_cache,
+      mediasource, media_capabilities, fullscreen (JS API),
+      resizable_text_areas, tabs_to_links, smooth_scrolling, and
+      site_specific_quirks. Left webaudio/webgl/javascript/media_stream
+      alone - all genuinely used (WebGL rendering, Web Audio pipeline,
+      getUserMedia for microphone mode). Also switched to an ephemeral
+      `WebKit.NetworkSession` instead of the default persistent one -
+      this page only ever talks to its own localhost server and has
+      nothing worth remembering between runs, so there's no reason to
+      pay for on-disk cookie/HTTP-cache/database backing stores.
 - [x] Lazy-load the baron preset pack instead of eagerly loading all
       ~760 presets (5+MB combined) at startup. Root cause:
       butterchurn-presets-baron's own generated `dist/index.js` does

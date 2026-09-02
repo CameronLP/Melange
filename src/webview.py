@@ -89,9 +89,18 @@ def create_webview(on_message=None):
         handle_debug_message
     )
 
+    # This page only ever talks to its own localhost server, is never
+    # navigated away from, and has nothing worth remembering between
+    # runs (no logins, no history, no user-entered data) - so there's
+    # no reason to pay for WebKit's normal on-disk cookie/HTTP-cache/
+    # IndexedDB backing stores, which persist by default. An ephemeral
+    # session skips creating any of that.
     view = WebKit.WebView(
-        user_content_manager=content_manager
+        user_content_manager=content_manager,
+        network_session=WebKit.NetworkSession.new_ephemeral()
     )
+
+    settings = view.get_settings()
 
     # This is an embedded single-purpose visualizer, not a browser tab,
     # so there's no autoplay-abuse concern. Without this,
@@ -99,7 +108,28 @@ def create_webview(on_message=None):
     # runs as a direct consequence of a real DOM click - which never
     # happens on page load, so the system-audio analyser silently never
     # starts.
-    view.get_settings().set_media_playback_requires_user_gesture(False)
+    settings.set_media_playback_requires_user_gesture(False)
+
+    # Disabling browser-tab features this single static page never
+    # uses - no real navigation (presets are switched entirely by JS,
+    # not URL changes, so there's nothing to page-cache or go
+    # back/forward through), no persistent storage (see the ephemeral
+    # session above - html5_database/local_storage would otherwise
+    # still allocate in-memory backing even without disk persistence),
+    # no <video>/MediaSource playback, no links, no editable text.
+    # getUserMedia (media_stream, for the microphone input mode) and
+    # the WebAudio/WebGL pipeline Butterchurn actually runs on are
+    # left untouched.
+    settings.set_enable_html5_database(False)
+    settings.set_enable_html5_local_storage(False)
+    settings.set_enable_page_cache(False)
+    settings.set_enable_mediasource(False)
+    settings.set_enable_media_capabilities(False)
+    settings.set_enable_fullscreen(False)
+    settings.set_enable_resizable_text_areas(False)
+    settings.set_enable_tabs_to_links(False)
+    settings.set_enable_smooth_scrolling(False)
+    settings.set_enable_site_specific_quirks(False)
 
     view.set_hexpand(True)
     view.set_vexpand(True)
