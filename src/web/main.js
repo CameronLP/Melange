@@ -826,50 +826,58 @@ async function setupPCM() {
             constructor() {
                 super();
 
-                // Flat per-sample queues, not per-chunk: incoming PCM
-                // chunks are almost always bigger than the 128-sample
-                // render quantum, so shifting whole chunks off and
-                // only reading their first 128 samples silently
-                // dropped the rest of every chunk. Separate L/R queues
-                // since the source audio is genuinely stereo (see
-                // receiveAudio, which de-interleaves it before it gets
-                // here) - collapsing both channels into one shared
-                // queue would still alternate L/R samples as if they
-                // were one continuous channel.
-                this.samplesL = [];
-                this.samplesR = [];
-
+                // Fixed-capacity ring buffers, not plain-array queues:
+                // this runs on the real-time audio thread, and
+                // Array.shift()/splice() are O(n) - they re-index
+                // every remaining element - so the previous plain-array
+                // queue did O(n) work on every one of the up to 128
+                // samples process() reads, ~344 times/sec, plus
+                // constant reallocation/GC churn from push/shift. A
+                // ring buffer gives O(1) push/pop with zero allocation
+                // after setup. Separate L/R buffers since the source
+                // audio is genuinely stereo (see receiveAudio, which
+                // de-interleaves it before it gets here) - collapsing
+                // both channels into one shared buffer would still
+                // alternate L/R samples as if they were one continuous
+                // channel.
+                //
                 // This queue never reaches audioContext.destination -
                 // it only feeds the analyser for visualization, never
                 // actual audio playback - so there's no reason to
-                // preserve every sample in order. Without a cap, any
-                // upstream burstiness or drift (GStreamer buffering,
-                // the JS<->Python bridge, main-thread contention from
-                // the render loop) just accumulates forever: the queue
-                // grows, and the delay between real audio and what the
-                // visualizer reacts to grows right along with it.
-                // Capping it and dropping the oldest excess keeps
-                // latency bounded at the cost of occasionally not
-                // rendering every single sample, which is exactly the
-                // right trade-off here.
-                this.maxQueuedSamples = Math.round(sampleRate * 0.05);
+                // preserve every sample in order. Capping it at 50ms
+                // and dropping the oldest sample on overflow keeps
+                // latency bounded: without a cap, any upstream
+                // burstiness or drift (GStreamer buffering, the
+                // JS<->Python bridge, main-thread contention from the
+                // render loop) would just accumulate forever, and the
+                // delay between real audio and what the visualizer
+                // reacts to would grow right along with it.
+                this.capacity = Math.round(sampleRate * 0.05);
+                this.bufL = new Float32Array(this.capacity);
+                this.bufR = new Float32Array(this.capacity);
+                this.writeIdx = 0;
+                this.readIdx = 0;
+                this.count = 0;
 
                 this.port.onmessage = e => {
 
-                    const left = new Float32Array(e.data.left);
-                    const right = new Float32Array(e.data.right);
+                    const left = e.data.left;
+                    const right = e.data.right;
 
                     for (let i = 0; i < left.length; i++) {
-                        this.samplesL.push(left[i]);
-                        this.samplesR.push(right[i]);
-                    }
 
-                    if (this.samplesL.length > this.maxQueuedSamples) {
+                        this.bufL[this.writeIdx] = left[i];
+                        this.bufR[this.writeIdx] = right[i];
+                        this.writeIdx = (this.writeIdx + 1) % this.capacity;
 
-                        const excess = this.samplesL.length - this.maxQueuedSamples;
-
-                        this.samplesL.splice(0, excess);
-                        this.samplesR.splice(0, excess);
+                        if (this.count < this.capacity) {
+                            this.count++;
+                        } else {
+                            // Buffer is full - the write above just
+                            // overwrote the oldest sample, so advance
+                            // the read pointer past it too.
+                            this.readIdx = (this.readIdx + 1) % this.capacity;
+                        }
                     }
 
                 };
@@ -883,15 +891,15 @@ async function setupPCM() {
 
                 for (let i = 0; i < outL.length; i++) {
 
-                    outL[i] =
-                        this.samplesL.length
-                        ? this.samplesL.shift()
-                        : 0;
-
-                    outR[i] =
-                        this.samplesR.length
-                        ? this.samplesR.shift()
-                        : 0;
+                    if (this.count > 0) {
+                        outL[i] = this.bufL[this.readIdx];
+                        outR[i] = this.bufR[this.readIdx];
+                        this.readIdx = (this.readIdx + 1) % this.capacity;
+                        this.count--;
+                    } else {
+                        outL[i] = 0;
+                        outR[i] = 0;
+                    }
                 }
 
                 return true;
@@ -1601,7 +1609,16 @@ window.receiveAudio = function(encoded) {
 
 
     if (pcmNode) {
-        pcmNode.port.postMessage({ left, right });
+        // Transfer the underlying buffers instead of letting
+        // postMessage structured-clone (copy) them - left/right are
+        // freshly allocated above and never touched again on this
+        // side, so transferring is free and avoids doubling
+        // allocation/GC churn on both threads for every audio chunk
+        // (multiple times a second, for as long as audio is playing).
+        pcmNode.port.postMessage(
+            { left, right },
+            [left.buffer, right.buffer]
+        );
     }
 
 };

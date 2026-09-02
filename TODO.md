@@ -7,6 +7,20 @@
 
 ## In progress / not started
 
+- [ ] Reduce audio-bridge overhead further - `send_audio_to_webview`
+      (window.py) calls `webview.evaluate_javascript()` with a fresh
+      JS source string (`receiveAudio('<base64>')`) built fresh for
+      every audio chunk (tens of times/sec while audio is playing).
+      WebKitGTK's C API has no way to invoke a JS function with an
+      out-of-band argument - the payload has to be embedded as a
+      string literal in the source - so JavaScriptCore parses/compiles
+      a "new" script on every single call instead of reusing one. Two
+      other real inefficiencies in the same path were found and fixed
+      (see Done: ring-buffer PCM queue, transferable postMessage), but
+      this one would need a different transport (e.g. a local
+      WebSocket from Python to a JS-side listener) to actually avoid,
+      which is a bigger change than fits alongside the other two.
+- [ ] Default Cycle Interval to 30s instead of Off
 - [ ] Better preset organization + a larger preset browser window
 - [ ] Favorite presets
 - [ ] Optional "now playing" overlay in the corner of the canvas
@@ -54,6 +68,29 @@
 
 ## Done
 
+- [x] Investigated RAM usage (WebKit) - watched RSS of the python/GTK
+      process, WebKitNetworkProcess, and WebKitWebProcess over several
+      minutes while idle with system audio playing. WebKitWebProcess
+      climbed noticeably during the first ~30s (warm-up: JIT tiering,
+      shader/texture caches) then oscillated in a bounded range rather
+      than growing without limit - not a hard leak. Found and fixed
+      two real inefficiencies in the audio hot path that were driving
+      unnecessary allocation/GC churn on every chunk (tens of times a
+      second, for as long as audio plays):
+      1. The AudioWorkletProcessor's PCM sample queue (main.js,
+         `setupPCM`) was a plain JS array using `push`/`shift`/
+         `splice` - all O(n), called from the real-time audio
+         callback (~344 times/sec). Replaced with a fixed-capacity
+         ring buffer (typed arrays + read/write indices) for O(1)
+         push/pop with no per-sample allocation.
+      2. `receiveAudio` (main.js) posted the de-interleaved L/R
+         Float32Arrays to the worklet via `port.postMessage()` without
+         a transfer list, so the browser structured-clone (copied)
+         both arrays on every chunk instead of transferring them
+         zero-copy. Now passes `[left.buffer, right.buffer]` as the
+         transfer list.
+      A third, structural cost was found but not fixed this pass - see
+      "Reduce audio-bridge overhead further" above.
 - [x] Fixed a double-window bug when launching from GNOME Shell -
       `do_activate()` (main.py) unconditionally created a new
       `MelangeWindow` every time it fired, but GApplication's
