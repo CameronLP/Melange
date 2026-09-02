@@ -1132,6 +1132,38 @@ window.setQueueLoop = function(enabled) {
     queueLoopEnabled = !!enabled;
 };
 
+let queueShuffleEnabled = false;
+
+// Fisher-Yates, in place. Reorders presetQueue itself (rather than
+// picking a random index each time nextPreset() drains it) so a full
+// pass plays every item exactly once before anything repeats - a
+// per-pick random index would let the same item come up twice in a
+// row, or leave another item unplayed for an arbitrarily long
+// stretch, which doesn't read as "shuffled" so much as "random every
+// time." Reordering the array does mean the Queue dialog's visible
+// order changes when shuffle turns on (there's no separate "original
+// order" kept to restore later if it's turned back off) - a deliberate
+// trade-off for actually correct shuffle-play semantics.
+function shuffleQueueInPlace() {
+
+    for (let i = presetQueue.length - 1; i > 0; i--) {
+
+        const j = Math.floor(Math.random() * (i + 1));
+
+        [presetQueue[i], presetQueue[j]] = [presetQueue[j], presetQueue[i]];
+    }
+}
+
+window.setQueueShuffle = function(enabled) {
+
+    queueShuffleEnabled = !!enabled;
+
+    if (queueShuffleEnabled) {
+        shuffleQueueInPlace();
+        announceQueue();
+    }
+};
+
 function announceQueue() {
     debug("QUEUE:" + JSON.stringify(presetQueue));
 }
@@ -1150,10 +1182,17 @@ window.enqueuePreset = function(name) {
 // Replaces the queue wholesale (used to load a saved playlist) -
 // unknown names are dropped rather than rejecting the whole list, in
 // case a playlist references a preset that's no longer available
-// (e.g. a since-removed custom .milk/.json file).
+// (e.g. a since-removed custom .milk/.json file). Shuffled on load
+// too if Shuffle Queue is already on, so switching to a playlist
+// while shuffle is active doesn't silently play it in saved order.
 window.setQueue = function(presetNames) {
 
     presetQueue = presetNames.filter(name => nameSet.has(name));
+
+    if (queueShuffleEnabled) {
+        shuffleQueueInPlace();
+    }
+
     announceQueue();
 };
 
@@ -1397,6 +1436,10 @@ window.nextPreset = function() {
     // specifically.
     if (presetQueue.length > 0) {
 
+        // The queue is already in the order it should play - either
+        // as arranged (shuffle off) or shuffled in place (see
+        // setQueueShuffle/shuffleQueueInPlace) - so this always just
+        // takes the front, same whether or not shuffle is on.
         const name = presetQueue.shift();
 
         if (queueLoopEnabled) {

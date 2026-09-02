@@ -298,6 +298,19 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(loop_queue_action)
 
+        shuffle_queue_action = Gio.SimpleAction.new_stateful(
+            "shuffle-queue",
+            None,
+            GLib.Variant("b", False)
+        )
+
+        shuffle_queue_action.connect(
+            "change-state",
+            self.shuffle_queue_changed
+        )
+
+        self.add_action(shuffle_queue_action)
+
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
             None,
@@ -661,6 +674,18 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.show_toast(
             "Queue loop on" if enabled else "Queue loop off"
+        )
+
+    def shuffle_queue_changed(self, action, value):
+
+        action.set_state(value)
+
+        enabled = value.get_boolean()
+
+        self.run_js(f"setQueueShuffle({'true' if enabled else 'false'});")
+
+        self.show_toast(
+            "Queue shuffle on" if enabled else "Queue shuffle off"
         )
 
     # No separate on/off action - the slider's own bottom end (0)
@@ -1447,6 +1472,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         header.pack_end(loop_button)
+
+        shuffle_button = Gtk.ToggleButton(
+            icon_name="media-playlist-shuffle-symbolic",
+            tooltip_text="Shuffle Queue",
+            action_name="win.shuffle-queue"
+        )
+
+        header.pack_end(shuffle_button)
 
         playlists_button = Gtk.Button(
             icon_name="view-list-symbolic",

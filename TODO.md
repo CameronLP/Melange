@@ -93,6 +93,23 @@
 
 ## Done
 
+- [x] Shuffle Queue - a Gtk.ToggleButton in the Queue dialog's header
+      (win.shuffle-queue, same stateful-action pattern as Loop Queue).
+      Turning it on shuffles presetQueue in place (Fisher-Yates), then
+      nextPreset() just drains front-to-back as always - a first
+      attempt picked a random index on every draw instead, which
+      turned out biased (the same item could come up twice in a row,
+      or another could sit unplayed for an arbitrarily long stretch),
+      caught before committing and replaced with the in-place shuffle.
+      Reordering the array means the Queue dialog's visible order
+      changes when shuffle turns on (no separate "original order" is
+      kept to restore if it's turned back off - a deliberate
+      trade-off). Loading a playlist (setQueue) also shuffles on
+      arrival if Shuffle Queue is already on. Verified offline
+      (Node, 60k trials of a 3-item queue): all 6 permutations came up
+      with near-equal frequency, confirming no bias, and a 5-item
+      shuffle round-trip kept the same items with none lost or
+      duplicated.
 - [x] Save/load playlists + Loop Queue - a "Playlists…" button in the
       Queue dialog opens a Profiles-tab-style list (a "Save Current
       Queue as Playlist…" row at the top, then a row per saved
