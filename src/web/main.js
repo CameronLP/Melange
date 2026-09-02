@@ -248,11 +248,17 @@ const canvas =
     document.getElementById("canvas");
 
 
+// The canvas element itself always fills the window via CSS (100%
+// width/height, index.html) - this only changes its *internal* pixel
+// buffer resolution, which the browser then scales to fit. Below 1.0
+// trades sharpness for less GPU work; above 1.0 supersamples.
+let renderScale = 1.0;
+
 canvas.width =
-    window.innerWidth;
+    Math.round(window.innerWidth * renderScale);
 
 canvas.height =
-    window.innerHeight;
+    Math.round(window.innerHeight * renderScale);
 
 
 const audioContext =
@@ -337,6 +343,462 @@ window.setSensitivity = function(value) {
 
     debug("Sensitivity: " + value);
 };
+
+
+// Beat-driven auto-cycle, tapped off sensitivityGain rather than the
+// active source directly, since that's the one node that stays
+// connected regardless of whether the current source is system audio
+// or mic (see connectButterchurn). Two selectable modes - see
+// docs/beat-detection.md for the full writeup of both and why the
+// second one exists.
+const beatAnalyser =
+    audioContext.createAnalyser();
+
+beatAnalyser.fftSize = 256;
+beatAnalyser.smoothingTimeConstant = 0.3;
+
+sensitivityGain.connect(beatAnalyser);
+
+const beatFreqData =
+    new Uint8Array(beatAnalyser.frequencyBinCount);
+
+let beatCycleEnabled = false;
+let beatMode = "energy"; // "energy" | "tempo"
+let lastBeatAdvanceTime = 0;
+
+let beatMinIntervalMs = 2000;  // cooldown so one hit's decay doesn't
+                                // trigger several advances in a row
+let beatEnergyThreshold = 1.4; // vs. the comparison average (rolling
+                                // long-term in energy mode, short
+                                // local window in tempo mode)
+let beatSilenceFloor = 40;     // ignore near-silence entirely
+
+
+window.setBeatCycle = function(enabled) {
+    beatCycleEnabled = enabled;
+};
+
+window.setBeatSensitivity = function(threshold) {
+    beatEnergyThreshold = threshold;
+};
+
+window.setBeatCooldown = function(seconds) {
+    beatMinIntervalMs = seconds * 1000;
+};
+
+window.setBeatSilenceFloor = function(value) {
+    beatSilenceFloor = value;
+};
+
+window.setBeatMode = function(mode) {
+
+    beatMode = mode;
+
+    // Stale history from the other mode isn't meaningful here -
+    // start clean rather than let it bias the first few detections.
+    bassEnergyHistory = [];
+    fluxHistory = [];
+    previousMagnitudes = null;
+    estimatedPeriodMs = null;
+    lastOnsetTime = -Infinity;
+};
+
+
+function checkBeat(now) {
+
+    if (!beatCycleEnabled) return;
+
+    if (beatMode === "tempo") {
+        checkBeatTempo(now);
+    } else {
+        checkBeatEnergy(now);
+    }
+
+    // Runs alongside whichever mode is selected above, not as a third
+    // competing mode - a drop is a fundamentally different event from
+    // "a beat" (rare, dramatic, sustained), so neither Energy
+    // Threshold nor Tempo Tracking has any particular affinity for
+    // it; they'd just treat a drop's kick like any other beat.
+    checkDrop(now);
+}
+
+
+// --- Mode 1: energy threshold -----------------------------------
+//
+// Bass energy vs. its own rolling ~1s average. Simple and reliable
+// for a normal playlist (songs starting from silence, quieter verses
+// vs. louder choruses), but needs loud/quiet contrast to find
+// anything - a relentless, evenly-loud four-on-the-floor mix has
+// little such contrast, so the average just rises to match the
+// constant kick and nothing looks like an "onset" relative to it.
+
+let bassEnergyHistory = [];
+
+const BEAT_ENERGY_HISTORY_SIZE = 43; // ~1s of rolling average - not
+                                      // exposed as a setting, just the
+                                      // averaging window length
+
+function checkBeatEnergy(now) {
+
+    beatAnalyser.getByteFrequencyData(beatFreqData);
+
+    // Roughly the first ~1.4kHz of a 256-point FFT at 44.1kHz.
+    const bassBins = 8;
+    let bassSum = 0;
+
+    for (let i = 0; i < bassBins; i++) {
+        bassSum += beatFreqData[i];
+    }
+
+    const bassEnergy = bassSum / bassBins;
+
+    bassEnergyHistory.push(bassEnergy);
+
+    if (bassEnergyHistory.length > BEAT_ENERGY_HISTORY_SIZE) {
+        bassEnergyHistory.shift();
+    }
+
+    const avgEnergy =
+        bassEnergyHistory.reduce((a, b) => a + b, 0) /
+        bassEnergyHistory.length;
+
+    const isOnset =
+        bassEnergy > avgEnergy * beatEnergyThreshold &&
+        bassEnergy > beatSilenceFloor;
+
+    reportAndMaybeTrigger(now, isOnset, beatMinIntervalMs);
+}
+
+
+// --- Mode 2: tempo tracking --------------------------------------
+//
+// A lightweight, real-time simplification of the standard MIR
+// approach (spectral flux onset detection + autocorrelation-based
+// periodicity estimation - see docs/beat-detection.md for
+// references). Spectral flux measures the *rise* in each frequency
+// bin frame-to-frame rather than the absolute level, so a series of
+// equally-loud kicks still produces a distinct spike at each attack
+// even though the overall energy level never drops in between -
+// exactly the case an energy-vs-long-average test misses.
+// Autocorrelating that flux signal finds its dominant repeating
+// period (the tempo), which paces triggering: an onset only counts
+// once it's plausible for it to be the *next* beat, not just any
+// local peak (a hi-hat, a vocal transient, ...).
+
+let previousMagnitudes = null;
+let fluxHistory = []; // { time, flux }, most recent last
+
+const FLUX_HISTORY_SECONDS = 8;
+const FLUX_BINS = 32; // roughly the low end where rhythmic/
+                       // percussive content concentrates
+
+let estimatedPeriodMs = null;
+let lastTempoEstimateTime = 0;
+
+const TEMPO_ESTIMATE_INTERVAL_MS = 1000; // re-autocorrelate at most
+                                          // once a second - the whole
+                                          // point is a *stable*
+                                          // period estimate, and
+                                          // it's also the relatively
+                                          // expensive part (see
+                                          // docs/beat-detection.md
+                                          // for actual op counts)
+const TEMPO_MIN_BPM = 60;
+const TEMPO_MAX_BPM = 180;
+const TEMPO_RESAMPLE_STEP_MS = 20; // 50Hz grid for autocorrelation -
+                                    // fine enough that the true
+                                    // period isn't lost to grid
+                                    // quantization (measured: a 50ms
+                                    // grid was coarse enough to
+                                    // reliably mis-lock onto tempo
+                                    // octaves - see below)
+const LOCAL_PEAK_WINDOW_MS = 300;
+
+
+function computeSpectralFlux() {
+
+    beatAnalyser.getByteFrequencyData(beatFreqData);
+
+    if (!previousMagnitudes) {
+        previousMagnitudes = new Uint8Array(beatFreqData.length);
+    }
+
+    let flux = 0;
+
+    for (let i = 0; i < FLUX_BINS; i++) {
+
+        const diff = beatFreqData[i] - previousMagnitudes[i];
+
+        if (diff > 0) flux += diff;
+    }
+
+    previousMagnitudes.set(beatFreqData);
+
+    return flux;
+}
+
+
+// Onset-strength autocorrelation, resampled onto a uniform grid
+// first since rAF-driven samples aren't perfectly evenly spaced.
+function estimateTempoPeriodMs(history, now) {
+
+    const windowMs = FLUX_HISTORY_SECONDS * 1000;
+    const numSamples = Math.floor(windowMs / TEMPO_RESAMPLE_STEP_MS);
+    const startTime = now - windowMs;
+
+    const series = new Float32Array(numSamples);
+    let hIdx = 0;
+
+    for (let i = 0; i < numSamples; i++) {
+
+        const t = startTime + i * TEMPO_RESAMPLE_STEP_MS;
+
+        while (
+            hIdx < history.length - 1 &&
+            history[hIdx + 1].time < t
+        ) {
+            hIdx++;
+        }
+
+        series[i] = history.length ? history[hIdx].flux : 0;
+    }
+
+    const minLag = Math.round(
+        (60000 / TEMPO_MAX_BPM) / TEMPO_RESAMPLE_STEP_MS
+    );
+
+    const maxLag = Math.round(
+        (60000 / TEMPO_MIN_BPM) / TEMPO_RESAMPLE_STEP_MS
+    );
+
+    const scores = new Float32Array(maxLag + 1);
+
+    for (let lag = minLag; lag <= maxLag; lag++) {
+
+        let sum = 0;
+
+        for (let i = 0; i + lag < numSamples; i++) {
+            sum += series[i] * series[i + lag];
+        }
+
+        scores[lag] = sum;
+    }
+
+    let bestLag = -1;
+    let bestScore = 0;
+
+    for (let lag = minLag; lag <= maxLag; lag++) {
+
+        if (scores[lag] > bestScore) {
+            bestScore = scores[lag];
+            bestLag = lag;
+        }
+    }
+
+    // Octave-error correction: raw autocorrelation is well known to
+    // bias toward period-doublings (confirmed empirically here - an
+    // early version of this without the correction reliably locked
+    // onto half the true tempo). If half the best lag is still in
+    // range and scores reasonably close to the best, it's the more
+    // likely true (faster) fundamental.
+    if (bestLag > 0) {
+
+        const halfLag = Math.round(bestLag / 2);
+
+        if (halfLag >= minLag && scores[halfLag] > bestScore * 0.6) {
+            bestLag = halfLag;
+        }
+    }
+
+    return bestLag > 0 ? bestLag * TEMPO_RESAMPLE_STEP_MS : null;
+}
+
+
+let lastOnsetTime = -Infinity;
+
+const RECENT_PEAK_WINDOW = 5;    // frames - causal local-max check
+const ONSET_REFRACTORY_MS = 100; // no two onsets closer than this,
+                                  // even at 180 BPM beats are ~333ms
+                                  // apart
+
+
+// Measured against a synthetic 128 BPM test signal: the first version
+// of this compared flux to a local average that *included the sample
+// being tested* (computed after pushing it into fluxHistory), and had
+// no local-max or refractory check - so it fired on almost every
+// frame regardless of whether it was actually a rising transient
+// (confirmed from real logs: ~1375 onset detections for 58 actual
+// advances, paced only by the cooldown, not real beat detection).
+// Excluding the current sample from its own comparison average, plus
+// requiring it be a genuine local maximum (not just "above average"),
+// cut false positives by roughly half to two-thirds across a range of
+// synthetic noise levels in testing.
+function checkBeatTempo(now) {
+
+    const flux = computeSpectralFlux();
+
+    // Local peak-picking against fluxHistory as it stood *before*
+    // this sample - it's the rise relative to recent context that
+    // matters, not the absolute level, and comparing against itself
+    // made the threshold nearly meaningless.
+    let localSum = 0;
+    let localCount = 0;
+    let recentMax = 0;
+
+    for (let i = fluxHistory.length - 1; i >= 0; i--) {
+
+        if (now - fluxHistory[i].time > LOCAL_PEAK_WINDOW_MS) break;
+
+        localSum += fluxHistory[i].flux;
+        localCount++;
+
+        if (
+            localCount <= RECENT_PEAK_WINDOW &&
+            fluxHistory[i].flux > recentMax
+        ) {
+            recentMax = fluxHistory[i].flux;
+        }
+    }
+
+    const localAvg = localCount ? localSum / localCount : 0;
+
+    const isOnset =
+        flux >= recentMax &&
+        flux > localAvg * beatEnergyThreshold &&
+        flux > beatSilenceFloor &&
+        now - lastOnsetTime > ONSET_REFRACTORY_MS;
+
+    if (isOnset) {
+        lastOnsetTime = now;
+    }
+
+    fluxHistory.push({ time: now, flux });
+
+    const cutoff = now - FLUX_HISTORY_SECONDS * 1000;
+
+    while (fluxHistory.length && fluxHistory[0].time < cutoff) {
+        fluxHistory.shift();
+    }
+
+    if (
+        fluxHistory.length > 40 &&
+        now - lastTempoEstimateTime > TEMPO_ESTIMATE_INTERVAL_MS
+    ) {
+        lastTempoEstimateTime = now;
+        estimatedPeriodMs = estimateTempoPeriodMs(fluxHistory, now);
+    }
+
+    // Once a tempo estimate exists, don't let a stray onset (a
+    // hi-hat, a vocal transient) advance faster than roughly every
+    // half beat - otherwise fall back to the plain cooldown.
+    const minGap = estimatedPeriodMs
+        ? Math.max(beatMinIntervalMs, estimatedPeriodMs * 0.5)
+        : beatMinIntervalMs;
+
+    reportAndMaybeTrigger(now, isOnset, minGap);
+}
+
+
+// Shared by both modes: logs every qualifying onset (cooldown or
+// not, so the detector's actual behavior is visible - see
+// on_webview_debug_message in window.py for the BEAT_NAV_NEXT toast),
+// and fires the advance once the given cooldown/gap has elapsed.
+function reportAndMaybeTrigger(now, isOnset, minGap) {
+
+    if (!isOnset) return;
+
+    const cooledDown = now - lastBeatAdvanceTime > minGap;
+
+    debug(
+        "BEAT_DETECTED: mode=" + beatMode +
+        (cooledDown ? " (advancing)" : " (cooling down)")
+    );
+
+    if (cooledDown) {
+        lastBeatAdvanceTime = now;
+        debug("BEAT_NAV_NEXT");
+    }
+}
+
+
+// --- Drop detection ----------------------------------------------
+//
+// Separate from both beat modes above - a drop is a rare, dramatic,
+// *sustained* jump in overall broadband energy (often after a
+// quieter buildup), not just another beat, so neither mode has any
+// particular affinity for it. Compares a short recent window against
+// a long-term (15s) baseline that excludes that same recent window
+// (so a developing drop doesn't drag its own baseline up while it's
+// still forming), requiring the elevation to be both large and
+// *sustained* across the whole recent window - not just one loud
+// instant - to tell a real drop apart from a single big transient.
+
+let overallEnergyHistory = []; // { time, energy }
+let lastDropTime = -Infinity;
+
+const DROP_HISTORY_SECONDS = 15;
+const DROP_SUSTAIN_MS = 300;
+const DROP_THRESHOLD = 1.8;   // vs. the long-term baseline - much
+                               // bigger than a per-beat onset, since
+                               // a drop should be unmistakable
+const DROP_COOLDOWN_MS = 5000; // drops are rare; a track's energy
+                                // staying elevated after one shouldn't
+                                // keep re-triggering
+
+
+function checkDrop(now) {
+
+    beatAnalyser.getByteFrequencyData(beatFreqData);
+
+    // Broadband, unlike the bass-focused beat detectors above - a
+    // drop is characterized by a jump across most of the spectrum,
+    // not just the low end.
+    let sum = 0;
+
+    for (let i = 0; i < beatFreqData.length; i++) {
+        sum += beatFreqData[i];
+    }
+
+    const energy = sum / beatFreqData.length;
+
+    overallEnergyHistory.push({ time: now, energy });
+
+    const cutoff = now - DROP_HISTORY_SECONDS * 1000;
+
+    while (
+        overallEnergyHistory.length &&
+        overallEnergyHistory[0].time < cutoff
+    ) {
+        overallEnergyHistory.shift();
+    }
+
+    let baseSum = 0, baseCount = 0;
+    let recentSum = 0, recentCount = 0;
+
+    for (const entry of overallEnergyHistory) {
+
+        if (now - entry.time < DROP_SUSTAIN_MS) {
+            recentSum += entry.energy;
+            recentCount++;
+        } else {
+            baseSum += entry.energy;
+            baseCount++;
+        }
+    }
+
+    const baseline = baseCount ? baseSum / baseCount : 0;
+    const recentAvg = recentCount ? recentSum / recentCount : 0;
+
+    const isDrop =
+        baseline > 0 &&
+        recentAvg > baseline * DROP_THRESHOLD &&
+        now - lastDropTime > DROP_COOLDOWN_MS;
+
+    if (isDrop) {
+        lastDropTime = now;
+        debug("DROP_NAV_NEXT");
+    }
+}
 
 
 debug("Visualizer created");
@@ -684,10 +1146,33 @@ announcePresetList();
 debug("Preset loaded");
 
 
-visualizer.setRendererSize(
-    window.innerWidth,
-    window.innerHeight
-);
+function resizeCanvas() {
+
+    canvas.width =
+        Math.round(window.innerWidth * renderScale);
+
+    canvas.height =
+        Math.round(window.innerHeight * renderScale);
+
+    visualizer.setRendererSize(
+        canvas.width,
+        canvas.height
+    );
+}
+
+
+resizeCanvas();
+
+
+window.setRenderScale = function(scale) {
+    renderScale = scale;
+    resizeCanvas();
+};
+
+
+window.setAntiAliasing = function(enabled) {
+    visualizer.setOutputAA(enabled);
+};
 
 
 // 0 means uncapped - render on every animation frame, same as before
@@ -719,6 +1204,8 @@ function frame(now) {
         lastRenderTime = now;
     }
 
+    checkBeat(now);
+
     requestAnimationFrame(frame);
 }
 
@@ -728,21 +1215,7 @@ frame(0);
 
 window.addEventListener(
     "resize",
-    () => {
-
-        canvas.width =
-            window.innerWidth;
-
-        canvas.height =
-            window.innerHeight;
-
-
-        visualizer.setRendererSize(
-            canvas.width,
-            canvas.height
-        );
-
-    }
+    resizeCanvas
 );
 
 
@@ -754,26 +1227,52 @@ window.setShuffle = function(enabled) {
 
 
 let cycleTimer = null;
+let cycleIntervalSeconds = 0;
+let cycleJitter = 0; // 0-1 fraction of the interval, each direction
 
 
-// No separate on/off toggle - 0 (or below) means "off", routed
-// through the same "NAV_NEXT" debug message the on-canvas arrows use
-// (see the click handlers below) rather than calling nextPreset()
-// directly, so auto-cycling also respects the preset lock (and its
-// toast) via Python's existing next_preset().
+// A recursive setTimeout chain rather than setInterval, so jitter can
+// pick a fresh randomized delay each cycle instead of one fixed
+// period repeating forever.
+function scheduleCycleTick() {
+
+    const jitterFactor =
+        1 + (Math.random() * 2 - 1) * cycleJitter;
+
+    cycleTimer = setTimeout(
+        () => {
+            // No separate on/off toggle - routed through the same
+            // "NAV_NEXT" debug message the on-canvas arrows use (see
+            // the click handlers below) rather than calling
+            // nextPreset() directly, so auto-cycling also respects
+            // the preset lock (and its toast) via Python's existing
+            // next_preset().
+            debug("NAV_NEXT");
+            scheduleCycleTick();
+        },
+        cycleIntervalSeconds * 1000 * jitterFactor
+    );
+}
+
+
+// 0 (or below) means "off".
 window.setCycleInterval = function(seconds) {
 
     if (cycleTimer) {
-        clearInterval(cycleTimer);
+        clearTimeout(cycleTimer);
         cycleTimer = null;
     }
 
+    cycleIntervalSeconds = seconds;
+
     if (seconds > 0) {
-        cycleTimer = setInterval(
-            () => debug("NAV_NEXT"),
-            seconds * 1000
-        );
+        scheduleCycleTick();
     }
+};
+
+
+window.setCycleJitter = function(percent) {
+    cycleJitter = percent / 100;
 };
 
 

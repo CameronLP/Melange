@@ -369,6 +369,23 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.previous_preset(None)
             return
 
+        # Distinct from NAV_NEXT so a beat-triggered advance is
+        # actually visible - otherwise it's indistinguishable from a
+        # manual click or a normal Cycle Interval tick.
+        if text == "BEAT_NAV_NEXT":
+            self.next_preset(None)
+            self.show_toast("Beat detected - next preset")
+            return
+
+        # Drop detection runs alongside whichever beat mode is
+        # selected whenever Beat-Driven Cycle is on - a drop is a
+        # separate, rare, dramatic event neither mode has any
+        # particular affinity for (see checkDrop in main.js).
+        if text == "DROP_NAV_NEXT":
+            self.next_preset(None)
+            self.show_toast("Drop detected - next preset")
+            return
+
         if text != "APP_READY":
             return
 
@@ -622,6 +639,18 @@ class MelangeWindow(Adw.ApplicationWindow):
             lambda value: self.run_js(f"setCycleInterval({value});")
         )
 
+    def build_cycle_jitter_control(self):
+
+        def format_cycle_jitter(value):
+            return "None" if value <= 0 else f"±{int(value)}%"
+
+        return self.build_slider_row(
+            "Cycle Interval Jitter",
+            0.0, 50.0, 5.0, 0.0,
+            format_cycle_jitter,
+            lambda value: self.run_js(f"setCycleJitter({value});")
+        )
+
     def build_blend_time_control(self):
 
         def format_blend_time(value):
@@ -667,6 +696,120 @@ class MelangeWindow(Adw.ApplicationWindow):
             10.0, 60.0, 1.0, 60.0,
             format_framerate,
             framerate_changed
+        )
+
+    def build_toggle_row(self, title, initial, on_change):
+
+        row = Adw.SwitchRow(title=title)
+        row.set_active(initial)
+
+        row.connect(
+            "notify::active",
+            lambda r, param: on_change(r.get_active())
+        )
+
+        return row
+
+    def build_anti_aliasing_control(self):
+
+        return self.build_toggle_row(
+            "Anti-Aliasing",
+            False,
+            lambda enabled: self.run_js(
+                f"setAntiAliasing({'true' if enabled else 'false'});"
+            )
+        )
+
+    def build_render_scale_control(self):
+
+        def format_render_scale(value):
+            return f"{value:.2f}x"
+
+        # Distinct from Mesh Size (the warp-grid resolution): this
+        # scales the canvas's actual pixel buffer, trading sharpness
+        # for GPU work below 1.0 or supersampling above it. The
+        # canvas's CSS size always fills the window regardless
+        # (index.html) - only the internal render resolution changes.
+        return self.build_slider_row(
+            "Render Resolution Scale",
+            0.25, 2.0, 0.05, 1.0,
+            format_render_scale,
+            lambda value: self.run_js(f"setRenderScale({value});")
+        )
+
+    def build_beat_cycle_control(self):
+
+        return self.build_toggle_row(
+            "Beat-Driven Cycle",
+            False,
+            lambda enabled: self.run_js(
+                f"setBeatCycle({'true' if enabled else 'false'});"
+            )
+        )
+
+    def beat_mode_changed(self, row, param):
+
+        mode = "tempo" if row.get_selected() == 1 else "energy"
+
+        self.run_js(f"setBeatMode({json.dumps(mode)});")
+
+    def build_beat_mode_control(self):
+
+        # See docs/beat-detection.md - Energy Threshold works well for
+        # a normal playlist but struggles with continuously mixed
+        # (e.g. DJ-mixed) audio; Tempo Tracking is aimed at that case.
+        row = Adw.ComboRow(title="Beat Detection Mode")
+
+        row.set_model(
+            Gtk.StringList.new(["Energy Threshold", "Tempo Tracking"])
+        )
+
+        row.set_selected(0)
+
+        row.connect(
+            "notify::selected",
+            self.beat_mode_changed
+        )
+
+        return row
+
+    def build_beat_sensitivity_control(self):
+
+        def format_beat_sensitivity(value):
+            return f"{value:.1f}x"
+
+        # How far above the rolling bass-energy average a hit needs to
+        # be to count as a beat - lower triggers more easily (more
+        # false positives), higher requires a more pronounced hit.
+        return self.build_slider_row(
+            "Beat Sensitivity",
+            1.1, 3.0, 0.1, 1.4,
+            format_beat_sensitivity,
+            lambda value: self.run_js(f"setBeatSensitivity({value});")
+        )
+
+    def build_beat_cooldown_control(self):
+
+        def format_beat_cooldown(value):
+            return f"{value:.1f}s"
+
+        return self.build_slider_row(
+            "Beat Cooldown",
+            0.5, 5.0, 0.5, 2.0,
+            format_beat_cooldown,
+            lambda value: self.run_js(f"setBeatCooldown({value});")
+        )
+
+    def build_beat_silence_control(self):
+
+        def format_beat_silence(value):
+            return str(int(value))
+
+        return self.build_slider_row(
+            "Beat Silence Floor",
+            0.0, 150.0, 5.0, 40.0,
+            format_beat_silence,
+            lambda value: self.run_js(f"setBeatSilenceFloor({value});")
         )
 
     def theme_button_toggled(self, button, scheme):
@@ -738,20 +881,38 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         audio_page.add(audio_group)
 
-        playback_group = Adw.PreferencesGroup()
-        playback_group.add(self.build_cycle_interval_control())
-        playback_group.add(self.build_blend_time_control())
+        cycling_group = Adw.PreferencesGroup(title="Cycling")
+        cycling_group.add(self.build_cycle_interval_control())
+        cycling_group.add(self.build_cycle_jitter_control())
+        cycling_group.add(self.build_blend_time_control())
+
+        beat_group = Adw.PreferencesGroup(
+            title="Beat Detection",
+            description=(
+                "Experimental - tuned against synthetic test signals, "
+                "not yet validated against a wide range of real music. "
+                "See docs/beat-detection.md."
+            )
+        )
+        beat_group.add(self.build_beat_cycle_control())
+        beat_group.add(self.build_beat_mode_control())
+        beat_group.add(self.build_beat_sensitivity_control())
+        beat_group.add(self.build_beat_cooldown_control())
+        beat_group.add(self.build_beat_silence_control())
 
         playback_page = Adw.PreferencesPage(
             title="Playback",
             icon_name="media-playback-start-symbolic"
         )
 
-        playback_page.add(playback_group)
+        playback_page.add(cycling_group)
+        playback_page.add(beat_group)
 
         rendering_group = Adw.PreferencesGroup()
         rendering_group.add(self.build_mesh_size_control())
         rendering_group.add(self.build_framerate_control())
+        rendering_group.add(self.build_render_scale_control())
+        rendering_group.add(self.build_anti_aliasing_control())
 
         rendering_page = Adw.PreferencesPage(
             title="Rendering",
