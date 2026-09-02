@@ -1295,7 +1295,6 @@ loadPresetIntoVisualizer(0, 0);
 
 announcePresetList();
 
-
 debug("Preset loaded");
 
 
@@ -1796,6 +1795,19 @@ function resetButterchurnAudio() {
     debug("Butterchurn audio reset");
 }
 
+
+// Default to auto-cycling every 30s rather than starting off - most
+// people opening this for the first time want it to just go, not to
+// discover Preferences has a Cycle Interval slider first. Calling the
+// same setter Preferences itself uses (rather than just initializing
+// cycleIntervalSeconds directly) so this actually starts the timer,
+// not just sets a number nothing schedules yet. Placed here (not
+// right after the initial preset loads, near the top of the module)
+// because window.setCycleInterval isn't defined yet at that point -
+// this file executes top-to-bottom, and that function is declared
+// much further down; calling it before its own definition threw
+// "window.setCycleInterval is not a function" when first tried.
+window.setCycleInterval(30);
 
 // Signals Python that window.setAudioSource etc. are now defined and
 // safe to call - the WebKit "load-changed" FINISHED event fires once

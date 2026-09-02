@@ -91,7 +91,6 @@
       this one would need a different transport (e.g. a local
       WebSocket from Python to a JS-side listener) to actually avoid,
       which is a bigger change than fits alongside the other two.
-- [ ] Default Cycle Interval to 30s instead of Off
 - [ ] Better preset organization + a larger preset browser window
 - [ ] Favorite presets
 - [ ] Optional "now playing" overlay in the corner of the canvas
@@ -163,6 +162,24 @@
 
 ## Done
 
+- [x] Default Cycle Interval to 30s instead of Off - the Preferences
+      slider's initial value changed to 30.0 (window.py), and main.js
+      now calls `window.setCycleInterval(30)` at startup so the timer
+      actually starts, not just so a variable defaults to a number
+      nothing schedules. Real bug caught while doing this: the first
+      attempt placed that call right after the initial preset loads,
+      near the top of the module - but `window.setCycleInterval` isn't
+      defined until much further down the file (main.js runs top to
+      bottom), so that threw "window.setCycleInterval is not a
+      function" every launch. Moved to right before the existing
+      `debug("APP_READY")` line, which is deliberately placed after
+      everything else in the module has finished defining itself (see
+      its own comment) - the same guarantee that already made it the
+      right spot for Python to know it's safe to call into the page.
+      Verified end-to-end: clean startup, and (via Monitor watching
+      the actual log rather than assuming) the preset genuinely
+      auto-advanced twice with no manual trigger, both times at
+      roughly the 30s mark.
 - [x] Fullscreen toggle button in the primary window's header bar
       (window.ui, `fullscreen_button`, bound via `action-name` to the
       existing `win.toggle-fullscreen` action - no new action needed).

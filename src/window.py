@@ -932,7 +932,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.build_slider_row(
             "Cycle Interval",
-            0.0, 120.0, 1.0, 0.0,
+            0.0, 120.0, 1.0, 30.0,
             format_cycle_interval,
             lambda value: self.run_js(f"setCycleInterval({value});"),
             store_as="cycle_interval_scale"
