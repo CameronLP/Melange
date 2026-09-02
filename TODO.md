@@ -68,6 +68,37 @@
 
 ## Done
 
+- [x] Lazy-load the baron preset pack instead of eagerly loading all
+      ~760 presets (5+MB combined) at startup. Root cause:
+      butterchurn-presets-baron's own generated `dist/index.js` does
+      `presets[name] = await import('./presets/<name>.json')` as a
+      top-level await for every single preset, unconditionally, the
+      moment the module is imported - ES module evaluation blocks
+      until all of a module's top-level awaits settle, so just
+      importing that module (even only to ask it for preset *names*)
+      forced every preset's full JSON payload to be fetched and parsed
+      up front. Confirmed via the real request log: previously
+      hundreds of individual preset `.js` GETs fired in the first
+      couple seconds of every launch, before a single preset had even
+      been chosen. Fixed by bypassing that module entirely - main.js
+      now uses `import.meta.glob()` (non-eager) directly against the
+      raw preset JSON files to get names/loaders without invoking any
+      of them, and only resolves+parses a given preset's content
+      (`resolvePreset`) the moment it's actually about to be shown,
+      caching it after that. Verified after the change: startup does
+      exactly one asset fetch (the main JS bundle) instead of
+      hundreds, and dozens of distinct baron presets loaded correctly
+      with zero errors during real navigation. Core butterchurn-presets
+      (the non-baron base pack) is left as-is - it's a single
+      pre-bundled ~640KB file with no per-preset splitting possible
+      without forking it, small enough not to be worth chasing.
+      Steady-state RSS during active browsing wasn't cleanly
+      isolated - the window is on the real desktop and something/
+      someone was actively navigating through many presets during
+      testing, which confounds any before/after RSS comparison once
+      navigation starts (each newly-viewed preset, lazy or not, costs
+      a real WebGL shader compile) - but the startup-cost elimination
+      itself is unambiguous and directly verified.
 - [x] Investigated RAM usage (WebKit) - watched RSS of the python/GTK
       process, WebKitNetworkProcess, and WebKitWebProcess over several
       minutes while idle with system audio playing. WebKitWebProcess

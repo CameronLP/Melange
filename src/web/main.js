@@ -19,7 +19,22 @@
 
 import butterchurn from "butterchurn";
 import presets from "butterchurn-presets";
-import { getPresets as getBaronPresets } from "butterchurn-presets-baron";
+// Deliberately NOT importing butterchurn-presets-baron's own entry
+// point (`getPresets`) - its generated dist/index.js does
+// `presets[name] = await import('./presets/<name>.json')` as a
+// top-level await for every one of its ~760 presets, unconditionally,
+// the moment the module is first imported. Since ES module evaluation
+// blocks until all of a module's top-level awaits settle, just
+// importing that module - even only to ask it for preset *names* -
+// forces every preset's full JSON payload (5+MB combined) to be
+// fetched and parsed up front, whether or not it's ever shown.
+// import.meta.glob (without `eager`) instead gives us the list of
+// files and a per-file loader function, so a preset's content is only
+// fetched the moment it's actually about to be displayed - see
+// baronLoaders/resolvePreset below.
+const baronGlob = import.meta.glob(
+    "./node_modules/butterchurn-presets-baron/dist/presets/*.json"
+);
 // Default-import interop breaks for this package: its CJS bundle sets
 // __esModule: true without ever setting a .default export (only the
 // named convertPreset), so `import x from "..."` resolves to
@@ -977,30 +992,79 @@ setupPCM();
 
 
 
-const allPresets =
+// The base pack (butterchurn-presets) is a single pre-bundled file
+// (~640KB) with no per-preset splitting possible without forking it -
+// small enough that loading it whole isn't worth chasing, unlike the
+// baron pack below.
+const corePresets =
     presets.getPresets();
 
+// resolvedPresets caches presets once actually loaded/needed:
+// everything from corePresets (already in memory, so cached
+// immediately - see below), anything loaded via loadPresetFile
+// (already a resolved object the moment it's added), and baron
+// presets lazily the first time they're shown (see resolvePreset).
+// Kept distinct from `names`/`baronLoaders`, which only need to know
+// *what presets exist*, not their content.
+const resolvedPresets = new Map(
+    Object.entries(corePresets)
+);
+
+// name -> loader function, built from baronGlob's paths without
+// invoking any of them (import.meta.glob's non-eager form resolves
+// its keys/paths at build time without executing the imports) - so
+// this costs nothing beyond the file list itself.
+const baronLoaders = new Map();
 
 // Merged in on top of the base pack. Names collide across packs fairly
 // often (both draw from the same community MilkDrop presets), so a
 // colliding baron preset is suffixed rather than silently overwriting
 // the base one.
-const baronPresets =
-    getBaronPresets();
+for (const path of Object.keys(baronGlob)) {
 
-for (const name of Object.keys(baronPresets)) {
+    const baseName =
+        path.slice(path.lastIndexOf("/") + 1, -".json".length);
 
     const key =
-        name in allPresets
-        ? name + " (baron)"
-        : name;
+        baseName in corePresets
+        ? baseName + " (baron)"
+        : baseName;
 
-    allPresets[key] = baronPresets[name];
+    baronLoaders.set(key, baronGlob[path]);
 }
 
 
-const names =
-    Object.keys(allPresets);
+const names = [
+    ...Object.keys(corePresets),
+    ...baronLoaders.keys(),
+];
+
+const nameSet = new Set(names);
+
+
+// Fetches/parses a preset's actual definition the moment it's
+// actually about to be shown, rather than up front - see the comment
+// on baronGlob above for why this matters for the baron pack
+// specifically. Cached after the first resolve, so switching back to
+// an already-seen preset (shuffle repeats, browser back/forward,
+// re-queuing) is instant.
+async function resolvePreset(name) {
+
+    if (resolvedPresets.has(name)) {
+        return resolvedPresets.get(name);
+    }
+
+    const loader = baronLoaders.get(name);
+
+    if (!loader) return null;
+
+    const module = await loader();
+    const preset = module.default ?? module;
+
+    resolvedPresets.set(name, preset);
+
+    return preset;
+}
 
 
 // Announces the current preset name to Python over the existing debug
@@ -1025,7 +1089,7 @@ function announcePresetList() {
 // Called from Python when a preset is picked in the native browser.
 window.loadPresetByName = function(name) {
 
-    if (!(name in allPresets)) {
+    if (!nameSet.has(name)) {
         debug("loadPresetByName: unknown preset " + name);
         return;
     }
@@ -1064,7 +1128,7 @@ function announceQueue() {
 
 window.enqueuePreset = function(name) {
 
-    if (!(name in allPresets)) {
+    if (!nameSet.has(name)) {
         debug("enqueuePreset: unknown preset " + name);
         return;
     }
@@ -1118,20 +1182,46 @@ window.moveQueueItemTo = function(fromIndex, toIndex) {
 };
 
 
+// Guards against out-of-order preset loads: resolving a baron preset
+// (see resolvePreset) is async, and rapid navigation - repeated
+// scroll-wheel ticks in particular - can start a second load before
+// the first one's fetch/parse has finished. Each load captures the
+// token at start and checks it's still current before touching the
+// visualizer/currentPreset, so a stale resolution just gets dropped
+// instead of momentarily showing the wrong preset.
+let presetLoadToken = 0;
+
+async function loadPresetIntoVisualizer(index, blendSeconds) {
+
+    const token = ++presetLoadToken;
+    const name = names[index];
+    const preset = await resolvePreset(name);
+
+    if (token !== presetLoadToken) return false;
+
+    if (!preset) {
+        debug("loadPresetIntoVisualizer: failed to resolve " + name);
+        return false;
+    }
+
+    visualizer.loadPreset(preset, blendSeconds);
+    announcePresetName(name);
+
+    return true;
+}
+
+
 // Used by next/loadPresetByName/loadPresetFile - anywhere a preset
 // change should be recorded in history. Not used for plain back/
 // forward movement within existing history (see previousPreset/the
 // early-return in nextPreset), which just replays it instead.
-function goToPreset(index, blendSeconds) {
+async function goToPreset(index, blendSeconds) {
 
     currentPreset = index;
 
-    visualizer.loadPreset(
-        allPresets[names[index]],
-        blendSeconds
-    );
+    const loaded = await loadPresetIntoVisualizer(index, blendSeconds);
 
-    announcePresetName(names[index]);
+    if (!loaded) return;
 
     // A new selection after navigating back discards whatever forward
     // history there was, same as a browser tab after following a new
@@ -1142,12 +1232,8 @@ function goToPreset(index, blendSeconds) {
 }
 
 
-visualizer.loadPreset(
-    allPresets[names[0]],
-    0
-);
+loadPresetIntoVisualizer(0, 0);
 
-announcePresetName(names[0]);
 announcePresetList();
 
 
@@ -1295,13 +1381,13 @@ window.nextPreset = function() {
 
         announceQueue();
 
-        if (name in allPresets) {
+        if (nameSet.has(name)) {
             goToPreset(names.indexOf(name), blendSeconds);
             return;
         }
 
-        // Fell out of allPresets somehow - fall through to a normal
-        // advance rather than getting stuck.
+        // Fell out of the known preset list somehow - fall through to
+        // a normal advance rather than getting stuck.
     }
 
     // Replay forward through history first (e.g. after previousPreset
@@ -1312,12 +1398,7 @@ window.nextPreset = function() {
         historyPos++;
         currentPreset = presetHistory[historyPos];
 
-        visualizer.loadPreset(
-            allPresets[names[currentPreset]],
-            blendSeconds
-        );
-
-        announcePresetName(names[currentPreset]);
+        loadPresetIntoVisualizer(currentPreset, blendSeconds);
         return;
     }
 
@@ -1344,12 +1425,7 @@ window.previousPreset = function() {
     historyPos--;
     currentPreset = presetHistory[historyPos];
 
-    visualizer.loadPreset(
-        allPresets[names[currentPreset]],
-        blendSeconds
-    );
-
-    announcePresetName(names[currentPreset]);
+    loadPresetIntoVisualizer(currentPreset, blendSeconds);
 };
 
 
@@ -1418,8 +1494,9 @@ window.loadPresetFile = async function(base64Text, name) {
             );
         }
 
-        allPresets[name] = preset;
+        resolvedPresets.set(name, preset);
         names.push(name);
+        nameSet.add(name);
 
         goToPreset(names.length - 1, 0);
 
