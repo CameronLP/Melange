@@ -27,8 +27,9 @@ import time
 gi.require_version("Gst", "1.0")
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
+gi.require_version("Pango", "1.0")
 
-from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst
+from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.webview import create_webview
 
 Gst.init(None)
@@ -94,6 +95,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.preset_names = []
         self.preset_list_store = None
         self.preset_browser_dialog = None
+        self.preset_queue = []
+        self.queue_list_store = None
+        self.queue_dialog = None
 
         self.start_system_audio()
 
@@ -249,6 +253,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(browse_presets_action)
 
+        show_queue_action = Gio.SimpleAction.new("show-queue", None)
+
+        show_queue_action.connect(
+            "activate",
+            self.show_queue_clicked
+        )
+
+        self.add_action(show_queue_action)
+
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
             None,
@@ -321,6 +334,23 @@ class MelangeWindow(Adw.ApplicationWindow):
                     0,
                     self.preset_list_store.get_n_items(),
                     self.preset_names
+                )
+
+            return
+
+        # JS owns presetQueue - this is Python's copy, used to build
+        # the queue dialog's list. Python never mutates it directly,
+        # only calls enqueuePreset/removeQueueItem/moveQueueItem and
+        # reflects back whatever announceQueue() reports here, same
+        # pattern as PRESET_LIST: above.
+        if text.startswith("QUEUE:"):
+            self.preset_queue = json.loads(text[len("QUEUE:"):])
+
+            if self.queue_list_store is not None:
+                self.queue_list_store.splice(
+                    0,
+                    self.queue_list_store.get_n_items(),
+                    self.preset_queue
                 )
 
             return
@@ -813,7 +843,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         dialog = Adw.Dialog()
         dialog.set_title("Presets")
-        dialog.set_content_width(420)
+        dialog.set_content_width(560)
         dialog.set_content_height(560)
         dialog.set_child(toolbar_view)
 
@@ -821,21 +851,55 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def preset_row_setup(self, factory, list_item):
 
-        label = Gtk.Label(xalign=0)
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
 
-        label.set_margin_start(6)
-        label.set_margin_end(6)
-        label.set_margin_top(6)
-        label.set_margin_bottom(6)
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+        box.set_margin_top(4)
+        box.set_margin_bottom(4)
 
-        list_item.set_child(label)
+        # max_width_chars keeps the label's requested (natural) size
+        # small - without it, GTK sizes the row to fit the full preset
+        # name (some are 100+ characters) regardless of ellipsize,
+        # pushing the button off the edge of the dialog. hexpand still
+        # lets it fill whatever width is actually available.
+        label = Gtk.Label(xalign=0, hexpand=True)
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+        label.set_max_width_chars(1)
+
+        box.append(label)
+
+        queue_button = Gtk.Button(icon_name="list-add-symbolic")
+
+        queue_button.add_css_class("flat")
+        queue_button.set_tooltip_text("Add to Queue")
+
+        box.append(queue_button)
+
+        list_item.set_child(box)
+
+        # Stashed on the list_item itself (not the widgets) so bind
+        # can find them again - GTK4 ListView recycles these rows for
+        # different items as you scroll, so bind gets called many
+        # times for the same row/button pair.
+        list_item.preset_label = label
+        list_item.queue_button = queue_button
+        list_item.queue_button_handler = None
 
     def preset_row_bind(self, factory, list_item):
 
-        label = list_item.get_child()
         string_object = list_item.get_item()
+        name = string_object.get_string()
 
-        label.set_label(string_object.get_string())
+        list_item.preset_label.set_label(name)
+
+        if list_item.queue_button_handler is not None:
+            list_item.queue_button.disconnect(list_item.queue_button_handler)
+
+        list_item.queue_button_handler = list_item.queue_button.connect(
+            "clicked",
+            lambda button: self.enqueue_preset(name)
+        )
 
     def preset_row_activated(self, list_view, position):
 
@@ -845,6 +909,185 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.run_js(f"loadPresetByName({json.dumps(name)});")
 
         self.preset_browser_dialog.close()
+
+    def enqueue_preset(self, name):
+
+        self.run_js(f"enqueuePreset({json.dumps(name)});")
+        self.show_toast(f"Added to queue: {name}")
+
+    def show_queue_clicked(self, action, param):
+
+        if self.queue_dialog is None:
+            self.build_queue_dialog()
+
+        self.queue_dialog.present(self)
+
+    def build_queue_dialog(self):
+
+        self.queue_list_store = Gtk.StringList.new(self.preset_queue)
+
+        selection = Gtk.NoSelection.new(self.queue_list_store)
+
+        factory = Gtk.SignalListItemFactory()
+
+        factory.connect("setup", self.queue_row_setup)
+        factory.connect("bind", self.queue_row_bind)
+
+        list_view = Gtk.ListView.new(selection, factory)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_child(list_view)
+        scrolled.set_vexpand(True)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.set_margin_start(12)
+        box.set_margin_end(12)
+        box.set_margin_top(12)
+        box.set_margin_bottom(12)
+
+        box.append(scrolled)
+
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(Adw.HeaderBar())
+        toolbar_view.set_content(box)
+
+        dialog = Adw.Dialog()
+        dialog.set_title("Queue")
+        dialog.set_content_width(560)
+        dialog.set_content_height(480)
+        dialog.set_child(toolbar_view)
+
+        self.queue_dialog = dialog
+
+    def queue_row_setup(self, factory, list_item):
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
+
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+        box.set_margin_top(4)
+        box.set_margin_bottom(4)
+
+        handle = Gtk.Image.new_from_icon_name("list-drag-handle-symbolic")
+        handle.set_margin_end(4)
+        handle.set_tooltip_text("Drag to Reorder")
+        box.append(handle)
+
+        # Same reasoning as preset_row_setup: without max_width_chars,
+        # GTK sizes the row to fit the full (sometimes 100+ character)
+        # preset name regardless of ellipsize, pushing the buttons off
+        # the edge of the dialog.
+        label = Gtk.Label(xalign=0, hexpand=True)
+        label.set_ellipsize(Pango.EllipsizeMode.END)
+        label.set_max_width_chars(1)
+
+        box.append(label)
+
+        up_button = Gtk.Button(icon_name="go-up-symbolic")
+        up_button.add_css_class("flat")
+        up_button.set_tooltip_text("Move Up")
+        box.append(up_button)
+
+        down_button = Gtk.Button(icon_name="go-down-symbolic")
+        down_button.add_css_class("flat")
+        down_button.set_tooltip_text("Move Down")
+        box.append(down_button)
+
+        remove_button = Gtk.Button(icon_name="user-trash-symbolic")
+        remove_button.add_css_class("flat")
+        remove_button.set_tooltip_text("Remove")
+        box.append(remove_button)
+
+        list_item.set_child(box)
+
+        list_item.queue_label = label
+        list_item.up_button = up_button
+        list_item.down_button = down_button
+        list_item.remove_button = remove_button
+        list_item.queue_handlers = []
+
+        # Drag-and-drop reordering. Both controllers read the row's
+        # *current* position at the moment they actually fire (not a
+        # value captured here at setup time), same reasoning as the
+        # button handlers below - GTK4 ListView recycles this exact
+        # row widget for different list positions as the list scrolls
+        # or changes.
+        drag_source = Gtk.DragSource()
+        drag_source.set_actions(Gdk.DragAction.MOVE)
+
+        drag_source.connect(
+            "prepare",
+            lambda source, x, y, li=list_item:
+                Gdk.ContentProvider.new_for_value(
+                    GObject.Value(int, li.get_position())
+                )
+        )
+
+        box.add_controller(drag_source)
+
+        drop_target = Gtk.DropTarget.new(GObject.TYPE_INT, Gdk.DragAction.MOVE)
+
+        drop_target.connect(
+            "drop",
+            lambda target, from_position, x, y, li=list_item:
+                self.reorder_queue_item(from_position, li.get_position())
+        )
+
+        box.add_controller(drop_target)
+
+    def queue_row_bind(self, factory, list_item):
+
+        string_object = list_item.get_item()
+
+        list_item.queue_label.set_label(string_object.get_string())
+
+        for button, handler in list_item.queue_handlers:
+            button.disconnect(handler)
+
+        # get_position() is read fresh inside each callback (rather
+        # than captured here) since the row can be reused for a
+        # different position without a fresh bind after nearby items
+        # are removed/reordered.
+        list_item.queue_handlers = [
+            (
+                list_item.up_button,
+                list_item.up_button.connect(
+                    "clicked",
+                    lambda b, li=list_item: self.move_queue_item(li.get_position(), -1)
+                )
+            ),
+            (
+                list_item.down_button,
+                list_item.down_button.connect(
+                    "clicked",
+                    lambda b, li=list_item: self.move_queue_item(li.get_position(), 1)
+                )
+            ),
+            (
+                list_item.remove_button,
+                list_item.remove_button.connect(
+                    "clicked",
+                    lambda b, li=list_item: self.remove_queue_item(li.get_position())
+                )
+            ),
+        ]
+
+    def move_queue_item(self, position, delta):
+
+        self.run_js(f"moveQueueItem({position}, {delta});")
+
+    def reorder_queue_item(self, from_position, to_position):
+
+        if from_position == to_position:
+            return True
+
+        self.run_js(f"moveQueueItemTo({from_position}, {to_position});")
+
+        return True
+
+    def remove_queue_item(self, position):
+
+        self.run_js(f"removeQueueItem({position});")
 
     def load_preset_clicked(self, action, param):
 

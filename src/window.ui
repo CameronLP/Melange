@@ -90,6 +90,11 @@
       </item>
 
       <item>
+        <attribute name="label" translatable="yes">_Queue…</attribute>
+        <attribute name="action">win.show-queue</attribute>
+      </item>
+
+      <item>
         <attribute name="label" translatable="yes">Lock Preset</attribute>
         <attribute name="action">win.lock-preset</attribute>
       </item>

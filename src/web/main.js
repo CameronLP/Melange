@@ -581,6 +581,73 @@ window.setBlendTime = function(seconds) {
 };
 
 
+// User-curated "up next" list, distinct from shuffle/sequential
+// advance - nextPreset() drains this first (see below). Python owns
+// the visible queue dialog but never mutates presetQueue directly;
+// it only calls these and reflects back whatever announceQueue()
+// reports, same pattern as the preset browser and PRESET_LIST:.
+let presetQueue = [];
+
+function announceQueue() {
+    debug("QUEUE:" + JSON.stringify(presetQueue));
+}
+
+window.enqueuePreset = function(name) {
+
+    if (!(name in allPresets)) {
+        debug("enqueuePreset: unknown preset " + name);
+        return;
+    }
+
+    presetQueue.push(name);
+    announceQueue();
+};
+
+window.removeQueueItem = function(index) {
+
+    if (index < 0 || index >= presetQueue.length) return;
+
+    presetQueue.splice(index, 1);
+    announceQueue();
+};
+
+window.moveQueueItem = function(index, delta) {
+
+    const newIndex = index + delta;
+
+    if (
+        index < 0 || index >= presetQueue.length ||
+        newIndex < 0 || newIndex >= presetQueue.length
+    ) {
+        return;
+    }
+
+    const [item] = presetQueue.splice(index, 1);
+    presetQueue.splice(newIndex, 0, item);
+
+    announceQueue();
+};
+
+
+// Drag-and-drop reordering (arbitrary from -> to), unlike
+// moveQueueItem's fixed ±1 step for the up/down buttons.
+window.moveQueueItemTo = function(fromIndex, toIndex) {
+
+    if (
+        fromIndex < 0 || fromIndex >= presetQueue.length ||
+        toIndex < 0 || toIndex >= presetQueue.length ||
+        fromIndex === toIndex
+    ) {
+        return;
+    }
+
+    const [item] = presetQueue.splice(fromIndex, 1);
+    presetQueue.splice(toIndex, 0, item);
+
+    announceQueue();
+};
+
+
 // Used by next/loadPresetByName/loadPresetFile - anywhere a preset
 // change should be recorded in history. Not used for plain back/
 // forward movement within existing history (see previousPreset/the
@@ -711,6 +778,24 @@ window.setCycleInterval = function(seconds) {
 
 
 window.nextPreset = function() {
+
+    // A deliberately queued preset takes priority over both history
+    // replay and shuffle/sequential advance - the user asked for it
+    // specifically.
+    if (presetQueue.length > 0) {
+
+        const name = presetQueue.shift();
+
+        announceQueue();
+
+        if (name in allPresets) {
+            goToPreset(names.indexOf(name), blendSeconds);
+            return;
+        }
+
+        // Fell out of allPresets somehow - fall through to a normal
+        // advance rather than getting stuck.
+    }
 
     // Replay forward through history first (e.g. after previousPreset
     // moved back) rather than generating a new preset, so going back

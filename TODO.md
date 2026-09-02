@@ -1,8 +1,11 @@
 # TODO
 
+## Urgent
+
+- [ ] Audio-to-visual latency (~0.5s) - noticeable delay between pausing/resuming audio and the visualizer reacting, likely why beats don't feel synced. Probably somewhere in the system-audio pipeline (GStreamer capture -> base64 over the JS bridge -> PCM AudioWorklet queue) - worth checking for buffering at each hop.
+
 ## In progress / not started
 
-- [ ] Preset queue
 - [ ] Better preset organization + a larger preset browser window
 - [ ] Favorite presets
 - [ ] Optional "now playing" overlay in the corner of the canvas
@@ -28,7 +31,7 @@
 - [ ] MIDI controller support - map physical knobs/pads to sensitivity, blend time, next/prev preset
 - [ ] D-Bus remote control - expose next/prev/lock/shuffle over D-Bus for external tools (Stream Deck, macros, scripts) to drive without focus
 - [ ] System tray / background mode - stay running and controllable when the window is closed/unfocused
-- [ ] Preset playlists - a saved, ordered sequence of specific presets with per-preset timing, distinct from random shuffle/cycle (builds on the preset queue item above)
+- [ ] Save/load playlists - save the current Queue (see Done, below) as a named, persisted playlist you can reload later, rather than it existing only for the current session
 
 ## Paused
 
@@ -56,3 +59,4 @@
 - [x] Baron preset pack merged into the built-in preset list
 - [x] Open native Butterchurn (.json) preset files, not just .milk
 - [x] Investigate visualizer sensitivity - real bug found: the system-audio capture is genuine interleaved stereo (window.py, channels=2), but receiveAudio (main.js) was decoding it as one flat mono stream, alternating L/R samples together as if they were sequential samples of the same channel. That corrupted the frequency content Butterchurn's bass/mid/treb analysis runs on for every preset, not just stereo-aware ones. Fixed by de-interleaving properly and feeding true stereo through the custom PCM worklet.
+- [x] Preset queue - full manager: a "+" button per row in the preset browser adds to a JS-owned queue, a Queue... dialog lists it with up/down/remove per item, and nextPreset() drains the queue before falling back to shuffle/sequential
