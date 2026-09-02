@@ -199,18 +199,18 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Same empty-in-window.ui, populated-here pattern as Audio
         # Source above, for the same reason: the list of open mirror
         # windows changes at runtime. Section 2 (not 0/1) - theme
-        # selector, then Audio Source, then this section - item 5
-        # within it (Load Preset, Browse Presets, Show Queue, Lock
-        # Preset, Shuffle Presets, then the Mirror Windows submenu),
-        # then section 1 *within that submenu* (New Mirror Window/
-        # Close All Mirrors are its own static section 0 - see
-        # window.ui - so rebuilding this one never touches those).
+        # selector, then Audio Source, then this section - item 4
+        # within it (Load Preset, Presets submenu, Lock Preset,
+        # Shuffle Presets, then the Mirror Windows submenu), then
+        # section 1 *within that submenu* (New Mirror Window/Close
+        # All Mirrors are its own static section 0 - see window.ui -
+        # so rebuilding this one never touches those).
         section2 = self.menu_button.get_menu_model().get_item_link(
             2, Gio.MENU_LINK_SECTION
         )
 
         mirror_windows_submenu = section2.get_item_link(
-            5, Gio.MENU_LINK_SUBMENU
+            4, Gio.MENU_LINK_SUBMENU
         )
 
         self.open_mirrors_section = mirror_windows_submenu.get_item_link(
@@ -392,6 +392,24 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         self.add_action(show_queue_action)
+
+        show_favorites_action = Gio.SimpleAction.new("show-favorites", None)
+
+        show_favorites_action.connect(
+            "activate",
+            self.show_favorites_clicked
+        )
+
+        self.add_action(show_favorites_action)
+
+        show_playlists_action = Gio.SimpleAction.new("show-playlists", None)
+
+        show_playlists_action.connect(
+            "activate",
+            self.show_playlists_clicked
+        )
+
+        self.add_action(show_playlists_action)
 
         loop_queue_action = Gio.SimpleAction.new_stateful(
             "loop-queue",
@@ -1825,6 +1843,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.browser_view_stack.set_visible_child_name("queue")
         self.preset_browser_dialog.present(self)
 
+    def show_favorites_clicked(self, action, param):
+
+        if self.preset_browser_dialog is None:
+            self.build_preset_browser_dialog()
+
+        self.browser_view_stack.set_visible_child_name("favorites")
+        self.preset_browser_dialog.present(self)
+
     def build_queue_tab(self):
 
         self.queue_list_store = Gtk.StringList.new(self.preset_queue)
@@ -1868,12 +1894,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         playlists_button = Gtk.Button(
             icon_name="view-list-symbolic",
-            tooltip_text="Playlists…"
-        )
-
-        playlists_button.connect(
-            "clicked",
-            self.show_playlists_clicked
+            tooltip_text="Playlists…",
+            action_name="win.show-playlists"
         )
 
         controls.append(playlists_button)
@@ -2164,7 +2186,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return title
 
-    def show_playlists_clicked(self, button):
+    def show_playlists_clicked(self, action, param):
 
         if self.playlists_dialog is None:
             self.build_playlists_dialog()

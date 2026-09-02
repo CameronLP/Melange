@@ -92,15 +92,37 @@
         <attribute name="action">win.load-preset</attribute>
       </item>
 
-      <item>
-        <attribute name="label" translatable="yes">_Browse Presets…</attribute>
-        <attribute name="action">win.browse-presets</attribute>
-      </item>
+      <!-- All four open the same tabbed preset browser dialog
+           (window.py build_preset_browser_dialog) at a different
+           starting tab, except Playlists which is its own small
+           dialog reachable from within the Queue tab too - grouped
+           here since they're all facets of "manage presets", rather
+           than four flat top-level items (Favorites/Playlists didn't
+           have a menu entry at all before this). -->
+      <submenu>
+        <attribute name="label" translatable="yes">Presets</attribute>
 
-      <item>
-        <attribute name="label" translatable="yes">_Queue…</attribute>
-        <attribute name="action">win.show-queue</attribute>
-      </item>
+        <item>
+          <attribute name="label" translatable="yes">_Browse Presets…</attribute>
+          <attribute name="action">win.browse-presets</attribute>
+        </item>
+
+        <item>
+          <attribute name="label" translatable="yes">_Favorites…</attribute>
+          <attribute name="action">win.show-favorites</attribute>
+        </item>
+
+        <item>
+          <attribute name="label" translatable="yes">_Queue…</attribute>
+          <attribute name="action">win.show-queue</attribute>
+        </item>
+
+        <item>
+          <attribute name="label" translatable="yes">_Playlists…</attribute>
+          <attribute name="action">win.show-playlists</attribute>
+        </item>
+
+      </submenu>
 
       <item>
         <attribute name="label" translatable="yes">Lock Preset</attribute>

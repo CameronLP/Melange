@@ -69,6 +69,18 @@
             <property name="action-name">win.show-queue</property>
           </object>
         </child>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Show Favorites</property>
+            <property name="action-name">win.show-favorites</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwShortcutsItem">
+            <property name="title" translatable="yes" context="shortcut window">Show Playlists</property>
+            <property name="action-name">win.show-playlists</property>
+          </object>
+        </child>
       </object>
     </child>
     <child>

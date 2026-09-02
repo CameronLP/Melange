@@ -2,6 +2,24 @@
 
 ## Urgent
 
+- [ ] **BUG**: In fullscreen, if the mouse cursor comes to rest over
+      the window (rather than moving off it or leaving entirely), the
+      toolbar/cursor never auto-hides. Reported by the user, not yet
+      investigated. The auto-hide path is `mouse_move` ->
+      `reveal_toolbar` (arms a 3s `hide_timer`) -> `hide_toolbar`
+      (window.py) - `mouse_move` only resets that timer on genuine
+      cursor movement (a `MOVEMENT_THRESHOLD_PX` guard specifically
+      added to ignore WebKit's ~60Hz synthetic motion-event replay at
+      the last real cursor position, see the comment above it), so a
+      *stationary* cursor shouldn't keep re-arming the timer and
+      `hide_toolbar` should still fire on its own. Likely candidates:
+      `mouse_over_toolbar` getting stuck `True` (set by
+      `toolbar_enter`, cleared by `toolbar_leave` - if the cursor is
+      resting somewhere that fires enter without ever firing leave,
+      `hide_toolbar` returns early every time), or the motion
+      controller/hit-testing behaving differently over the WebKit
+      surface specifically in fullscreen. Not yet reproduced or
+      root-caused in this environment.
 - [ ] Look for any remaining audio-visual latency/lag - the PCM AudioWorklet's unbounded sample queue (main.js) was found and fixed (capped at 50ms, see Done), which was the most likely source of the originally reported ~0.5s pause/resume delay. Not yet re-verified end-to-end, and there are other unexamined points earlier in the pipeline that could still add lag: GStreamer buffer/latency-time on the capture pipeline (start_system_audio, window.py), GLib.idle_add scheduling in on_audio_sample, and WebKit's evaluate_javascript IPC round-trip for each chunk.
 - [ ] Some presets still don't seem to react much to audio - real bugs affecting reactivity have already been found and fixed (mono/stereo interleaving corruption, PCM worklet chunk truncation, unbounded queue latency - see Done), but the complaint has resurfaced since. Worth checking again whether this is a genuine remaining bug or just preset-design diversity (many community MilkDrop/Butterchurn presets are deliberately more ambient/subtle than others) - not yet determined which.
 - [ ] **UNRESOLVED**: mirror window (mirror_window.py, see Done for
@@ -164,6 +182,38 @@
 
 ## Done
 
+- [x] Reorganized the hamburger menu: "_Browse Presets…" and
+      "_Queue…" (previously two flat items) are now a "Presets"
+      submenu containing Browse Presets…/Favorites…/Queue…/
+      Playlists…, matching the existing "Mirror Windows" submenu
+      pattern (window.ui). Added `win.show-favorites` and
+      `win.show-playlists` `Gio.SimpleAction`s (window.py) so those
+      two - previously only reachable from inside the preset browser
+      or Queue tab - get their own menu entries and, matching the
+      other browser tabs, shortcuts-dialog rows. Fixed
+      `show_playlists_clicked`'s signature (`self, button` ->
+      `self, action, param`) since it's now a GAction handler too,
+      not just a `Gtk.Button` "clicked" callback, and switched the
+      Queue tab's Playlists button to `action_name="win.show-playlists"`
+      instead of a manual `.connect`.
+
+      Consolidating two flat items into one submenu shifts every
+      later item in that menu section down by one, so the hardcoded
+      `mirror_windows_submenu = section2.get_item_link(5, ...)` index
+      in `window.py`'s `__init__` had to move to `4` - missing this
+      would crash at startup, since `get_item_link` on the wrong
+      index either returns `None` (making the very next line, the
+      open-mirrors-section lookup, raise `AttributeError`) or the
+      wrong submenu (making `rebuild_mirror_windows_menu` corrupt an
+      unrelated menu). Verified via a full rebuild + relaunch: app
+      starts with no errors, `org.gtk.Actions.List` on the primary
+      window shows `show-favorites`/`show-playlists` registered, and
+      D-Bus `Activate` calls for `browse-presets`, `show-favorites`,
+      `show-playlists`, `new-mirror-window`, `present-mirror`, and
+      `close-all-mirrors` all round-tripped cleanly with no
+      tracebacks in the log - confirming the Mirror Windows submenu
+      (and its now-shifted index) still resolves and rebuilds
+      correctly.
 - [x] Window title reflects a loaded playlist (`Melange (Playlist
       Name) - "preset name"`), plus a way to unload one - an
       "Unload Playlist" button (media-eject-symbolic) next to Loop/
