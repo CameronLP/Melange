@@ -1124,7 +1124,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         row = Adw.ActionRow(title=profile["name"])
 
-        load_button = Gtk.Button(icon_name="emblem-ok-symbolic")
+        load_button = Gtk.Button(icon_name="document-open-symbolic")
         load_button.add_css_class("flat")
         load_button.set_valign(Gtk.Align.CENTER)
         load_button.set_tooltip_text("Load")
