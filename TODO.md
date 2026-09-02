@@ -220,6 +220,28 @@
       report too - a mirror stuck this way now recovers as soon as
       its focus changes for any reason, not just the two narrower
       triggers.
+      Still reported as freezing even with all three triggers, plus a
+      second symptom: clicking the mirror while maximized made the
+      picture go blank/grey. The second one has a clear likely cause -
+      single-click on the mirror calls begin_move() to drag the window
+      (on_window_drag_pressed), and dragging an already-maximized
+      surface is a meaningless request that's a plausible trigger for
+      exactly this kind of corruption - fixed by skipping the move
+      attempt entirely whenever is_maximized() is true (dragging a
+      maximized window has nowhere to go anyway). For the freeze
+      itself, rather than continue guessing at the exact GTK signal
+      responsible with no way to reproduce or debug it directly in
+      this environment, added an unconditional periodic
+      refresh_paintable() (every 2s, via a timer stopped in
+      on_close_request to avoid it firing into a destroyed window) as
+      a guaranteed self-healing fallback on top of the three targeted
+      triggers - a stuck mirror now recovers within a couple of
+      seconds regardless of what actually caused it. Verified the
+      timer runs cleanly through several cycles with no errors and
+      stops correctly on close (no errors even after waiting past
+      another interval post-close). Still not independently verified
+      whether either fix resolves the actual visual symptoms on real
+      rotated-monitor hardware.
 - [x] Shuffle Queue - a Gtk.ToggleButton in the Queue dialog's header
       (win.shuffle-queue, same stateful-action pattern as Loop Queue).
       Turning it on shuffles presetQueue in place (Fisher-Yates), then
