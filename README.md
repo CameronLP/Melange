@@ -7,14 +7,15 @@ in real time, browses and loads MilkDrop (`.milk`) and native Butterchurn
 (`.json`) presets, and ships with a curated preset collection out of the
 box.
 
-<!-- Screenshot: main window with a preset running -->
-<!-- ![Melange running a preset](docs/screenshot-main.png) -->
+| | | |
+| --- | --- | --- |
+| ![Melange running a preset](screenshots/preset-1.png) | ![A different preset](screenshots/preset-2.png) | ![Hamburger menu, with the light/dark/system theme selector](screenshots/menu.png) |
 
-<!-- Screenshot: preset browser -->
-<!-- ![Preset browser](docs/screenshot-browser.png) -->
+Preferences — Audio, Playback, and Rendering tabs:
 
-<!-- Screenshot: settings menu -->
-<!-- ![Settings menu](docs/screenshot-menu.png) -->
+| | | |
+| --- | --- | --- |
+| ![Preferences - Audio tab](screenshots/preferences-audio.png) | ![Preferences - Playback tab](screenshots/preferences-playback.png) | ![Preferences - Rendering tab](screenshots/preferences-rendering.png) |
 
 ## Features
 
@@ -43,9 +44,13 @@ box.
 | `F11` | Toggle fullscreen |
 | `Ctrl+?` | Show keyboard shortcuts |
 | `Ctrl+Q` | Quit |
+| `Esc` | Exit fullscreen |
 
-Cycle interval, transition blend time, mesh size, sensitivity, and
-framerate are adjusted from sliders in the header bar's menu.
+Cycle interval, transition blend time, mesh size, sensitivity,
+framerate, render resolution scale, anti-aliasing, and (experimental)
+beat-driven cycling are all adjusted from the Preferences dialog
+(hamburger menu → Preferences), grouped into Audio/Playback/Rendering
+tabs.
 
 ## Building
 
