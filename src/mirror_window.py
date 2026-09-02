@@ -179,6 +179,19 @@ class MirrorWindow(Adw.ApplicationWindow):
             lambda *args: self.refresh_paintable()
         )
 
+        # Reported directly: maximizing frozen on the rotated monitor,
+        # then clicking a different window (so this one loses active
+        # state) unfroze it on its own - meaning an active-state change
+        # alone is enough to make GTK reconcile the broken render
+        # state, with no maximize/scale-factor change involved at all.
+        # Hooking that directly means a mirror stuck this way recovers
+        # as soon as its focus changes for any reason, rather than
+        # only on the two triggers above.
+        self.connect(
+            "notify::is-active",
+            lambda *args: self.refresh_paintable()
+        )
+
         self.connect(
             "close-request",
             self.on_close_request

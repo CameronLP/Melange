@@ -208,6 +208,18 @@
       whether it resolves the actual visual symptom, since a rotated
       secondary monitor isn't available to test against in this
       environment.
+      Follow-up report gave a better clue than the original repro:
+      clicking a different window (so the frozen mirror loses active
+      state) unfroze it on its own, with no maximize/scale-factor
+      change involved - meaning an active-state change alone is
+      enough for GTK to reconcile the broken render state. Added
+      notify::is-active as a third trigger for the same
+      refresh_paintable() reset, confirmed firing correctly (verified
+      the same way as the other two triggers, temporary debug print
+      removed after). This one should matter beyond the original
+      report too - a mirror stuck this way now recovers as soon as
+      its focus changes for any reason, not just the two narrower
+      triggers.
 - [x] Shuffle Queue - a Gtk.ToggleButton in the Queue dialog's header
       (win.shuffle-queue, same stateful-action pattern as Loop Queue).
       Turning it on shuffles presetQueue in place (Fisher-Yates), then
