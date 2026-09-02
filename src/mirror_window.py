@@ -400,6 +400,7 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         if self in self.primary.mirror_windows:
             self.primary.mirror_windows.remove(self)
+            self.primary.rebuild_mirror_windows_menu()
 
         # Returning False here (the usual "let the default handler run"
         # convention for this signal) left the window fully alive -

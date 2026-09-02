@@ -174,6 +174,29 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.rebuild_audio_source_menu()
 
+        # Same empty-in-window.ui, populated-here pattern as Audio
+        # Source above, for the same reason: the list of open mirror
+        # windows changes at runtime. Section 2 (not 0/1) - theme
+        # selector, then Audio Source, then this section - item 5
+        # within it (Load Preset, Browse Presets, Show Queue, Lock
+        # Preset, Shuffle Presets, then the Mirror Windows submenu),
+        # then section 1 *within that submenu* (New Mirror Window/
+        # Close All Mirrors are its own static section 0 - see
+        # window.ui - so rebuilding this one never touches those).
+        section2 = self.menu_button.get_menu_model().get_item_link(
+            2, Gio.MENU_LINK_SECTION
+        )
+
+        mirror_windows_submenu = section2.get_item_link(
+            5, Gio.MENU_LINK_SUBMENU
+        )
+
+        self.open_mirrors_section = mirror_windows_submenu.get_item_link(
+            1, Gio.MENU_LINK_SECTION
+        )
+
+        self.rebuild_mirror_windows_menu()
+
         threading.Thread(
             target=self.watch_audio_changes,
             daemon=True
@@ -391,6 +414,24 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         self.add_action(close_all_mirrors_action)
+
+        # One parameterized action rather than a separate action per
+        # open mirror - avoids having to register/unregister actions
+        # dynamically in step with the menu itself as mirrors come
+        # and go, since the menu items built in
+        # rebuild_mirror_windows_menu just target this one action with
+        # a different integer each.
+        present_mirror_action = Gio.SimpleAction.new(
+            "present-mirror",
+            GLib.VariantType.new("i")
+        )
+
+        present_mirror_action.connect(
+            "activate",
+            self.present_mirror_clicked
+        )
+
+        self.add_action(present_mirror_action)
 
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
@@ -787,6 +828,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         mirror.present()
 
+        self.rebuild_mirror_windows_menu()
+
     def update_mirror_titles(self):
 
         for mirror in self.mirror_windows:
@@ -803,6 +846,46 @@ class MelangeWindow(Adw.ApplicationWindow):
         # copy so that mutation doesn't skip entries.
         for mirror in list(self.mirror_windows):
             mirror.close()
+
+    def present_mirror_clicked(self, action, parameter):
+
+        mirror_number = parameter.get_int32()
+
+        for mirror in self.mirror_windows:
+
+            if mirror.mirror_number == mirror_number:
+                mirror.present()
+                return
+
+    def rebuild_mirror_windows_menu(self):
+
+        self.open_mirrors_section.remove_all()
+
+        if not self.mirror_windows:
+
+            # No bound action, so GTK shows this as an inert label
+            # rather than a clickable-but-broken item - same reasoning
+            # as leaving an Audio Source entry unbound when there's
+            # nothing to select there.
+            self.open_mirrors_section.append_item(
+                Gio.MenuItem.new("No mirror windows open", None)
+            )
+
+            return
+
+        for mirror in self.mirror_windows:
+
+            item = Gio.MenuItem.new(
+                f"Mirror {mirror.mirror_number}",
+                None
+            )
+
+            item.set_action_and_target_value(
+                "win.present-mirror",
+                GLib.Variant("i", mirror.mirror_number)
+            )
+
+            self.open_mirrors_section.append_item(item)
 
     def on_key_pressed(self, controller, keyval, keycode, state):
 

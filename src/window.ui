@@ -112,15 +112,32 @@
         <attribute name="action">win.shuffle-preset</attribute>
       </item>
 
-      <item>
-        <attribute name="label" translatable="yes">_New Mirror Window…</attribute>
-        <attribute name="action">win.new-mirror-window</attribute>
-      </item>
+      <submenu id="mirror_windows_submenu">
+        <attribute name="label" translatable="yes">Mirror Windows</attribute>
 
-      <item>
-        <attribute name="label" translatable="yes">Close All Mirrors</attribute>
-        <attribute name="action">win.close-all-mirrors</attribute>
-      </item>
+        <section>
+
+          <item>
+            <attribute name="label" translatable="yes">_New Mirror Window…</attribute>
+            <attribute name="action">win.new-mirror-window</attribute>
+          </item>
+
+          <item>
+            <attribute name="label" translatable="yes">Close All Mirrors</attribute>
+            <attribute name="action">win.close-all-mirrors</attribute>
+          </item>
+
+        </section>
+
+        <!-- Populated at runtime in window.py (rebuild_mirror_windows_menu)
+             with the currently open mirror windows, since that list
+             changes as mirrors are opened/closed. Its own section
+             (rather than folded into the one above) so rebuilding it
+             doesn't have to touch the static New/Close items. -->
+        <section id="open_mirrors_section">
+        </section>
+
+      </submenu>
 
     </section>
 

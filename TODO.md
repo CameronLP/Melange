@@ -162,6 +162,33 @@
 
 ## Done
 
+- [x] "Mirror Windows" submenu listing currently open mirrors - on
+      request, consolidated all mirror-related menu entries (New
+      Mirror Window, Close All Mirrors, and this) into one submenu
+      rather than scattering them across the flat menu plus a separate
+      dynamic submenu, so it reads as one coherent group. Structured
+      as two `<section>`s inside the one `<submenu>` (window.ui) - a
+      static one (New Mirror Window/Close All Mirrors) and a dynamic
+      one (`open_mirrors_section`, rebuilt at runtime), so rebuilding
+      the list of open mirrors never has to touch the static items.
+      Clicking a "Mirror N" entry presents that specific window, via
+      one parameterized `win.present-mirror` action (an integer
+      target - the mirror's number) rather than registering/
+      unregistering a separate action per mirror as they open and
+      close. `rebuild_mirror_windows_menu` (window.py) runs whenever
+      the list changes - both when a mirror opens
+      (`new_mirror_window_clicked`) and when one closes
+      (`MirrorWindow.on_close_request` - missed on the first pass,
+      caught by testing the close path specifically rather than only
+      the open path, and fixed before committing). Shows a plain,
+      unbound "No mirror windows open" placeholder when the list is
+      empty. Verified end-to-end via D-Bus: clean startup (would crash
+      immediately on bad menu-item-index retrieval math, same pattern
+      already used for Audio Source), opening two mirrors, presenting
+      each by number, closing them all, and opening a fresh one
+      afterward all produced no errors - including specifically
+      re-testing the close path after finding the missed rebuild call
+      there.
 - [x] Fleshed out keyboard shortcuts - most actions previously only
       reachable via the hamburger menu/header buttons now have
       accelerators too (main.py): Ctrl+O (load preset file), Ctrl+F
