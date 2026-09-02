@@ -30,7 +30,7 @@
 - [ ] Multiple visualizer windows
 - [ ] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
 - [ ] Settings profiles - save/load named sets of Preferences (sensitivity, mesh size, blend time, beat sensitivity, etc.) so you can switch between e.g. a "party" profile and a "chill" profile instead of manually re-tuning every slider
-- [ ] Reduce memory usage - not yet profiled to find where it's actually going (node_modules vendored in the repo isn't the same as runtime memory, so this needs real measurement of the running app, not just guessing)
+- [ ] Reduce memory usage further - real measurement (not guessing) already found and fixed several things: eager loading of the whole baron preset pack at startup, GC churn in the audio hot path, and some unused WebKit persistence/features (see Done). What's left is WebKitGTK's own multi-process baseline itself (UI + network + web-content processes, each a full engine instance) - measured at roughly 500-650MB total for a single window even after the above fixes. Trimming that further means either the WebSocket audio-bridge change above, or the native-rendering direction below; see that for the real lever.
 
 ### Visualizer settings ideas
 
@@ -46,6 +46,33 @@
 - [ ] D-Bus remote control - expose next/prev/lock/shuffle over D-Bus for external tools (Stream Deck, macros, scripts) to drive without focus
 - [ ] System tray / background mode - stay running and controllable when the window is closed/unfocused
 - [ ] Save/load playlists - save the current Queue (see Done, below) as a named, persisted playlist you can reload later, rather than it existing only for the current session
+- [ ] Native rendering via libprojectM instead of Butterchurn/WebKitGTK -
+      the big lever for memory, not an incremental one: WebKitGTK's
+      multi-process browser-engine architecture (UI + network +
+      web-content processes) is the dominant remaining memory cost
+      (~500-650MB baseline for one window, even after the WebKit
+      settings/persistence trimming and audio-path fixes below), and
+      no amount of settings-tuning removes that - it's the cost of
+      embedding a full browser to host one WebGL canvas. `libprojectM`
+      is a native C++ implementation of the actual MilkDrop rendering
+      algorithm; rendering into a `Gtk.GLArea` instead would eliminate
+      WebKitGTK entirely (no browser engine, no JS engine, no
+      multi-process overhead), let audio feed the renderer directly via
+      projectM's PCM API (no JSON/base64/evaluate_javascript bridge at
+      all - this would also make the "reduce audio-bridge overhead"
+      item above moot rather than solved), and load real `.milk`
+      presets natively - incidentally resolving the paused MilkDrop
+      converter compatibility problem too, since there'd be no
+      conversion step. The real cost: this is a full rewrite of the
+      rendering/audio/preset layer, not a patch - it means losing the
+      curated Butterchurn/baron JS preset packs (switching to a native
+      MilkDrop preset collection instead) and re-implementing or
+      dropping most of what's JS-side today (beat/drop detection, the
+      preset queue's JS half, the shader-repair hacks), plus writing a
+      ctypes/GObject wrapper around libprojectM's C API since no
+      official Python binding exists. Realistically multi-day work -
+      worth doing if memory footprint and native .milk compatibility
+      are worth that trade-off, not something to start speculatively.
 
 ## Paused
 
