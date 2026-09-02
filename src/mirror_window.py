@@ -97,7 +97,7 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         find_primary_button.connect(
             "clicked",
-            lambda button: self.primary.present()
+            lambda button: self.primary.bring_to_attention()
         )
 
         self.header.pack_end(find_primary_button)
@@ -254,12 +254,12 @@ class MirrorWindow(Adw.ApplicationWindow):
     def on_header_pressed(self, gesture, n_press, x, y):
 
         if n_press >= 2:
-            self.primary.present()
+            self.primary.bring_to_attention()
 
     def on_picture_pressed(self, gesture, n_press, x, y):
 
         if n_press >= 2:
-            self.primary.present()
+            self.primary.bring_to_attention()
 
     def on_picture_drag_begin(self, gesture, start_x, start_y):
 

@@ -582,6 +582,11 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.last_mouse_pos = (x, y)
 
+        self.reveal_toolbar()
+
+
+    def reveal_toolbar(self):
+
         self.toolbar_view.set_reveal_top_bars(True)
         self.set_nav_arrows_visible(True)
 
@@ -592,6 +597,42 @@ class MelangeWindow(Adw.ApplicationWindow):
             3,
             self.hide_toolbar
         )
+
+    # GTK4 dropped the old X11-style "urgency hint" entirely (Wayland
+    # deliberately restricts apps from grabbing attention that way -
+    # no OS-level window shake/flash API exists to call into here). A
+    # CSS keyframe animation on the header bar itself (see
+    # .melange-header.attention-flash in style.css) is the standard
+    # GNOME-native substitute: pulses to the accent color a few times,
+    # then the class is removed once the animation's done playing.
+    ATTENTION_FLASH_DURATION_MS = 1300
+
+    def flash_attention(self):
+
+        self.headerbar.add_css_class("attention-flash")
+
+        GLib.timeout_add(
+            self.ATTENTION_FLASH_DURATION_MS,
+            self.stop_attention_flash
+        )
+
+    def stop_attention_flash(self):
+
+        self.headerbar.remove_css_class("attention-flash")
+
+        return False
+
+    # Called by a mirror window's "Find Main Window" button/double-
+    # click - present() alone can raise/focus this window, but if the
+    # toolbar had already auto-hidden it'd come to the front looking
+    # empty, and it's easy to lose track of *which* now-focused window
+    # is actually the one you were looking for on a multi-monitor
+    # setup. Revealing the toolbar and flashing it fixes both.
+    def bring_to_attention(self):
+
+        self.present()
+        self.reveal_toolbar()
+        self.flash_attention()
 
 
     def hide_toolbar(self):

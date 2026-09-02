@@ -265,8 +265,24 @@
       in this environment, which has no way to simulate real pointer
       gestures to confirm GTK's gesture arbitration behaves as
       expected. Both double-click handlers are left in place (harmless
-      if they don't fire), but the button is now the actually-reliable
-      way to do this. The picture fills the window completely
+      if they don't fire), but the button (`bring_to_attention`, see
+      below) is now the actually-reliable way to do this.
+
+      `bring_to_attention` (MelangeWindow) does three things together:
+      present()s the window, reveals its toolbar even if it had
+      already auto-hidden (present() alone would otherwise bring an
+      empty-looking header-less window to the front), and briefly
+      flashes the header bar to the accent color a few times via a CSS
+      keyframe animation (`.melange-header.attention-flash` in
+      style.css) - GTK4 has no OS-level window-shake/"demand
+      attention" API to call into any more (Wayland deliberately
+      restricts that kind of app-initiated attention-grabbing, unlike
+      old X11 urgency hints), so a CSS-driven flash on the header
+      itself is the standard GNOME-native substitute. Verified end-to-
+      end (present + reveal + flash + the timer-based class removal
+      after) via a temporary debug action, including calling it
+      several times in rapid succession with no errors.
+      The picture fills the window completely
       (Gtk.ContentFit.FILL) even if that distorts the aspect ratio,
       rather than the default letterboxed CONTAIN. "Close All Mirrors"
       is available from the primary's menu too. A single click on the

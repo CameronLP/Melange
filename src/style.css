@@ -15,6 +15,20 @@ headerbar.melange-header image {
     color: @headerbar_fg_color;
 }
 
+/* "Find Main Window" attention flash (window.py flash_attention) -
+   pulses to the accent color a few times then settles back to the
+   normal translucent tint. GTK4 has no OS-level window-shake/urgency
+   API to call into (Wayland deliberately restricts that), so a CSS
+   keyframe animation on the header itself is the substitute. */
+@keyframes melange-attention-flash {
+    0%, 100% { background-color: alpha(@headerbar_bg_color, 0.65); }
+    50% { background-color: @theme_selected_bg_color; }
+}
+
+headerbar.melange-header.attention-flash {
+    animation: melange-attention-flash 400ms ease-in-out 3;
+}
+
 /* Circular light/dark/system swatches, matching GNOME Text Editor's
    EditorThemeSelector (src/style.css in gnome-text-editor) almost
    verbatim - a grouped GtkCheckButton's indicator subnode is actually
