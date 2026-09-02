@@ -28,6 +28,14 @@
             </child>
 
             <child type="end">
+              <object class="GtkButton" id="fullscreen_button">
+                <property name="icon-name">view-fullscreen-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Toggle Fullscreen</property>
+                <property name="action-name">win.toggle-fullscreen</property>
+              </object>
+            </child>
+
+            <child type="end">
               <object class="GtkMenuButton" id="menu_button">
                 <property name="primary">True</property>
                 <property name="icon-name">open-menu-symbolic</property>
@@ -102,11 +110,6 @@
       <item>
         <attribute name="label" translatable="yes">Shuffle Presets</attribute>
         <attribute name="action">win.shuffle-preset</attribute>
-      </item>
-
-      <item>
-        <attribute name="label" translatable="yes">Toggle Fullscreen</attribute>
-        <attribute name="action">win.toggle-fullscreen</attribute>
       </item>
 
       <item>

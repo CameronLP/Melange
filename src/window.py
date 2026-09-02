@@ -46,6 +46,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     toolbar_view = Gtk.Template.Child()
     headerbar = Gtk.Template.Child()
     menu_button = Gtk.Template.Child()
+    fullscreen_button = Gtk.Template.Child()
 
 
     def __init__(self, **kwargs):
@@ -259,6 +260,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.menu_button.connect(
             "notify::active",
             self.menu_changed
+        )
+
+        # Keeps the button's icon honest regardless of how fullscreen
+        # was entered/exited (the header button, F11, or Escape all
+        # end up here rather than needing to be updated individually).
+        self.connect(
+            "notify::fullscreened",
+            self.update_fullscreen_button_icon
         )
 
         self.build_sensitivity_control()
@@ -731,6 +740,14 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.unfullscreen()
         else:
             self.fullscreen()
+
+    def update_fullscreen_button_icon(self, window, param):
+
+        self.fullscreen_button.set_icon_name(
+            "view-restore-symbolic"
+            if self.is_fullscreen()
+            else "view-fullscreen-symbolic"
+        )
 
     def on_close_request(self, window):
 

@@ -163,6 +163,28 @@
 
 ## Done
 
+- [x] Fullscreen toggle button in the primary window's header bar
+      (window.ui, `fullscreen_button`, bound via `action-name` to the
+      existing `win.toggle-fullscreen` action - no new action needed).
+      Its icon swaps between view-fullscreen-symbolic and
+      view-restore-symbolic via a `notify::fullscreened` handler
+      (`update_fullscreen_button_icon`) on the window itself, so it
+      stays correct regardless of *how* fullscreen was entered/exited
+      (the button, F11, or Escape all end up flipping the same
+      property rather than needing individual updates). Removed the
+      "Toggle Fullscreen" hamburger menu entry as redundant now that
+      it's reachable via a visible header button as well as the
+      existing F11 shortcut - three ways to reach the same action was
+      one too many, and it was the least necessary of the three, so it
+      was the one that got cut. Verified: clean flatpak-builder
+      template validation (would fail loudly on a bad widget/property
+      reference in window.ui), clean startup, and toggling
+      win.toggle-fullscreen (the same action the button triggers)
+      in and back out via D-Bus produced no errors, confirming
+      notify::fullscreened fires and update_fullscreen_button_icon
+      runs cleanly on both transitions. Not independently verified:
+      actually clicking the button (no GUI interaction capability in
+      this environment).
 - [x] Preset-nav arrows moved to GTK - they used to be part of the
       page itself (HTML buttons drawn on the canvas, index.html/
       main.js), which meant a mirror window (showing only the
