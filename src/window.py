@@ -168,6 +168,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.playlists_dialog = None
         self.mirror_windows = []
         self.current_preset_name = None
+        self.current_playlist_name = None
 
         # Never reused, even as mirrors close - so "Mirror 2" still
         # means the same window it always did rather than shifting
@@ -513,7 +514,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         if text.startswith("PRESET_NAME:"):
             preset_name = text[len("PRESET_NAME:"):]
             self.current_preset_name = preset_name
-            self.set_title(f'Melange - "{preset_name}"')
+            self.set_title(self.build_window_title())
             self.update_mirror_titles()
             self.update_favorite_button_icon()
             return
@@ -1877,6 +1878,18 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         controls.append(playlists_button)
 
+        unload_playlist_button = Gtk.Button(
+            icon_name="media-eject-symbolic",
+            tooltip_text="Unload Playlist"
+        )
+
+        unload_playlist_button.connect(
+            "clicked",
+            self.unload_playlist_clicked
+        )
+
+        controls.append(unload_playlist_button)
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_start(12)
         box.set_margin_end(12)
@@ -2139,6 +2152,18 @@ class MelangeWindow(Adw.ApplicationWindow):
             "starred-symbolic" if starred else "non-starred-symbolic"
         )
 
+    def build_window_title(self):
+
+        title = "Melange"
+
+        if self.current_playlist_name:
+            title += f" ({self.current_playlist_name})"
+
+        if self.current_preset_name:
+            title += f' - "{self.current_preset_name}"'
+
+        return title
+
     def show_playlists_clicked(self, button):
 
         if self.playlists_dialog is None:
@@ -2295,7 +2320,30 @@ class MelangeWindow(Adw.ApplicationWindow):
         # - Python's self.preset_queue and queue_list_store update from
         # that round trip, not directly here.
         self.run_js(f"setQueue({json.dumps(playlist['presets'])});")
+
+        self.current_playlist_name = name
+        self.set_title(self.build_window_title())
+
         self.show_toast(f"Loaded playlist \"{name}\"")
+
+    def unload_playlist_clicked(self, button):
+
+        if self.current_playlist_name is None:
+            self.show_toast("No playlist loaded")
+            return
+
+        name = self.current_playlist_name
+
+        # Only clears the name association (and the title showing it)
+        # - the queue itself is left exactly as it is, same as how
+        # loading a playlist doesn't ask first before replacing
+        # whatever was queued. If you also want an empty queue,
+        # clearing it is a separate, already-existing action (removing
+        # items, or loading a different/empty playlist).
+        self.current_playlist_name = None
+        self.set_title(self.build_window_title())
+
+        self.show_toast(f"Unloaded playlist \"{name}\"")
 
     def delete_playlist_by_name(self, name):
 

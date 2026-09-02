@@ -164,6 +164,26 @@
 
 ## Done
 
+- [x] Window title reflects a loaded playlist (`Melange (Playlist
+      Name) - "preset name"`), plus a way to unload one - an
+      "Unload Playlist" button (media-eject-symbolic) next to Loop/
+      Shuffle/Playlists in the Queue tab's control row.
+      `current_playlist_name` (window.py) is set on load and cleared
+      on unload; `build_window_title` composes the full title from it
+      plus `current_preset_name`, called from both the existing
+      PRESET_NAME handler and the two playlist load/unload paths so
+      the title stays correct regardless of which one last changed.
+      Unloading only clears the name association and title - the
+      queue's actual contents are left untouched (loading a different
+      playlist, or a genuinely empty queue, are the existing ways to
+      change what's actually queued; "unload" specifically means
+      "stop calling this the X playlist," not "clear the queue").
+      Verified end-to-end via a temporary debug action exercising the
+      full save/load/unload sequence against the real running app -
+      confirmed the title reads exactly
+      `Melange (TestPL) - "$$$ Royal - Mashup (197)"` after loading and
+      correctly reverts to `Melange - "$$$ Royal - Mashup (197)"`
+      after unloading - before removing the scaffolding and test data.
 - [x] Favorite presets - a star toggle in the corner of the
       visualizer (Gtk.Overlay, same pattern as the nav arrows -
       starred-symbolic/non-starred-symbolic, reflects and toggles
