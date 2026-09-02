@@ -27,7 +27,6 @@
 - [ ] X-Y scope visualizer
 - [ ] Frequency-range control for what feeds the visualizer (so presets that only react to bass, etc. can be tuned)
 - [ ] Logo + symbolic icon polish - the scalable app icon was replaced (Bottles-based, data/icons/hicolor/scalable/apps), but the symbolic icon at data/icons/hicolor/symbolic/apps/com.cameronlp.Melange-symbolic.svg is still the original template placeholder and doesn't match
-- [ ] Multiple visualizer windows
 - [ ] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
 - [ ] Reduce memory usage further - real measurement (not guessing) already found and fixed several things: eager loading of the whole baron preset pack at startup, GC churn in the audio hot path, and some unused WebKit persistence/features (see Done). What's left is WebKitGTK's own multi-process baseline itself (UI + network + web-content processes, each a full engine instance) - measured at roughly 500-650MB total for a single window even after the above fixes. Trimming that further means either the WebSocket audio-bridge change above, or the native-rendering direction below; see that for the real lever.
 
@@ -93,6 +92,49 @@
 
 ## Done
 
+- [x] Multiple visualizer windows (mirror mode, for multi-monitor
+      setups) - "New Mirror Window…" in the primary window's menu
+      opens an additional window (mirror_window.py, `MirrorWindow`)
+      showing a true pixel mirror of the primary's webview via
+      `Gtk.WidgetPaintable.new(primary.webview)` displayed in a
+      `Gtk.Picture` - GTK's own built-in "show this live widget's
+      rendered content somewhere else" mechanism, GPU-composited by
+      GTK itself. Deliberately NOT a second Butterchurn/WebKit
+      instance (an earlier design that synced separate instances via
+      broadcast preset/settings messages was scrapped once it was
+      clear a true pixel mirror was wanted instead) - a mirror window
+      costs one extra GTK window and a Picture widget, no extra
+      WebKitWebProcess/JS engine/audio-sync bridge, so it doesn't add
+      the several-hundred-MB-per-window cost a second real WebKit
+      instance would (see the RAM investigation elsewhere in this
+      file). The primary "controls" mirrors in the simplest possible
+      sense - they have no independent state or behavior at all, only
+      ever showing whatever the primary is currently rendering.
+      Mirrors get their own F11 fullscreen + Escape-to-exit (so each
+      can be fullscreened independently once dragged to its target
+      monitor - GTK/Wayland doesn't let an app auto-position a window
+      onto a specific monitor, so that drag is a manual step, not
+      something this automates) and unregister themselves from the
+      primary's tracking list on close; closing the primary cascades
+      to close all its mirrors, since a mirror has nothing left to
+      show once the window it mirrors is gone.
+      Verified: confirmed Gtk.WidgetPaintable correctly tracks a live
+      WebKit.WebView (intrinsic size matched the source, both widgets
+      realized/mapped, no errors) via a throwaway test run through the
+      app's real launch path before building the feature on top of
+      it. End-to-end: activating win.new-mirror-window (via
+      org.gtk.Actions over D-Bus, since window-level actions turned
+      out to be introspectable that way) created exactly one new
+      window with only `toggle-fullscreen` in its action list (as
+      expected for a mirror) and, critically, did NOT spawn a second
+      WebKitWebProcess - confirming no duplicate render instance.
+      Fullscreen toggle on the mirror produced no errors. Not
+      independently verified by hand: actually dragging a mirror to a
+      second monitor and confirming the pixels visually match (no
+      screenshot capability in this environment) and manually
+      confirming the primary-closes-cascades-to-mirrors path (no
+      D-Bus-exposed way to trigger a window's close-request directly)
+      - the close-cascade logic was verified by code review only.
 - [x] Shuffle Queue - a Gtk.ToggleButton in the Queue dialog's header
       (win.shuffle-queue, same stateful-action pattern as Loop Queue).
       Turning it on shuffles presetQueue in place (Fisher-Yates), then

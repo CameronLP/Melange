@@ -109,6 +109,11 @@
         <attribute name="action">win.toggle-fullscreen</attribute>
       </item>
 
+      <item>
+        <attribute name="label" translatable="yes">_New Mirror Window…</attribute>
+        <attribute name="action">win.new-mirror-window</attribute>
+      </item>
+
     </section>
 
 

@@ -32,6 +32,7 @@ gi.require_version("Pango", "1.0")
 
 from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.webview import create_webview
+from melange.mirror_window import MirrorWindow
 
 Gst.init(None)
 
@@ -102,6 +103,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.queue_dialog = None
         self.playlists = self.load_playlists()
         self.playlists_dialog = None
+        self.mirror_windows = []
+
+        self.connect(
+            "close-request",
+            self.on_close_request
+        )
 
         self.start_system_audio()
 
@@ -310,6 +317,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         self.add_action(shuffle_queue_action)
+
+        new_mirror_window_action = Gio.SimpleAction.new("new-mirror-window", None)
+
+        new_mirror_window_action.connect(
+            "activate",
+            self.new_mirror_window_clicked
+        )
+
+        self.add_action(new_mirror_window_action)
 
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
@@ -609,6 +625,26 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.unfullscreen()
         else:
             self.fullscreen()
+
+    def on_close_request(self, window):
+
+        # Mirror windows have no purpose without this one driving them
+        # (a mirror shows this window's own webview - see
+        # mirror_window.py - so there's nothing left to display once
+        # it's gone). Closing them here rather than leaving them open
+        # avoids orphaned windows showing a frozen last frame forever.
+        for mirror in list(self.mirror_windows):
+            mirror.close()
+
+        return False
+
+    def new_mirror_window_clicked(self, action, param):
+
+        mirror = MirrorWindow(primary=self)
+
+        self.mirror_windows.append(mirror)
+
+        mirror.present()
 
     def on_key_pressed(self, controller, keyval, keycode, state):
 
