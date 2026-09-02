@@ -57,6 +57,13 @@
 
 ## In progress / not started
 
+- [ ] Add a maximize button to the primary window too - currently only
+      the mirror window has one (it needed a dedicated header button
+      since it has no native decorations either; the primary's own
+      header bar is hidden/auto-hide with no visible window controls
+      at all today, so this needs a similar explicit affordance -
+      likely a toolbar button and/or a menu entry, alongside or
+      instead of relying on a window-manager keybinding).
 - [ ] Reduce audio-bridge overhead further - `send_audio_to_webview`
       (window.py) calls `webview.evaluate_javascript()` with a fresh
       JS source string (`receiveAudio('<base64>')`) built fresh for
