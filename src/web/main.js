@@ -1034,7 +1034,7 @@ window.loadPresetByName = function(name) {
 let currentPreset = 0;
 let presetHistory = [0];
 let historyPos = 0;
-let shuffleEnabled = false;
+let shuffleEnabled = true;
 let blendSeconds = 3;
 
 

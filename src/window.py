@@ -54,6 +54,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.hide_timer = None
         self.last_mouse_pos = None
         self.mouse_over_toolbar = False
+        self.last_scroll_time = 0.0
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
@@ -173,6 +174,25 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_controller(escape_controller)
 
+        # Same CAPTURE-phase reasoning as the drag gesture and motion
+        # controller above - WebKit's own hit testing can otherwise
+        # consume the event before a default BUBBLE-phase controller
+        # on an ancestor widget ever sees it.
+        scroll_controller = Gtk.EventControllerScroll.new(
+            Gtk.EventControllerScrollFlags.VERTICAL
+        )
+
+        scroll_controller.set_propagation_phase(
+            Gtk.PropagationPhase.CAPTURE
+        )
+
+        scroll_controller.connect(
+            "scroll",
+            self.on_scroll
+        )
+
+        self.add_controller(scroll_controller)
+
 
 
 
@@ -278,7 +298,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         shuffle_action = Gio.SimpleAction.new_stateful(
             "shuffle-preset",
             None,
-            GLib.Variant("b", False)
+            GLib.Variant("b", True)
         )
 
         shuffle_action.connect(
@@ -568,6 +588,30 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return False
 
+    SCROLL_THROTTLE_SECONDS = 0.35
+
+    def on_scroll(self, controller, dx, dy):
+
+        # A single physical scroll-wheel "click" can report multiple
+        # small delta events in quick succession (especially on
+        # touchpads/high-res wheels) - without throttling, one click
+        # would fire several preset changes instead of one.
+        now = time.monotonic()
+
+        if now - self.last_scroll_time < self.SCROLL_THROTTLE_SECONDS:
+            return True
+
+        self.last_scroll_time = now
+
+        if dy < 0:
+            # Scroll up -> forward
+            self.next_preset(None)
+        elif dy > 0:
+            # Scroll down -> back
+            self.previous_preset(None)
+
+        return True
+
     def lock_preset_changed(self, action, value):
 
         action.set_state(value)
@@ -615,6 +659,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         scale.set_size_request(160, -1)
         scale.set_valign(Gtk.Align.CENTER)
         scale.set_draw_value(False)
+
+        # A small unlabeled tick at the default value, so it's visible
+        # at a glance where "default" is without needing a reset button.
+        scale.add_mark(initial, Gtk.PositionType.BOTTOM, None)
 
         def value_changed(scale):
             value = scale.get_value()
@@ -673,7 +721,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         # rather than exposing width/height separately.
         return self.build_slider_row(
             "Mesh Size",
-            8.0, 128.0, 1.0, 48.0,
+            2.0, 128.0, 1.0, 48.0,
             format_mesh_size,
             lambda value: self.run_js(f"setMeshSize({value});")
         )
@@ -732,7 +780,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         # (index.html) - only the internal render resolution changes.
         return self.build_slider_row(
             "Render Resolution Scale",
-            0.25, 2.0, 0.05, 1.0,
+            0.1, 2.0, 0.05, 1.0,
             format_render_scale,
             lambda value: self.run_js(f"setRenderScale({value});")
         )

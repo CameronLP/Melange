@@ -93,7 +93,19 @@ class MelangeApplication(Adw.Application):
 
     def do_activate(self):
 
-        window = MelangeWindow(application=self)
+        # GApplication's "activate" signal isn't guaranteed to fire
+        # only once - for a single-instance app it fires again every
+        # time the app is launched while already running (that's the
+        # point: a second launch should refocus the existing window,
+        # not start a new process or window). GNOME Shell's D-Bus
+        # app-activation path is exactly the kind of thing that can
+        # trigger it more than once for what looks like one launch -
+        # without this check, each call created a whole new window.
+        window = self.get_active_window()
+
+        if window is None:
+            window = MelangeWindow(application=self)
+
         window.present()
 
 

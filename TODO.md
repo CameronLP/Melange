@@ -54,6 +54,21 @@
 
 ## Done
 
+- [x] Fixed a double-window bug when launching from GNOME Shell -
+      `do_activate()` (main.py) unconditionally created a new
+      `MelangeWindow` every time it fired, but GApplication's
+      "activate" isn't guaranteed to fire only once (GNOME Shell's
+      D-Bus activation path can trigger it more than once for what
+      looks like a single launch). Fixed by checking
+      `get_active_window()` first and only creating a window if none
+      exists yet.
+- [x] Scroll-wheel preset navigation - scroll up for next, scroll down
+      for previous, throttled (0.35s) so one physical wheel click
+      doesn't fire multiple changes
+- [x] Shuffle enabled by default (both the JS default and the menu
+      toggle's initial state)
+- [x] Lower Mesh Size (min 8 -> 2) and Render Resolution Scale
+      (min 0.25x -> 0.1x) slider minimums
 - [x] Shuffle/random toggle for advancing presets
 - [x] Cycle time (auto-advance interval, with an "Off" state)
 - [x] Transition/blend time control
