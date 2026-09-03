@@ -542,6 +542,40 @@
       than keep guessing blind - this environment has no way to see
       the running app itself.
 
+      Pipes reported as not really reacting to frequencies despite the
+      per-band work above - the likely real cause, found on review:
+      magnitude_in_band uses the same fixed-reference scale as
+      bars_from_magnitudes (calibrated for a full-scale sine's peak-
+      bin magnitude) for every band equally, but real music's spectral
+      energy rolls off heavily with frequency - a 1000-4000Hz or
+      4000-16000Hz bin's raw magnitude sits far below a 20-250Hz one's
+      for most tracks. Without compensation, 3 of 4 pipes (everything
+      but the bass one) rarely see a high enough band_level to look
+      like they're reacting at all - not a formula bug in how
+      band_level then drives speed/turning, but the level itself
+      almost never getting there for non-bass bands. Fixed with
+      PIPES_BAND_GAINS (1.0/1.6/2.8/4.5, same index as PIPES_BANDS) -
+      a per-band multiplier compensating for that roll-off, applied in
+      update_pipes_band_levels before the ballistics/clamp.
+
+      Also strengthened the reaction itself while addressing this:
+      speed's own band_level multiplier raised (1.2 -> 2.5), tube-
+      width's pulse raised (0.8 -> 1.5), and turn probability
+      (step_pipe, previously a flat 0.25 for every pipe regardless of
+      audio) is now itself band_level-driven (0.15 base, up to +0.5 at
+      full level and Reactivity) - a pipe visibly changing direction
+      more often is a much more perceptible cue at a glance than
+      "gliding slightly faster," on top of the two that already
+      existed.
+
+      Given a Tube Width settings slider (previously a hardcoded
+      constant) and per-band Color pickers (Bass/Low Mid/High Mid/
+      Treble, previously PIPES_BAND_COLOR_HEXES was fixed) on request -
+      spawn_pipe now reads pipes_band_colors (settings-backed) instead
+      of parsing the fixed hex list directly; changing a color only
+      affects pipes spawned after that point, same as every other per-
+      pipe property.
+
       Peak Meter built first: instantaneous per-channel |sample| peak
       (no VU_GAIN, unlike the VU Meter - a peak meter exists to show
       real headroom against 0dBFS, and artificially inflating that

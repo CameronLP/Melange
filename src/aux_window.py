@@ -75,6 +75,18 @@ PIPES_BANDS = [(20, 250), (250, 1000), (1000, 4000), (4000, 16000)]
 PIPES_BAND_COLOR_HEXES = ["#e6394b", "#ffcc33", "#33cccc", "#cc66ff"]
 PIPES_BAND_FRAME_INTERVAL = 0.08
 
+# Real music's spectral energy rolls off heavily with frequency - a
+# 1000-4000Hz or 4000-16000Hz bin's raw magnitude sits far below a
+# 20-250Hz one's for most tracks, even though magnitude_in_band's own
+# scale (a fixed reference calibrated for a full-scale sine peak, same
+# idea as bars_from_magnitudes) is identical for every band. Without
+# compensation, three of four pipes barely ever see a high band_level
+# and read as "not reacting" - this is the actual thing "pipes don't
+# react to frequencies" was about, not a formula bug in how band_level
+# then drives speed/width/turning. Same index as PIPES_BANDS.
+PIPES_BAND_GAINS = [1.0, 1.6, 2.8, 4.5]
+PIPES_BAND_LABELS = ["Bass Color", "Low Mid Color", "High Mid Color", "Treble Color"]
+
 # Oscilloscope: how many past samples are kept in its rolling buffer
 # (push_audio appends into it) versus how many of those are actually
 # shown at once (the "time base" - user-adjustable, see below). The
@@ -641,6 +653,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.pipes_timer = None
         self.pipes_next_band = 0
 
+        # Settings-adjustable per-band colors - spawn_pipe reads these
+        # (not PIPES_BAND_COLOR_HEXES directly), so changing one only
+        # affects pipes spawned from then on, same as every other
+        # per-pipe property (speed, etc.) already only applies going
+        # forward rather than retroactively.
+        self.pipes_band_colors = []
+        for hex_color in PIPES_BAND_COLOR_HEXES:
+            color = Gdk.RGBA()
+            color.parse(hex_color)
+            self.pipes_band_colors.append(color)
+
         # Each active pipe's step_timer (see spawn_pipe) is its own
         # accumulator now, not a single shared one - that's what lets
         # different pipes actually move at different speeds. Per-band
@@ -681,6 +704,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # (draw_pipes) when this is on - a second, more continuous
         # reinforcement of the per-band reactivity on top of speed.
         self.pipes_pulse_width = True
+        self.pipes_base_width = 6.0
 
         # Oscilloscope-only rolling buffers (see push_audio/
         # draw_oscilloscope) - unlike self.left/self.right (replaced
@@ -1292,6 +1316,50 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             max_pipes_row.append(max_pipes_spin)
             box.append(max_pipes_row)
 
+            pipes_width_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            pipes_width_label = Gtk.Label(label="Tube Width", xalign=0, hexpand=True)
+            pipes_width_row.append(pipes_width_label)
+
+            pipes_width_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 1.0, 16.0, 0.5
+            )
+            pipes_width_scale.set_value(self.pipes_base_width)
+            pipes_width_scale.set_size_request(120, -1)
+            pipes_width_scale.set_draw_value(False)
+
+            pipes_width_scale.connect(
+                "value-changed",
+                self.on_pipes_base_width_changed
+            )
+
+            pipes_width_row.append(pipes_width_scale)
+            box.append(pipes_width_row)
+
+            for band_index, band_label in enumerate(PIPES_BAND_LABELS):
+
+                band_color_row = Gtk.Box(
+                    orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+                )
+
+                band_color_label = Gtk.Label(
+                    label=band_label, xalign=0, hexpand=True
+                )
+                band_color_row.append(band_color_label)
+
+                band_color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+                band_color_button.set_rgba(self.pipes_band_colors[band_index])
+
+                band_color_button.connect(
+                    "notify::rgba",
+                    lambda button, param, i=band_index: (
+                        self.on_pipes_band_color_changed(button, i)
+                    )
+                )
+
+                band_color_row.append(band_color_button)
+                box.append(band_color_row)
+
             pipes_speed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             pipes_speed_label = Gtk.Label(label="Speed", xalign=0, hexpand=True)
@@ -1576,6 +1644,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_pipes_max_pipes_changed(self, spin):
 
         self.pipes_max_pipes = int(spin.get_value())
+
+    def on_pipes_base_width_changed(self, scale):
+
+        self.pipes_base_width = scale.get_value()
+
+    def on_pipes_band_color_changed(self, button, band_index):
+
+        self.pipes_band_colors[band_index] = button.get_rgba()
+
+        # Only pipes spawned after this point pick up the new color -
+        # already-laid segments/currently-active pipes keep whatever
+        # color they were given at spawn, same as every other per-pipe
+        # property.
 
     def on_pipes_speed_changed(self, scale):
 
@@ -3246,13 +3327,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         band = self.pipes_next_band
         self.pipes_next_band = (self.pipes_next_band + 1) % len(PIPES_BANDS)
 
-        color = Gdk.RGBA()
-        color.parse(PIPES_BAND_COLOR_HEXES[band % len(PIPES_BAND_COLOR_HEXES)])
-
         return {
             "pos": position,
             "dir": random.choice(PIPE_DIRECTIONS),
-            "color": color,
+            "color": self.pipes_band_colors[band % len(self.pipes_band_colors)],
             "band": band,
             "step_timer": 0.0,
         }
@@ -3324,13 +3402,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         for i, (f_lo, f_hi) in enumerate(PIPES_BANDS):
 
             raw = self.magnitude_in_band(magnitudes, f_lo, f_hi)
+            raw = min(1.0, raw * PIPES_BAND_GAINS[i])
 
             # Same VU-style fast-attack/slow-release ballistics as
             # everything else audio-reactive in this file, so a pipe's
             # speed doesn't flicker with every single FFT frame.
             self.pipes_band_levels[i] = max(raw, self.pipes_band_levels[i] * 0.85)
 
-    def step_pipe(self, pipe):
+    def step_pipe(self, pipe, turn_chance=0.25):
 
         size = PIPES_GRID_SIZE
         x, y, z = pipe["pos"]
@@ -3341,14 +3420,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # turning instead, trying the perpendicular directions (never
         # reversing straight back the way it came - that would look
         # like backtracking, not a pipe growing) before falling back
-        # to continuing straight if every turn is blocked.
+        # to continuing straight if every turn is blocked. turn_chance
+        # itself is driven by that pipe's own band level (pipes_tick) -
+        # a louder band makes its pipes turn more erratically, a
+        # second and more perceptible reactive cue than speed alone
+        # (a direction change is much easier to notice at a glance
+        # than "this one's gliding slightly faster").
         perpendicular = [
             d for d in PIPE_DIRECTIONS
             if d != current_dir and d != tuple(-v for v in current_dir)
         ]
         random.shuffle(perpendicular)
 
-        if random.random() < 0.25:
+        if random.random() < turn_chance:
             candidates = perpendicular + [current_dir]
         else:
             candidates = [current_dir] + perpendicular
@@ -3436,9 +3520,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             band_level = self.pipes_band_levels[pipe["band"] % len(self.pipes_band_levels)]
 
             speed = self.pipes_speed_scale * (
-                1.0 + band_level * 1.2 * self.pipes_reactivity
+                1.0 + band_level * 2.5 * self.pipes_reactivity
             )
             pipe["step_timer"] += dt * speed
+
+            turn_chance = 0.15 + band_level * 0.5 * self.pipes_reactivity
 
             alive = True
 
@@ -3448,7 +3534,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             # 16ms regardless of how large the requested speed is.
             while alive and pipe["step_timer"] >= PIPES_BASE_STEP_INTERVAL:
                 pipe["step_timer"] -= PIPES_BASE_STEP_INTERVAL
-                alive = self.step_pipe(pipe)
+                alive = self.step_pipe(pipe, turn_chance)
 
             if alive:
                 still_active.append(pipe)
@@ -3546,7 +3632,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cr.set_line_cap(cairo.LINE_CAP_ROUND)
 
-        base_width = 6
+        base_width = self.pipes_base_width
 
         for depth, sx1, sy1, sx2, sy2, color, alpha, band in projected:
 
@@ -3557,7 +3643,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             # fast a pipe moves.
             if self.pipes_pulse_width and self.pipes_band_levels:
                 band_level = self.pipes_band_levels[band % len(self.pipes_band_levels)]
-                cr.set_line_width(base_width * (1.0 + band_level * 0.8))
+                cr.set_line_width(base_width * (1.0 + band_level * 1.5))
             else:
                 cr.set_line_width(base_width)
 
