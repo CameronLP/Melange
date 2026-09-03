@@ -55,6 +55,8 @@ class MelangeApplication(Adw.Application):
             application_id="com.cameronlp.Melange"
         )
 
+        self.main_window = None
+
         quit_action = Gio.SimpleAction.new("quit", None)
 
         quit_action.connect(
@@ -116,12 +118,34 @@ class MelangeApplication(Adw.Application):
         # app-activation path is exactly the kind of thing that can
         # trigger it more than once for what looks like one launch -
         # without this check, each call created a whole new window.
-        window = self.get_active_window()
+        #
+        # Explicitly tracked as self.main_window rather than trusting
+        # get_active_window() (the previous check here) - that returns
+        # whichever of the application's windows last had input focus,
+        # which is just as often a mirror or aux visualizer window as
+        # the real main one (both are separate Adw.ApplicationWindows
+        # registered under this same Gtk.Application). A real bug from
+        # exactly that: activating while a secondary window happened
+        # to be the active one presented *that* instead of the main
+        # window - it looked like launching the app opened some aux
+        # visualizer window on its own, when what actually happened is
+        # this just re-presented whatever window get_active_window()
+        # returned. self.main_window is cleared on "destroy" below so
+        # a later activation still creates a fresh one correctly, if
+        # the main window is ever gone but the process is somehow
+        # still alive (e.g. a secondary window left open without
+        # being tracked for the main window's own close-request
+        # cascade to find it - see MelangeWindow.on_close_request).
+        if self.main_window is None:
 
-        if window is None:
-            window = MelangeWindow(application=self)
+            self.main_window = MelangeWindow(application=self)
 
-        window.present()
+            self.main_window.connect(
+                "destroy",
+                lambda window: setattr(self, "main_window", None)
+            )
+
+        self.main_window.present()
 
 
     def show_shortcuts(self, action, param):
