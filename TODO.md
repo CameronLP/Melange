@@ -264,6 +264,63 @@
       reintroducing that same class of problem by default; still
       selectable for whoever wants the trail look enough to accept the
       cost.
+
+      A follow-up batch after that, all requested: Terrain's rainbow
+      coloring was reported as reading "mostly just blue" - traced to
+      coloring each ridge by that row's *average* level across every
+      bin, when most individual frequency bins are quiet at any given
+      moment even when the track isn't, dragging almost every row
+      toward the low (blue-violet) end of the hue sweep almost all the
+      time. Switched to that row's *peak* level instead - did *any*
+      frequency in it hit hard - which uses the rainbow's actual range
+      far better; affects the Gradient palette's look too since it's
+      the same underlying value, which is a fair trade given both were
+      using the same flawed "average" logic before.
+
+      Waterfall given real Height (waterfall_height_scale, a settings
+      slider, default 0.5) - each grid point's own Z now comes from
+      that exact cell's own level (not a per-row average, unlike
+      Terrain), turning the previously flat colored plane into a
+      genuine height-mapped mesh without losing its per-cell color/
+      texture, combining what were previously two separate ideas
+      (Terrain's height, Waterfall's per-cell color) into one surface.
+      0 keeps the original flat look.
+
+      Terrain, Waterfall, and Pipes all given Zoom (a settings slider
+      plus scroll-wheel support - Gtk.EventControllerScroll added
+      alongside each one's existing rotate-drag gesture, clamped to
+      0.4x-3.0x, reset by each kind's own Reset View button) and an
+      axes/frame option: Terrain and Waterfall get real labeled
+      reference axes (draw_3d_axes, a new shared helper - Frequency/
+      Time, plus a Level axis when there's a height dimension to show,
+      drawn fresh onto the visible frame every time rather than baked
+      into either one's cached render surface, the same reasoning
+      Vector Scope's own axis crosshair already uses); Pipes gets a
+      wireframe outline of its cube grid's own boundary instead (Show
+      Grid) - there's no single meaningful "zero" origin for a
+      literal X/Y/Z axis triple to anchor at in a walked grid the way
+      there is for a magnitude/frequency/time plot.
+
+      Pipes' colors now pulse too (Pulse Color, on by default,
+      alongside the existing Pulse Tube Width) - brighter toward
+      vivid on a loud moment for that pipe's own band, dimmer toward
+      dark on a quiet one, the same band_level already driving speed
+      and width, just applied a third way.
+
+      X-Y Scope given a Line Width setting (previously a hardcoded
+      1.0).
+- [ ] A 3D X-Y Scope and a 3D Vector Scope, requested - not yet built,
+      no design decided. The existing X-Y Scope/Vector Scope are both
+      flat 2D plots (L vs R, or the rotated Mid/Side goniometer); a
+      "3D" version presumably adds time as a third axis - e.g. a
+      ribbon/tube tracing L/R (or M/S) through recent history instead
+      of only ever showing the current instant, viewed through the
+      same rotatable oblique camera (project_3d_point) the other 3D
+      kinds already share. Would need its own rolling sample-history
+      buffer (closer to Oscilloscope's scope_left/scope_right than the
+      plain X-Y Scope/Vector Scope's own "just the current chunk"
+      approach) to have enough depth to actually show as a 3D path
+      rather than a flat instant.
 - [ ] `badShaderPattern`'s belt-and-suspenders check (main.js,
       `window.loadPresetFile`, see the bvecN &&/|| bug in Done) has a
       false-positive case, found by batch-converting a large random

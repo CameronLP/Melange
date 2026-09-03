@@ -409,6 +409,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # avoids reintroducing that exact class of problem; Rainbow is
         # still there to opt into.
         self.color_mode = "solid" if kind == "oscilloscope" else "rainbow"
+        self.xy_line_width = 1.0
 
         self.num_bars = 24
         self.decay = 0.85
@@ -565,6 +566,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             rotate_gesture.connect("drag-update", self.on_terrain_drag_update)
             self.drawing_area.add_controller(rotate_gesture)
 
+            zoom_scroll = Gtk.EventControllerScroll.new(
+                Gtk.EventControllerScrollFlags.VERTICAL
+            )
+            zoom_scroll.connect("scroll", self.on_terrain_scroll)
+            self.drawing_area.add_controller(zoom_scroll)
+
         elif kind == "waterfall":
 
             rotate_gesture = Gtk.GestureDrag()
@@ -572,6 +579,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             rotate_gesture.connect("drag-begin", self.on_waterfall_drag_begin)
             rotate_gesture.connect("drag-update", self.on_waterfall_drag_update)
             self.drawing_area.add_controller(rotate_gesture)
+
+            zoom_scroll = Gtk.EventControllerScroll.new(
+                Gtk.EventControllerScrollFlags.VERTICAL
+            )
+            zoom_scroll.connect("scroll", self.on_waterfall_scroll)
+            self.drawing_area.add_controller(zoom_scroll)
 
         elif kind == "pipes":
 
@@ -581,6 +594,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             rotate_gesture.connect("drag-update", self.on_pipes_drag_update)
             rotate_gesture.connect("drag-end", self.on_pipes_drag_end)
             self.drawing_area.add_controller(rotate_gesture)
+
+            zoom_scroll = Gtk.EventControllerScroll.new(
+                Gtk.EventControllerScrollFlags.VERTICAL
+            )
+            zoom_scroll.connect("scroll", self.on_pipes_scroll)
+            self.drawing_area.add_controller(zoom_scroll)
 
         else:
 
@@ -684,6 +703,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_rotate_start = (self.terrain_azimuth, self.terrain_elevation)
         self.terrain_surface = None
         self.terrain_dirty = True
+        self.terrain_zoom = 1.0
+        self.terrain_show_axes = False
 
         # Ridge color gradient, by that row's own loudness (see
         # render_terrain_surface) - replaces the plain single Color
@@ -720,6 +741,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.waterfall_palette = "rainbow"
         self.waterfall_textured = True
 
+        # How much magnitude also lifts each grid point in Z, on top
+        # of the per-cell coloring - 0 keeps the original perfectly
+        # flat surface; >0 turns it into a genuine height-mapped mesh
+        # (Terrain's own height idea, combined with Waterfall's per-
+        # cell color/texture rather than Terrain's per-row silhouette
+        # fill), requested directly.
+        self.waterfall_height_scale = 0.5
+        self.waterfall_zoom = 1.0
+        self.waterfall_show_axes = False
+
         # Pipes - pipes_occupied tracks every grid cell any pipe has
         # ever passed through since the last reset (collision check
         # for new moves); pipes_segments is every laid segment, drawn
@@ -733,6 +764,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.pipes_azimuth = math.radians(35)
         self.pipes_elevation = math.radians(28)
         self.pipes_rotate_start = (self.pipes_azimuth, self.pipes_elevation)
+        self.pipes_zoom = 1.0
+        self.pipes_show_grid = False
         self.pipes_max_pipes = 4
         self.pipes_speed_scale = 1.0
         self.pipes_reactivity = 1.0
@@ -793,6 +826,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # (draw_pipes) when this is on - a second, more continuous
         # reinforcement of the per-band reactivity on top of speed.
         self.pipes_pulse_width = True
+        self.pipes_pulse_color = True
         self.pipes_base_width = 6.0
 
         # Oscilloscope-only rolling buffers (see push_audio/
@@ -977,6 +1011,43 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if self.kind == "terrain":
 
+            terrain_zoom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            terrain_zoom_label = Gtk.Label(label="Zoom", xalign=0, hexpand=True)
+            terrain_zoom_row.append(terrain_zoom_label)
+
+            terrain_zoom_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.4, 3.0, 0.05
+            )
+            terrain_zoom_scale.set_value(self.terrain_zoom)
+            terrain_zoom_scale.set_size_request(120, -1)
+            terrain_zoom_scale.set_draw_value(False)
+
+            terrain_zoom_scale.connect(
+                "value-changed",
+                self.on_terrain_zoom_changed
+            )
+
+            terrain_zoom_row.append(terrain_zoom_scale)
+            box.append(terrain_zoom_row)
+
+            terrain_axes_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            terrain_axes_label = Gtk.Label(label="Show Axes", xalign=0, hexpand=True)
+            terrain_axes_row.append(terrain_axes_label)
+
+            terrain_axes_switch = Gtk.Switch()
+            terrain_axes_switch.set_active(self.terrain_show_axes)
+            terrain_axes_switch.set_valign(Gtk.Align.CENTER)
+
+            terrain_axes_switch.connect(
+                "notify::active",
+                self.on_terrain_show_axes_changed
+            )
+
+            terrain_axes_row.append(terrain_axes_switch)
+            box.append(terrain_axes_row)
+
             reset_view_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             reset_view_button = Gtk.Button(label="Reset View")
@@ -1101,6 +1172,73 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             waterfall_reset_view_row.append(waterfall_reset_view_button)
             box.append(waterfall_reset_view_row)
+
+            waterfall_height_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_height_label = Gtk.Label(
+                label="Height", xalign=0, hexpand=True
+            )
+            waterfall_height_row.append(waterfall_height_label)
+
+            waterfall_height_scale_widget = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.0, 1.5, 0.05
+            )
+            waterfall_height_scale_widget.set_value(self.waterfall_height_scale)
+            waterfall_height_scale_widget.set_size_request(120, -1)
+            waterfall_height_scale_widget.set_draw_value(False)
+
+            waterfall_height_scale_widget.connect(
+                "value-changed",
+                self.on_waterfall_height_changed
+            )
+
+            waterfall_height_row.append(waterfall_height_scale_widget)
+            box.append(waterfall_height_row)
+
+            waterfall_zoom_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_zoom_label = Gtk.Label(label="Zoom", xalign=0, hexpand=True)
+            waterfall_zoom_row.append(waterfall_zoom_label)
+
+            waterfall_zoom_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.4, 3.0, 0.05
+            )
+            waterfall_zoom_scale.set_value(self.waterfall_zoom)
+            waterfall_zoom_scale.set_size_request(120, -1)
+            waterfall_zoom_scale.set_draw_value(False)
+
+            waterfall_zoom_scale.connect(
+                "value-changed",
+                self.on_waterfall_zoom_changed
+            )
+
+            waterfall_zoom_row.append(waterfall_zoom_scale)
+            box.append(waterfall_zoom_row)
+
+            waterfall_axes_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_axes_label = Gtk.Label(
+                label="Show Axes", xalign=0, hexpand=True
+            )
+            waterfall_axes_row.append(waterfall_axes_label)
+
+            waterfall_axes_switch = Gtk.Switch()
+            waterfall_axes_switch.set_active(self.waterfall_show_axes)
+            waterfall_axes_switch.set_valign(Gtk.Align.CENTER)
+
+            waterfall_axes_switch.connect(
+                "notify::active",
+                self.on_waterfall_show_axes_changed
+            )
+
+            waterfall_axes_row.append(waterfall_axes_switch)
+            box.append(waterfall_axes_row)
 
         if self.kind in ("vu", "spectrum", "peak"):
 
@@ -1844,6 +1982,90 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             pipes_pulse_width_row.append(pipes_pulse_width_switch)
             box.append(pipes_pulse_width_row)
 
+            pipes_pulse_color_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_pulse_color_label = Gtk.Label(
+                label="Pulse Color", xalign=0, hexpand=True
+            )
+            pipes_pulse_color_row.append(pipes_pulse_color_label)
+
+            pipes_pulse_color_switch = Gtk.Switch()
+            pipes_pulse_color_switch.set_active(self.pipes_pulse_color)
+            pipes_pulse_color_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_pulse_color_switch.connect(
+                "notify::active",
+                self.on_pipes_pulse_color_changed
+            )
+
+            pipes_pulse_color_row.append(pipes_pulse_color_switch)
+            box.append(pipes_pulse_color_row)
+
+            pipes_zoom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            pipes_zoom_label = Gtk.Label(label="Zoom", xalign=0, hexpand=True)
+            pipes_zoom_row.append(pipes_zoom_label)
+
+            pipes_zoom_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.4, 3.0, 0.05
+            )
+            pipes_zoom_scale.set_value(self.pipes_zoom)
+            pipes_zoom_scale.set_size_request(120, -1)
+            pipes_zoom_scale.set_draw_value(False)
+
+            pipes_zoom_scale.connect(
+                "value-changed",
+                self.on_pipes_zoom_changed
+            )
+
+            pipes_zoom_row.append(pipes_zoom_scale)
+            box.append(pipes_zoom_row)
+
+            pipes_grid_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            pipes_grid_label = Gtk.Label(label="Show Grid", xalign=0, hexpand=True)
+            pipes_grid_row.append(pipes_grid_label)
+
+            pipes_grid_switch = Gtk.Switch()
+            pipes_grid_switch.set_active(self.pipes_show_grid)
+            pipes_grid_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_grid_switch.connect(
+                "notify::active",
+                self.on_pipes_show_grid_changed
+            )
+
+            pipes_grid_row.append(pipes_grid_switch)
+            box.append(pipes_grid_row)
+
+        if self.kind == "xy":
+
+            xy_line_width_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            xy_line_width_label = Gtk.Label(
+                label="Line Width", xalign=0, hexpand=True
+            )
+            xy_line_width_row.append(xy_line_width_label)
+
+            xy_line_width_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.5, 5.0, 0.25
+            )
+            xy_line_width_scale.set_value(self.xy_line_width)
+            xy_line_width_scale.set_size_request(120, -1)
+            xy_line_width_scale.set_draw_value(False)
+
+            xy_line_width_scale.connect(
+                "value-changed",
+                self.on_xy_line_width_changed
+            )
+
+            xy_line_width_row.append(xy_line_width_scale)
+            box.append(xy_line_width_row)
+
         popover = Gtk.Popover()
         popover.set_child(box)
 
@@ -1968,6 +2190,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.pipes_azimuth = math.radians(35)
         self.pipes_elevation = math.radians(28)
+        self.pipes_zoom = 1.0
+        self.drawing_area.queue_draw()
+
+    def on_pipes_scroll(self, controller, dx, dy):
+
+        self.pipes_zoom = max(0.4, min(3.0, self.pipes_zoom - dy * 0.1))
+        self.drawing_area.queue_draw()
+
+        return True
+
+    def on_pipes_show_grid_changed(self, switch, param):
+
+        self.pipes_show_grid = switch.get_active()
         self.drawing_area.queue_draw()
 
     def on_pipes_fade_enabled_changed(self, switch, param):
@@ -1996,6 +2231,20 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_pipes_pulse_width_changed(self, switch, param):
 
         self.pipes_pulse_width = switch.get_active()
+
+    def on_pipes_pulse_color_changed(self, switch, param):
+
+        self.pipes_pulse_color = switch.get_active()
+
+    def on_pipes_zoom_changed(self, scale):
+
+        self.pipes_zoom = scale.get_value()
+        self.drawing_area.queue_draw()
+
+    def on_xy_line_width_changed(self, scale):
+
+        self.xy_line_width = scale.get_value()
+        self.drawing_area.queue_draw()
 
     def on_pipes_drag_begin(self, gesture, start_x, start_y):
 
@@ -2078,6 +2327,20 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
+    def on_terrain_zoom_changed(self, scale):
+
+        self.terrain_zoom = scale.get_value()
+        self.terrain_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_terrain_show_axes_changed(self, switch, param):
+
+        # Axes are drawn fresh each frame, not baked into
+        # terrain_surface (see draw_terrain) - no need to mark dirty,
+        # just redraw.
+        self.terrain_show_axes = switch.get_active()
+        self.drawing_area.queue_draw()
+
     def on_waterfall_color_lo_changed(self, button, param):
 
         self.waterfall_color_lo = button.get_rgba()
@@ -2120,6 +2383,23 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.waterfall_textured = switch.get_active()
         self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_waterfall_height_changed(self, scale):
+
+        self.waterfall_height_scale = scale.get_value()
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_waterfall_zoom_changed(self, scale):
+
+        self.waterfall_zoom = scale.get_value()
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_waterfall_show_axes_changed(self, switch, param):
+
+        self.waterfall_show_axes = switch.get_active()
         self.drawing_area.queue_draw()
 
     def on_drag_begin(self, gesture, start_x, start_y):
@@ -2185,8 +2465,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.terrain_azimuth = math.radians(35)
         self.terrain_elevation = math.radians(28)
+        self.terrain_zoom = 1.0
         self.terrain_dirty = True
         self.drawing_area.queue_draw()
+
+    def on_terrain_scroll(self, controller, dx, dy):
+
+        # dy > 0 is scroll-down (zoom out), dy < 0 is scroll-up (zoom
+        # in) - the usual convention. Clamped so it can't zoom
+        # through the camera (too small) or off into empty space (too
+        # large).
+        self.terrain_zoom = max(0.4, min(3.0, self.terrain_zoom - dy * 0.1))
+        self.terrain_dirty = True
+        self.drawing_area.queue_draw()
+
+        return True
 
     def on_waterfall_drag_begin(self, gesture, start_x, start_y):
 
@@ -2214,8 +2507,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.waterfall_azimuth = math.radians(35)
         self.waterfall_elevation = math.radians(55)
+        self.waterfall_zoom = 1.0
         self.waterfall_dirty = True
         self.drawing_area.queue_draw()
+
+    def on_waterfall_scroll(self, controller, dx, dy):
+
+        self.waterfall_zoom = max(0.4, min(3.0, self.waterfall_zoom - dy * 0.1))
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
+        return True
 
     def set_overlay_controls_visible(self, visible):
 
@@ -2686,7 +2988,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if count == 0:
             return
 
-        cr.set_line_width(1.0)
+        cr.set_line_width(self.xy_line_width)
 
         if self.color_mode == "rainbow":
 
@@ -3638,7 +3940,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cx = width / 2
         cy = height * 0.6
-        scale = min(width, height) * 0.42
+        scale = min(width, height) * 0.42 * self.terrain_zoom
 
         # Every row shares one Y (time/depth) position, so its own
         # rotated depth (used for the back-to-front sort below) is the
@@ -3670,18 +3972,27 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     self.terrain_azimuth, self.terrain_elevation
                 ))
 
-            # This row's own average loudness, mapped through a color
-            # scale - a genuine elevation-style color map (quiet
-            # moments read one color, loud ones another) rather than
-            # one flat hue across every ridge regardless of how loud
-            # it was.
-            avg_level = sum(levels) / len(levels) if levels else 0.0
+            # This row's own peak (not average) loudness, mapped
+            # through a color scale - a genuine elevation-style color
+            # map (quiet moments read one color, loud ones another)
+            # rather than one flat hue across every ridge regardless
+            # of how loud it was. Peak rather than average
+            # specifically: most individual frequency bins in a row
+            # are quiet at any given moment even when the track isn't,
+            # so averaging across all of them (an earlier version of
+            # this) dragged nearly every row toward the low end of the
+            # scale almost all the time - reported from real use as
+            # "mostly just blue" once Rainbow (a full hue sweep, where
+            # low readings are all blue-violet) became the default
+            # palette. A row's peak - did *any* frequency in it hit
+            # hard - reflects what's actually happening far better.
+            peak_level = max(levels) if levels else 0.0
 
             if self.terrain_palette == "rainbow":
-                row_color = rainbow_color(avg_level)
+                row_color = rainbow_color(peak_level)
             else:
                 row_color = gradient_color(
-                    avg_level, self.terrain_color_lo, self.terrain_color_hi
+                    peak_level, self.terrain_color_lo, self.terrain_color_hi
                 )
 
             projected_rows.append((points[0][2], points, base_points, row_color))
@@ -3738,6 +4049,51 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.terrain_dirty = False
 
+    def draw_3d_axes(
+        self, cr, cx, cy, scale, azimuth, elevation, z_length, z_label
+    ):
+
+        # Fixed reference lines - always drawn fresh onto the visible
+        # frame, never baked into a cached render surface, same
+        # reasoning Vector Scope's own axis crosshair already uses:
+        # these are reference marks, not part of the signal being
+        # displayed, so there's nothing to gain from caching them and
+        # every reason not to (they'd have to be excluded/redrawn on
+        # top of the cache regardless). Origin at the "quietest,
+        # oldest, lowest-frequency" corner rather than the center, so
+        # the three axes read as a single connected corner frame
+        # instead of three lines crossing through the middle of the
+        # data.
+        origin = self.project_3d_point(-1, -1, 0, cx, cy, scale, azimuth, elevation)
+        freq_end = self.project_3d_point(1, -1, 0, cx, cy, scale, azimuth, elevation)
+        time_end = self.project_3d_point(-1, 1, 0, cx, cy, scale, azimuth, elevation)
+
+        cr.set_source_rgba(1, 1, 1, 0.4)
+        cr.set_line_width(1.2)
+
+        cr.move_to(origin[0], origin[1])
+        cr.line_to(freq_end[0], freq_end[1])
+        cr.stroke()
+
+        cr.move_to(origin[0], origin[1])
+        cr.line_to(time_end[0], time_end[1])
+        cr.stroke()
+
+        self.draw_text_label(cr, freq_end[0] - 24, freq_end[1] + 4, "Freq")
+        self.draw_text_label(cr, time_end[0] + 4, time_end[1], "Time")
+
+        if z_length > 0:
+
+            height_end = self.project_3d_point(
+                -1, -1, z_length, cx, cy, scale, azimuth, elevation
+            )
+
+            cr.move_to(origin[0], origin[1])
+            cr.line_to(height_end[0], height_end[1])
+            cr.stroke()
+
+            self.draw_text_label(cr, height_end[0] + 4, height_end[1], z_label)
+
     def draw_terrain(self, cr, width, height):
 
         self.update_terrain_rows()
@@ -3752,6 +4108,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cr.set_source_surface(self.terrain_surface, 0, 0)
         cr.paint()
+
+        if self.terrain_show_axes:
+
+            cx = width / 2
+            cy = height * 0.6
+            scale = min(width, height) * 0.42 * self.terrain_zoom
+
+            self.draw_3d_axes(
+                cr, cx, cy, scale,
+                self.terrain_azimuth, self.terrain_elevation,
+                z_length=1.0, z_label="Level"
+            )
 
     def update_waterfall_rows(self):
 
@@ -3798,14 +4166,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cx = width / 2
         cy = height * 0.55
-        scale = min(width, height) * 0.42
+        scale = min(width, height) * 0.42 * self.waterfall_zoom
 
-        # Every point sits at z=0 - a flat plane, unlike Terrain's
-        # height-extruded ridges - so magnitude reads purely as color
-        # (row_colors below) rather than elevation. One projected grid
-        # of points, shared by every quad that touches it (each
-        # interior point belongs to up to 4 neighboring cells) rather
-        # than projecting the same corner repeatedly.
+        # Each point's own Z comes from that exact (row, bin)'s own
+        # level, scaled by waterfall_height_scale - 0 (the default
+        # before this was added) keeps the original perfectly flat
+        # plane, where magnitude reads purely as color; >0 turns it
+        # into a genuine height-mapped mesh, requested directly,
+        # without losing the per-cell color/texture that made this a
+        # different thing from Terrain's own height-only ridges in the
+        # first place. One projected grid of points, shared by every
+        # quad that touches it (each interior point belongs to up to 4
+        # neighboring cells) rather than projecting the same corner
+        # repeatedly.
         if self.waterfall_palette == "rainbow":
             row_colors = [
                 [rainbow_color(level) for level in levels]
@@ -3828,12 +4201,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             y = (row_index / max(1, row_count - 1) - 0.5) * 2
             row_points = []
+            levels = rows[row_index]
 
             for bin_index in range(bin_count):
 
                 x = (bin_index / max(1, bin_count - 1) - 0.5) * 2
+                z = levels[bin_index] * self.waterfall_height_scale
                 row_points.append(self.project_3d_point(
-                    x, y, 0.0, cx, cy, scale,
+                    x, y, z, cx, cy, scale,
                     self.waterfall_azimuth, self.waterfall_elevation
                 ))
 
@@ -3923,6 +4298,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cr.set_source_surface(self.waterfall_surface, 0, 0)
         cr.paint()
+
+        if self.waterfall_show_axes:
+
+            cx = width / 2
+            cy = height * 0.55
+            scale = min(width, height) * 0.42 * self.waterfall_zoom
+
+            self.draw_3d_axes(
+                cr, cx, cy, scale,
+                self.waterfall_azimuth, self.waterfall_elevation,
+                z_length=self.waterfall_height_scale, z_label="Level"
+            )
 
     def spawn_pipe(self):
 
@@ -4186,6 +4573,46 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         return True
 
+    def draw_pipes_grid_wireframe(self, cr, cx, cy, scale):
+
+        # A wireframe outline of the play field's own boundary - the
+        # closest thing to "axes" that make sense for a cube grid a
+        # pipe walks around in, rather than literal labeled X/Y/Z
+        # lines the way Terrain/Waterfall get (there's no meaningful
+        # single "zero" origin here the way there is for a magnitude/
+        # frequency/time plot). Drawn fresh every frame, not cached -
+        # 12 edges is cheap enough not to bother.
+        corners = {}
+
+        for cx_u in (-1.0, 1.0):
+            for cy_u in (-1.0, 1.0):
+                for cz_u in (-1.0, 1.0):
+                    corners[(cx_u, cy_u, cz_u)] = self.project_3d_point(
+                        cx_u, cy_u, cz_u, cx, cy, scale,
+                        self.pipes_azimuth, self.pipes_elevation
+                    )
+
+        edges = [
+            ((-1, -1, -1), (1, -1, -1)), ((-1, 1, -1), (1, 1, -1)),
+            ((-1, -1, 1), (1, -1, 1)), ((-1, 1, 1), (1, 1, 1)),
+            ((-1, -1, -1), (-1, 1, -1)), ((1, -1, -1), (1, 1, -1)),
+            ((-1, -1, 1), (-1, 1, 1)), ((1, -1, 1), (1, 1, 1)),
+            ((-1, -1, -1), (-1, -1, 1)), ((1, -1, -1), (1, -1, 1)),
+            ((-1, 1, -1), (-1, 1, 1)), ((1, 1, -1), (1, 1, 1)),
+        ]
+
+        cr.set_source_rgba(1, 1, 1, 0.2)
+        cr.set_line_width(1.0)
+
+        for a, b in edges:
+
+            pa = corners[(float(a[0]), float(a[1]), float(a[2]))]
+            pb = corners[(float(b[0]), float(b[1]), float(b[2]))]
+
+            cr.move_to(pa[0], pa[1])
+            cr.line_to(pb[0], pb[1])
+            cr.stroke()
+
     def draw_pipes(self, cr, width, height):
 
         cr.set_source_rgb(0.03, 0.03, 0.05)
@@ -4193,10 +4620,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         size = PIPES_GRID_SIZE
         cx, cy = width / 2, height / 2
-        scale = min(width, height) * 0.38
+        scale = min(width, height) * 0.38 * self.pipes_zoom
 
         def to_unit(v):
             return (v / (size - 1) - 0.5) * 2
+
+        if self.pipes_show_grid:
+            self.draw_pipes_grid_wireframe(cr, cx, cy, scale)
 
         # The previous batch, if still fading (see reset_pipes) - its
         # own alpha decays linearly over pipes_fade_seconds, expiring
@@ -4265,13 +4695,32 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             # reinforcement of the per-band reactivity on top of speed
             # (pipes_tick), rather than the only visible cue being how
             # fast a pipe moves.
-            if self.pipes_pulse_width and self.pipes_band_levels:
-                band_level = self.pipes_band_levels[band % len(self.pipes_band_levels)]
+            band_level = (
+                self.pipes_band_levels[band % len(self.pipes_band_levels)]
+                if self.pipes_band_levels else 0.0
+            )
+
+            if self.pipes_pulse_width:
                 cr.set_line_width(base_width * (1.0 + band_level * 1.5))
             else:
                 cr.set_line_width(base_width)
 
-            cr.set_source_rgba(color.red, color.green, color.blue, 0.95 * alpha)
+            if self.pipes_pulse_color:
+                # Brighten toward vivid/white on a loud moment for
+                # that pipe's own band, darken toward dim on a quiet
+                # one - a third reactive cue (on top of speed and
+                # width) using the same band_level already computed
+                # above.
+                factor = 0.45 + 0.85 * band_level
+                cr.set_source_rgba(
+                    min(1.0, color.red * factor),
+                    min(1.0, color.green * factor),
+                    min(1.0, color.blue * factor),
+                    0.95 * alpha
+                )
+            else:
+                cr.set_source_rgba(color.red, color.green, color.blue, 0.95 * alpha)
+
             cr.move_to(sx1, sy1)
             cr.line_to(sx2, sy2)
             cr.stroke()
