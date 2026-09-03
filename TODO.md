@@ -105,6 +105,48 @@
 
 ## In progress / not started
 
+- [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
+      given its own independent Beat Rotation switch (previously
+      bundled under the same "React to Beats" toggle as the pipe-spawn
+      burst - renamed to Beat Spawn now that there are three separate
+      beat reactions), plus a new Beat Zoom - a brief decaying zoom
+      punch-in on a detected beat, added on top of the user's own Zoom
+      setting rather than overwriting it, same "decaying velocity/
+      boost, not a snap" shape as the rotation kick. Beat detection
+      itself (the rolling-average comparison) now always runs
+      regardless of which of the three switches are on, so each
+      reaction is genuinely independent rather than needing Beat Spawn
+      on as a prerequisite for the others to fire; fixed a real bug
+      surfaced by this restructuring - disabling Beat Spawn used to
+      clear pipes_energy_history, which would have reset Beat
+      Rotation/Beat Zoom's own detection state too since they now
+      share it.
+- [ ] Settings popover click-outside-to-close, reported not working a
+      second time even after the earlier CAPTURE-phase click-gesture
+      fix - added a second, different safeguard rather than repeat the
+      same approach: closes on the window itself losing active/focus
+      state (notify::is-active), which specifically covers a case the
+      click-gesture fix structurally can't - clicking over on a
+      *different* window (typically the main Melange window) while an
+      aux window's popover is open, since GTK's own popover-autohide
+      grab isn't guaranteed to dismiss across top-level surface
+      boundaries the same way under Wayland's more restrictive input
+      model. Not yet confirmed fixed - this environment still has no
+      way to click a real running popover to verify either safeguard
+      actually resolves the report.
+- [ ] Vector Scope's Color Mode now defaults to Solid rather than
+      Rainbow (Oscilloscope was already the one other exception, for a
+      different reason - see its own note) - requested; its
+      persistence-trail cloud was judged to read more clearly as one
+      coherent shape in a single color than with each dot's color
+      cycling independently.
+- [ ] VU Meter given the same lagging Peak Hold indicator Peak Meter/
+      Spectrum already have (Bars: a hold line above the fill; LED
+      Segments: an outlined segment at the hold position; Needle
+      skipped - a real analog dial doesn't have a peak-hold needle the
+      way bar/LED hardware meters have hold lines) - reuses the same
+      generic update_peak_hold/peak_hold_seconds every other hold
+      marker in this file already shares.
 - [ ] Pipes' camera rotation now reacts to beats too, on request ("x
       and y rotation" - azimuth and elevation both) - the same beat
       detector already driving the pipe-spawn burst (pipes_tick) now

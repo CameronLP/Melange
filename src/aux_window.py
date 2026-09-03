@@ -424,8 +424,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # already flagged as the likely cause of the flat Spectrogram's
         # own reported lag - defaulting Oscilloscope to Solid instead
         # avoids reintroducing that exact class of problem; Rainbow is
-        # still there to opt into.
-        self.color_mode = "solid" if kind == "oscilloscope" else "rainbow"
+        # still there to opt into. Vector Scope also defaults to Solid,
+        # on request - its persistence-trail cloud reads more clearly
+        # as one coherent shape in a single color than with each dot's
+        # color cycling independently.
+        self.color_mode = (
+            "solid" if kind in ("oscilloscope", "vectorscope") else "rainbow"
+        )
         self.xy_line_width = 1.0
 
         self.num_bars = 24
@@ -680,6 +685,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.vu_right = 0.0
         self.bar_levels = []
 
+        # VU Meter lagging peak-hold caps (Bars/LED styles - Needle
+        # has no natural "hold line" the way a real analog dial
+        # doesn't either) - same update_peak_hold/peak_hold_seconds
+        # generic logic Peak Meter and Spectrum's own hold markers
+        # already reuse.
+        self.vu_peak_hold = True
+        self.vu_hold_left = 0.0
+        self.vu_hold_right = 0.0
+        self.vu_hold_left_time = 0.0
+        self.vu_hold_right_time = 0.0
+
         # Spectrum-only lagging peak caps - a small marker above each
         # bar that jumps to a new peak instantly then falls back down
         # on its own, the classic hardware EQ "peak indicator" look.
@@ -871,9 +887,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # Decaying extra rotation velocity applied on top of
         # pipes_rotate_speed/pipes_elevation on a detected beat (see
         # pipes_tick) - "x and y rotation" reacting to beats too, on
-        # request, not just the pipes themselves.
+        # request, not just the pipes themselves. Independently
+        # toggleable from the pipe-spawn burst (pipes_beats_enabled)
+        # via its own switch.
+        self.pipes_beat_rotation_enabled = True
         self.pipes_beat_spin_boost = 0.0
         self.pipes_beat_tilt_velocity = 0.0
+
+        # Same idea, a brief zoom punch-in on a detected beat, added
+        # on top of the user's own Zoom setting (draw_pipes) rather
+        # than overwriting it - also independently toggleable.
+        self.pipes_beat_zoom_enabled = True
+        self.pipes_beat_zoom_boost = 0.0
 
         # Each pipe's tube width pulses with its own band's live level
         # (draw_pipes) when this is on - a second, more continuous
@@ -925,6 +950,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.header.add_controller(header_motion)
 
         self.connect("close-request", self.on_close_request)
+
+        # A second, different safeguard for the settings popover on
+        # top of the CAPTURE-phase click gesture above - that one only
+        # ever sees clicks landing *within this same window*, so it
+        # can't catch the case reported as still not working: clicking
+        # over on a *different* window (typically the main Melange
+        # window) while this one's settings popover is open. GTK's own
+        # popover autohide grab is not guaranteed to dismiss across
+        # top-level surface boundaries the same way under Wayland's
+        # more restrictive input model as it might under X11 - closing
+        # explicitly on this window losing active/focus state covers
+        # that case directly instead of relying on it.
+        self.connect("notify::is-active", self.on_window_active_changed)
 
         if self.kind == "dvd":
             self.dvd_timer = GLib.timeout_add(
@@ -1025,6 +1063,23 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             style_row.append(style_dropdown)
             box.append(style_row)
+
+            vu_hold_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            vu_hold_label = Gtk.Label(label="Peak Hold", xalign=0, hexpand=True)
+            vu_hold_row.append(vu_hold_label)
+
+            vu_hold_switch = Gtk.Switch()
+            vu_hold_switch.set_active(self.vu_peak_hold)
+            vu_hold_switch.set_valign(Gtk.Align.CENTER)
+
+            vu_hold_switch.connect(
+                "notify::active",
+                self.on_vu_peak_hold_changed
+            )
+
+            vu_hold_row.append(vu_hold_switch)
+            box.append(vu_hold_row)
 
             segments_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -1401,7 +1456,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             spectrum_hold_row.append(spectrum_hold_switch)
             box.append(spectrum_hold_row)
 
-        if self.kind in ("peak", "spectrum"):
+        if self.kind in ("peak", "spectrum", "vu"):
 
             hold_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -2152,7 +2207,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             pipes_beats_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             pipes_beats_label = Gtk.Label(
-                label="React to Beats", xalign=0, hexpand=True
+                label="Beat Spawn", xalign=0, hexpand=True
             )
             pipes_beats_row.append(pipes_beats_label)
 
@@ -2167,6 +2222,48 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             pipes_beats_row.append(pipes_beats_switch)
             box.append(pipes_beats_row)
+
+            pipes_beat_rotation_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_beat_rotation_label = Gtk.Label(
+                label="Beat Rotation", xalign=0, hexpand=True
+            )
+            pipes_beat_rotation_row.append(pipes_beat_rotation_label)
+
+            pipes_beat_rotation_switch = Gtk.Switch()
+            pipes_beat_rotation_switch.set_active(self.pipes_beat_rotation_enabled)
+            pipes_beat_rotation_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_beat_rotation_switch.connect(
+                "notify::active",
+                self.on_pipes_beat_rotation_enabled_changed
+            )
+
+            pipes_beat_rotation_row.append(pipes_beat_rotation_switch)
+            box.append(pipes_beat_rotation_row)
+
+            pipes_beat_zoom_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_beat_zoom_label = Gtk.Label(
+                label="Beat Zoom", xalign=0, hexpand=True
+            )
+            pipes_beat_zoom_row.append(pipes_beat_zoom_label)
+
+            pipes_beat_zoom_switch = Gtk.Switch()
+            pipes_beat_zoom_switch.set_active(self.pipes_beat_zoom_enabled)
+            pipes_beat_zoom_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_beat_zoom_switch.connect(
+                "notify::active",
+                self.on_pipes_beat_zoom_enabled_changed
+            )
+
+            pipes_beat_zoom_row.append(pipes_beat_zoom_switch)
+            box.append(pipes_beat_zoom_row)
 
             pipes_pulse_width_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
@@ -2461,10 +2558,27 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def on_pipes_beats_enabled_changed(self, switch, param):
 
+        # Doesn't touch pipes_energy_history - beat detection itself
+        # now always runs regardless of this switch (pipes_tick), so
+        # Beat Rotation/Beat Zoom's own detection wouldn't be affected
+        # anyway, and clearing it here would only needlessly reset
+        # their state too.
         self.pipes_beats_enabled = switch.get_active()
 
-        if not self.pipes_beats_enabled:
-            self.pipes_energy_history.clear()
+    def on_pipes_beat_rotation_enabled_changed(self, switch, param):
+
+        self.pipes_beat_rotation_enabled = switch.get_active()
+
+        if not self.pipes_beat_rotation_enabled:
+            self.pipes_beat_spin_boost = 0.0
+            self.pipes_beat_tilt_velocity = 0.0
+
+    def on_pipes_beat_zoom_enabled_changed(self, switch, param):
+
+        self.pipes_beat_zoom_enabled = switch.get_active()
+
+        if not self.pipes_beat_zoom_enabled:
+            self.pipes_beat_zoom_boost = 0.0
 
     def on_pipes_pulse_width_changed(self, switch, param):
 
@@ -2526,6 +2640,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.vu_style = VU_STYLE_CHOICES[index][0]
         self.drawing_area.queue_draw()
+
+    def on_vu_peak_hold_changed(self, switch, param):
+
+        self.vu_peak_hold = switch.get_active()
 
     def on_vu_segments_changed(self, spin):
 
@@ -2693,6 +2811,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_window_pressed(self, gesture, n_press, x, y):
 
         if self.settings_popover.get_visible():
+            self.settings_popover.popdown()
+
+    def on_window_active_changed(self, window, param):
+
+        if not self.is_active() and self.settings_popover.get_visible():
             self.settings_popover.popdown()
 
     def on_terrain_drag_begin(self, gesture, start_x, start_y):
@@ -3000,6 +3123,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.vu_left = max(rms_left, self.vu_left * self.decay)
         self.vu_right = max(rms_right, self.vu_right * self.decay)
 
+        if self.vu_peak_hold:
+
+            now = time.monotonic()
+
+            self.vu_hold_left, self.vu_hold_left_time = self.update_peak_hold(
+                self.vu_left, self.vu_hold_left, self.vu_hold_left_time, now
+            )
+            self.vu_hold_right, self.vu_hold_right_time = self.update_peak_hold(
+                self.vu_right, self.vu_hold_right, self.vu_hold_right_time, now
+            )
+
         margin = 12
         label_space = 16 if self.show_labels else 0
         cell_width = (width - margin * 3) / 2
@@ -3008,22 +3142,33 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         left_x = margin
         right_x = margin * 2 + cell_width
 
+        hold_left = self.vu_hold_left if self.vu_peak_hold else None
+        hold_right = self.vu_hold_right if self.vu_peak_hold else None
+
         if self.vu_style == "led":
-            self.draw_vu_led(cr, left_x, margin, cell_width, cell_height, self.vu_left)
-            self.draw_vu_led(cr, right_x, margin, cell_width, cell_height, self.vu_right)
+            self.draw_vu_led(
+                cr, left_x, margin, cell_width, cell_height, self.vu_left, hold_left
+            )
+            self.draw_vu_led(
+                cr, right_x, margin, cell_width, cell_height, self.vu_right, hold_right
+            )
         elif self.vu_style == "needle":
             self.draw_vu_needle(cr, left_x, margin, cell_width, cell_height, self.vu_left)
             self.draw_vu_needle(cr, right_x, margin, cell_width, cell_height, self.vu_right)
         else:
-            self.draw_vu_bar(cr, left_x, margin, cell_width, cell_height, self.vu_left)
-            self.draw_vu_bar(cr, right_x, margin, cell_width, cell_height, self.vu_right)
+            self.draw_vu_bar(
+                cr, left_x, margin, cell_width, cell_height, self.vu_left, hold_left
+            )
+            self.draw_vu_bar(
+                cr, right_x, margin, cell_width, cell_height, self.vu_right, hold_right
+            )
 
         if self.show_labels:
             label_y = margin + cell_height + label_space - 3
             self.draw_text_label(cr, left_x + cell_width / 2 - 3, label_y, "L")
             self.draw_text_label(cr, right_x + cell_width / 2 - 3, label_y, "R")
 
-    def draw_vu_bar(self, cr, x, y, bar_width, bar_height, level):
+    def draw_vu_bar(self, cr, x, y, bar_width, bar_height, level, hold_level=None):
 
         cr.set_source_rgba(1, 1, 1, 0.15)
         cr.rectangle(x, y, bar_width, bar_height)
@@ -3044,7 +3189,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         cr.rectangle(x, y + (bar_height - filled_height), bar_width, filled_height)
         cr.fill()
 
-    def draw_vu_led(self, cr, x, y, w, h, level):
+        if hold_level is not None:
+
+            hold_y = y + bar_height * (1.0 - min(hold_level, 1.0))
+
+            cr.set_source_rgba(*self.canvas_foreground_rgba(1.0))
+            cr.rectangle(x, hold_y - 2, bar_width, 2)
+            cr.fill()
+
+    def draw_vu_led(self, cr, x, y, w, h, level, hold_level=None):
 
         # A discrete, hardware-style meter - a fixed stack of
         # individually lit/unlit segments instead of one continuous
@@ -3056,6 +3209,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         gap = min(3, h / segments / 4)
         seg_height = (h - gap * (segments - 1)) / segments
         level = min(level, 1.0)
+
+        # The lagging hold segment - whichever segment the hold value
+        # currently falls in gets an outline instead of the normal
+        # lit/unlit fill, distinguishing "this is where the peak was"
+        # from "this is currently lit."
+        hold_segment_index = None
+
+        if hold_level is not None:
+            hold_segment_index = min(
+                segments - 1, int(min(hold_level, 1.0) * segments)
+            )
 
         for i in range(segments):
 
@@ -3078,6 +3242,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             cr.rectangle(x, seg_y, w, seg_height)
             cr.fill()
+
+            if hold_segment_index is not None and i == hold_segment_index:
+                cr.set_source_rgba(*self.canvas_foreground_rgba(0.9))
+                cr.set_line_width(1.5)
+                cr.rectangle(x + 0.75, seg_y + 0.75, w - 1.5, seg_height - 1.5)
+                cr.stroke()
 
     def draw_vu_needle(self, cr, x, y, w, h, level):
 
@@ -4930,51 +5100,68 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.update_pipes_band_levels()
 
-        # Beat-triggered burst + rotation kick: a sudden jump in
-        # overall level above its own recent rolling average (same
-        # rolling-average-comparison idea as DVD Bounce's own beat
-        # detector, kept self-contained here rather than shared) both
-        # spawns one bonus pipe beyond pipes_max_pipes (rather than
-        # waiting for the normal top-up-to-max logic to ever trigger
-        # one - a burst of extra activity right on the hit, fading
-        # back to the normal count as it eventually dies out on its
-        # own) and gives the camera a kick - a brief azimuth spin-up
-        # plus a small random elevation nudge, both just added
-        # velocity that decays back to 0 on its own (pipes_beat_spin_
-        # boost/pipes_beat_tilt_velocity below), rather than snapping
-        # to a specific angle - so it reads as "the rotation reacted
-        # to that hit" rather than a jarring jump-cut.
-        if self.pipes_beats_enabled:
+        # Beat detection itself always runs (it's cheap - a sum over a
+        # bounded deque plus a couple of comparisons) rather than being
+        # gated behind any one of the three reactions below, so each
+        # of those can be toggled independently of the others: a
+        # sudden jump in overall level above its own recent rolling
+        # average (same rolling-average-comparison idea as DVD
+        # Bounce's own beat detector, kept self-contained here rather
+        # than shared).
+        raw_level = max(rms(self.left), rms(self.right)) * VU_GAIN
+        self.pipes_energy_history.append(raw_level)
 
-            raw_level = max(rms(self.left), rms(self.right)) * VU_GAIN
-            self.pipes_energy_history.append(raw_level)
+        average = (
+            sum(self.pipes_energy_history) / len(self.pipes_energy_history)
+            if self.pipes_energy_history else 0.0
+        )
 
-            average = (
-                sum(self.pipes_energy_history) / len(self.pipes_energy_history)
-                if self.pipes_energy_history else 0.0
-            )
+        self.pipes_beat_cooldown = max(0.0, self.pipes_beat_cooldown - dt)
 
-            self.pipes_beat_cooldown = max(0.0, self.pipes_beat_cooldown - dt)
+        beat_fired = (
+            self.pipes_beat_cooldown <= 0.0
+            and raw_level > 0.08
+            and raw_level > average * self.pipes_beat_sensitivity
+        )
 
-            if (
-                self.pipes_beat_cooldown <= 0.0
-                and raw_level > 0.08
-                and raw_level > average * self.pipes_beat_sensitivity
-            ):
-                self.pipes_beat_cooldown = 0.25
+        if beat_fired:
+
+            self.pipes_beat_cooldown = 0.25
+
+            # Spawns one bonus pipe beyond pipes_max_pipes, rather
+            # than waiting for the normal top-up-to-max logic to ever
+            # trigger one - a burst of extra activity right on the
+            # hit, fading back to the normal count as it eventually
+            # dies out on its own.
+            if self.pipes_beats_enabled:
+
                 burst = self.spawn_pipe()
 
                 if burst is not None:
                     self.pipes_active.append(burst)
 
+            # A brief azimuth spin-up plus a small random elevation
+            # nudge - both just added velocity that decays back to 0
+            # on its own (pipes_beat_spin_boost/pipes_beat_tilt_
+            # velocity below), rather than snapping to a specific
+            # angle, so it reads as "the rotation reacted to that hit"
+            # rather than a jarring jump-cut.
+            if self.pipes_beat_rotation_enabled:
                 self.pipes_beat_spin_boost = 10.0
                 self.pipes_beat_tilt_velocity = random.uniform(-8.0, 8.0)
 
-        # Both decay back toward 0 every tick regardless of whether a
-        # beat just fired, same fast-decay shape as everything else
-        # audio-reactive in this file.
+            # A brief punch-in - the same decaying-value idea, added
+            # on top of the user's own Zoom setting in draw_pipes
+            # rather than overwriting it.
+            if self.pipes_beat_zoom_enabled:
+                self.pipes_beat_zoom_boost = 0.35
+
+        # All three decay back toward 0 every tick regardless of
+        # whether a beat just fired this exact tick, same fast-decay
+        # shape as everything else audio-reactive in this file.
         self.pipes_beat_spin_boost *= 0.88
         self.pipes_beat_tilt_velocity *= 0.88
+        self.pipes_beat_zoom_boost *= 0.88
 
         # Slow ambient auto-rotation (plus the beat kick above, when
         # enabled) - paused while a manual rotate drag is in progress
@@ -5101,7 +5288,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         size = PIPES_GRID_SIZE
         cx, cy = width / 2, height / 2
-        scale = min(width, height) * 0.38 * self.pipes_zoom
+        scale = (
+            min(width, height) * 0.38
+            * self.pipes_zoom * (1.0 + self.pipes_beat_zoom_boost)
+        )
 
         def to_unit(v):
             return (v / (size - 1) - 0.5) * 2
