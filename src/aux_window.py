@@ -868,6 +868,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.pipes_beat_cooldown = 0.0
         self.pipes_energy_history = deque(maxlen=60)
 
+        # Decaying extra rotation velocity applied on top of
+        # pipes_rotate_speed/pipes_elevation on a detected beat (see
+        # pipes_tick) - "x and y rotation" reacting to beats too, on
+        # request, not just the pipes themselves.
+        self.pipes_beat_spin_boost = 0.0
+        self.pipes_beat_tilt_velocity = 0.0
+
         # Each pipe's tube width pulses with its own band's live level
         # (draw_pipes) when this is on - a second, more continuous
         # reinforcement of the per-band reactivity on top of speed.
@@ -2798,6 +2805,24 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         return (0.90, 0.90, 0.91)
 
+    def canvas_foreground_rgba(self, alpha):
+
+        # The counterpart to canvas_background_rgb() for structural
+        # reference marks drawn *over* the canvas - axis lines
+        # (draw_3d_axes), the X-Y/Vector Scope crosshairs, the
+        # Oscilloscope's center line, Pipes' grid wireframe, the VU
+        # needle's dial scale. These used to be a plain translucent
+        # white regardless of theme - fine against the old always-dark
+        # canvas, but reported as unreadable once the canvas itself
+        # started following Light/Dark/Follow System (near-white lines
+        # on a near-white background). Near-black in light mode, near-
+        # white in dark mode - same alpha either way, just the
+        # opposite end of the brightness scale.
+        if Adw.StyleManager.get_default().get_dark():
+            return (1, 1, 1, alpha)
+
+        return (0, 0, 0, alpha)
+
     def set_overlay_controls_visible(self, visible):
 
         buttons = (self.settings_button,)
@@ -3077,7 +3102,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             return cx + r * math.cos(cairo_angle), cy + r * math.sin(cairo_angle)
 
         cr.set_line_width(2)
-        cr.set_source_rgba(1, 1, 1, 0.25)
+        cr.set_source_rgba(*self.canvas_foreground_rgba(0.25))
         cr.arc(cx, cy, radius, -math.pi / 2 - sweep, -math.pi / 2 + sweep)
         cr.stroke()
 
@@ -3095,7 +3120,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 x1, y1 = point_at(angle, radius * 0.8)
                 x2, y2 = point_at(angle, radius)
 
-                cr.set_source_rgba(1, 1, 1, 0.5)
+                cr.set_source_rgba(*self.canvas_foreground_rgba(0.5))
                 cr.set_line_width(1.5)
                 cr.move_to(x1, y1)
                 cr.line_to(x2, y2)
@@ -3174,7 +3199,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         hold_y = y + h * (1.0 - min(hold_frac, 1.0))
 
-        cr.set_source_rgb(1, 1, 1)
+        cr.set_source_rgba(*self.canvas_foreground_rgba(1.0))
         cr.rectangle(x, hold_y - 1, w, 2)
         cr.fill()
 
@@ -3252,7 +3277,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if self.show_labels:
 
-            cr.set_source_rgba(1, 1, 1, 0.15)
+            cr.set_source_rgba(*self.canvas_foreground_rgba(0.15))
             cr.set_line_width(1.0)
             cr.move_to(cx, 0)
             cr.line_to(cx, height)
@@ -3341,7 +3366,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         cr.rectangle(x, y, w, h)
         cr.fill()
 
-        cr.set_source_rgba(1, 1, 1, 0.15)
+        cr.set_source_rgba(*self.canvas_foreground_rgba(0.15))
         cr.move_to(x, y + h / 2)
         cr.line_to(x + w, y + h / 2)
         cr.stroke()
@@ -3535,7 +3560,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # Axis lines and labels are drawn fresh onto the visible
         # context every frame, not into vector_surface - they're fixed
         # reference marks, not part of the fading signal trail.
-        cr.set_source_rgba(1, 1, 1, 0.18)
+        cr.set_source_rgba(*self.canvas_foreground_rgba(0.18))
         cr.set_line_width(1.0)
         cr.move_to(cx, 0)
         cr.line_to(cx, height)
@@ -4090,7 +4115,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 hold_height = bar_height * min(self.spectrum_bar_holds[i], 1.0)
                 hold_y = margin + (bar_height - hold_height)
 
-                cr.set_source_rgb(1, 1, 1)
+                cr.set_source_rgba(*self.canvas_foreground_rgba(1.0))
                 cr.rectangle(x, hold_y - 2, bar_width, 2)
                 cr.fill()
 
@@ -4185,7 +4210,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 x = margin + inner_width * (i / (bar_count - 1))
                 y = margin + bar_height * (1.0 - min(hold, 1.0))
 
-                cr.set_source_rgba(1, 1, 1, 0.8)
+                cr.set_source_rgba(*self.canvas_foreground_rgba(0.8))
                 cr.rectangle(x - 3, y - 1, 6, 2)
                 cr.fill()
 
@@ -4490,7 +4515,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         freq_end = self.project_3d_point(1, -1, 0, cx, cy, scale, azimuth, elevation)
         time_end = self.project_3d_point(-1, 1, 0, cx, cy, scale, azimuth, elevation)
 
-        cr.set_source_rgba(1, 1, 1, 0.4)
+        cr.set_source_rgba(*self.canvas_foreground_rgba(0.4))
         cr.set_line_width(1.2)
 
         cr.move_to(origin[0], origin[1])
@@ -4905,26 +4930,20 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.update_pipes_band_levels()
 
-        # Slow ambient auto-rotation - paused while a manual rotate
-        # drag is in progress (on_pipes_drag_begin/end) so the two
-        # don't fight over pipes_azimuth; wrapped to stay bounded
-        # rather than growing without limit over a long-running
-        # window (math.cos/sin handle any magnitude fine either way,
-        # this is purely so the value itself doesn't grow forever).
-        if self.pipes_auto_rotate and not self.pipes_dragging:
-
-            self.pipes_azimuth = (
-                self.pipes_azimuth + math.radians(self.pipes_rotate_speed) * dt
-            ) % (2 * math.pi)
-
-        # Beat-triggered burst: a sudden jump in overall level above
-        # its own recent rolling average (same rolling-average-
-        # comparison idea as DVD Bounce's own beat detector, kept
-        # self-contained here rather than shared) spawns one bonus
-        # pipe beyond pipes_max_pipes, rather than waiting for the
-        # normal top-up-to-max logic to ever trigger one - a burst of
-        # extra activity right on the hit, which then fades back to
-        # the normal count as it eventually dies out on its own.
+        # Beat-triggered burst + rotation kick: a sudden jump in
+        # overall level above its own recent rolling average (same
+        # rolling-average-comparison idea as DVD Bounce's own beat
+        # detector, kept self-contained here rather than shared) both
+        # spawns one bonus pipe beyond pipes_max_pipes (rather than
+        # waiting for the normal top-up-to-max logic to ever trigger
+        # one - a burst of extra activity right on the hit, fading
+        # back to the normal count as it eventually dies out on its
+        # own) and gives the camera a kick - a brief azimuth spin-up
+        # plus a small random elevation nudge, both just added
+        # velocity that decays back to 0 on its own (pipes_beat_spin_
+        # boost/pipes_beat_tilt_velocity below), rather than snapping
+        # to a specific angle - so it reads as "the rotation reacted
+        # to that hit" rather than a jarring jump-cut.
         if self.pipes_beats_enabled:
 
             raw_level = max(rms(self.left), rms(self.right)) * VU_GAIN
@@ -4947,6 +4966,38 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
                 if burst is not None:
                     self.pipes_active.append(burst)
+
+                self.pipes_beat_spin_boost = 10.0
+                self.pipes_beat_tilt_velocity = random.uniform(-8.0, 8.0)
+
+        # Both decay back toward 0 every tick regardless of whether a
+        # beat just fired, same fast-decay shape as everything else
+        # audio-reactive in this file.
+        self.pipes_beat_spin_boost *= 0.88
+        self.pipes_beat_tilt_velocity *= 0.88
+
+        # Slow ambient auto-rotation (plus the beat kick above, when
+        # enabled) - paused while a manual rotate drag is in progress
+        # (on_pipes_drag_begin/end) so the two don't fight over
+        # pipes_azimuth/elevation; azimuth wrapped to stay bounded
+        # rather than growing without limit over a long-running window
+        # (math.cos/sin handle any magnitude fine either way, this is
+        # purely so the value itself doesn't grow forever).
+        if self.pipes_auto_rotate and not self.pipes_dragging:
+
+            self.pipes_azimuth = (
+                self.pipes_azimuth
+                + math.radians(self.pipes_rotate_speed + self.pipes_beat_spin_boost)
+                * dt
+            ) % (2 * math.pi)
+
+            self.pipes_elevation = max(
+                math.radians(-10), min(
+                    math.radians(85),
+                    self.pipes_elevation
+                    + math.radians(self.pipes_beat_tilt_velocity) * dt
+                )
+            )
 
         # Each pipe advances on its own accumulator now, driven by its
         # own assigned band's level (see spawn_pipe/
@@ -5031,7 +5082,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             ((-1, 1, -1), (-1, 1, 1)), ((1, 1, -1), (1, 1, 1)),
         ]
 
-        cr.set_source_rgba(1, 1, 1, 0.2)
+        cr.set_source_rgba(*self.canvas_foreground_rgba(0.2))
         cr.set_line_width(1.0)
 
         for a, b in edges:

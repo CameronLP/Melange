@@ -105,6 +105,35 @@
 
 ## In progress / not started
 
+- [ ] Pipes' camera rotation now reacts to beats too, on request ("x
+      and y rotation" - azimuth and elevation both) - the same beat
+      detector already driving the pipe-spawn burst (pipes_tick) now
+      also kicks pipes_beat_spin_boost (added straight into the
+      azimuth auto-rotate speed) and pipes_beat_tilt_velocity (a
+      random +/-8deg/sec nudge applied to elevation) on every
+      detected hit, both just decaying velocities added on top of the
+      normal auto-rotate motion rather than snapping to a specific
+      angle - reads as "the rotation reacted to that hit," not a
+      jarring jump-cut. Gated the same way plain auto-rotate already
+      is (paused during a manual drag, off entirely if Auto-Rotate
+      itself is off) rather than fighting either.
+- [ ] Fixed a real theme bug across several kinds: axis/reference
+      lines (Terrain/Waterfall's draw_3d_axes, X-Y Scope/Vector
+      Scope's crosshairs, Oscilloscope's center line, the VU needle's
+      dial scale/ticks, Pipes' grid wireframe) and peak-hold markers
+      (Peak Meter's hold line, Spectrum's per-bar hold caps in both
+      Bars and Smooth styles) were still a plain translucent white
+      regardless of theme, left over from before canvas backgrounds
+      became Light/Dark/Follow-System-reactive - reported as
+      unreadable in light mode (near-white marks on a near-white
+      background). Added canvas_foreground_rgba (the counterpart to
+      canvas_background_rgb) and switched all of the above to it -
+      near-black in light mode, near-white in dark mode, same alpha
+      either way. Decorative fills (bar/LED zone colors, the DVD
+      wordmark's own text, Tux's eyes, etc.) were deliberately left
+      alone - they're not reference marks, and several already carry
+      real meaning (VU/Peak Meter's zone colors) that theme-tinting
+      would muddy for no reason.
 - [ ] Spectrogram given a Speed setting (0.25x-4x, requested) - a
       multiplier on how often update_spectrogram_columns actually
       appends a new column (dividing SPECTROGRAM_FRAME_INTERVAL by it),
