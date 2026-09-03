@@ -105,6 +105,45 @@
 
 ## In progress / not started
 
+- [ ] A "coordinator" window to launch/toggle every visualizer type
+      from one place, including the main Butterchurn visualizer
+      itself - requested. Today, opening each of the 11 aux window
+      kinds (VU Meter/Peak Meter/X-Y Scope/Oscilloscope/Vector Scope/
+      Spectrum/Spectrogram/3D Terrain Spectrogram/3D Waterfall/DVD
+      Bounce/Pipes) means digging through the hamburger menu's
+      "Visualizer Windows" submenu one at a time - that submenu has
+      grown to 11 entries and counting, and there's no single place to
+      see or manage what's currently open across all of them at once.
+
+      Straightforward to build on existing infrastructure: each aux
+      window kind is already backed by one stateful GAction
+      (win.show-<kind>, AUX_WINDOW_ACTIONS in window.py) whose state
+      already stays correctly in sync in both directions - toggled on
+      opens the window, toggled off (or the window's own close button,
+      via aux_window_closed) flips the action back off - so a
+      coordinator dialog's rows could just be Gtk.Switches bound
+      directly via action_name="win.show-<kind>" (GTK's own built-in
+      switch-to-stateful-action binding), no new sync/glue code needed
+      for the aux-window rows themselves. A dialog in the same style
+      as the existing Preferences/Playlists ones (Adw.PreferencesDialog
+      or Adw.Dialog + Adw.PreferencesPage, one row per kind, maybe
+      grouped - meters/scopes/spectrum-family/screensaver-style) would
+      fit the app's existing patterns.
+
+      One real design question, not yet resolved: what "toggling
+      Butterchurn" from this window would actually mean, since the
+      main visualizer isn't an aux window - it's the primary
+      MelangeWindow itself, the one every aux/mirror window's own
+      close-request cascade depends on, and closing it quits the
+      whole app (on_close_request). Candidates: (a) present()/focus
+      it if it's behind other windows or minimized - the least
+      surprising option, but a weak fit for a toggle *switch*
+      specifically; (b) a genuine pause/resume of Butterchurn's own
+      rendering (freeze the WebGL canvas) while leaving the process
+      and window alive - more work (would need a JS-side pause hook
+      main.js doesn't have today) but a real toggle in the way the aux
+      windows' own switches are; (c) toggle fullscreen. Needs deciding
+      before implementation, not just picking one blind.
 - [ ] Share one FFT computation across the aux windows that each run
       their own right now, requested - Spectrum, Spectrogram, Terrain,
       Waterfall, and Pipes (aux_window.py) each keep an entirely
