@@ -105,6 +105,12 @@
 
 ## In progress / not started
 
+- [ ] Spectrogram given a Speed setting (0.25x-4x, requested) - a
+      multiplier on how often update_spectrogram_columns actually
+      appends a new column (dividing SPECTROGRAM_FRAME_INTERVAL by it),
+      not on how much history SPECTROGRAM_COLUMNS keeps - controls how
+      fast it scrolls through that history, not how much of it there
+      is.
 - [ ] **BUG**: settings popover (the gear button every aux window has)
       still reported as not closing on an outside click. A belt-and-
       suspenders fix was already attempted for this earlier (a

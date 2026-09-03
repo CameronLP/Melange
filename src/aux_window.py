@@ -434,6 +434,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.mirror_reflection = False
         self.spectrogram_vertical = False
 
+        # A multiplier on how often a new column/row actually gets
+        # appended (update_spectrogram_columns) - >1 scrolls faster
+        # (shorter effective interval), <1 slower. Doesn't touch how
+        # much history SPECTROGRAM_COLUMNS keeps, just how quickly it
+        # fills/scrolls through that history.
+        self.spectrogram_speed = 1.0
+
         # Spectrogram heatmap gradient endpoints (see gradient_color) -
         # defaults approximate the look of the fixed 4-stop thermal
         # colormap this replaced (black at silence, warm red-orange at
@@ -1564,6 +1571,30 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             vertical_row.append(vertical_switch)
             box.append(vertical_row)
 
+            spectrogram_speed_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            spectrogram_speed_label = Gtk.Label(
+                label="Speed", xalign=0, hexpand=True
+            )
+            spectrogram_speed_row.append(spectrogram_speed_label)
+
+            spectrogram_speed_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.25, 4.0, 0.05
+            )
+            spectrogram_speed_scale.set_value(self.spectrogram_speed)
+            spectrogram_speed_scale.set_size_request(120, -1)
+            spectrogram_speed_scale.set_draw_value(False)
+
+            spectrogram_speed_scale.connect(
+                "value-changed",
+                self.on_spectrogram_speed_changed
+            )
+
+            spectrogram_speed_row.append(spectrogram_speed_scale)
+            box.append(spectrogram_speed_row)
+
             palette_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             palette_label = Gtk.Label(label="Palette", xalign=0, hexpand=True)
@@ -2508,6 +2539,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.spectrogram_vertical = switch.get_active()
         self.drawing_area.queue_draw()
+
+    def on_spectrogram_speed_changed(self, scale):
+
+        self.spectrogram_speed = scale.get_value()
 
     def on_spectrogram_color_lo_changed(self, button, param):
 
@@ -4163,7 +4198,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         now = time.monotonic()
 
-        if now - self.last_spectrogram_frame_time < SPECTROGRAM_FRAME_INTERVAL:
+        if (
+            now - self.last_spectrogram_frame_time
+            < SPECTROGRAM_FRAME_INTERVAL / self.spectrogram_speed
+        ):
             return
 
         self.last_spectrogram_frame_time = now
