@@ -35,11 +35,21 @@ import cairo
 AUX_WINDOW_TITLES = {
     "vu": "VU Meter",
     "xy": "X-Y Scope",
+    "oscilloscope": "Oscilloscope",
     "spectrum": "Spectrum",
     "spectrogram": "Spectrogram",
     "peak": "Peak Meter",
     "dvd": "DVD Bounce",
 }
+
+# Oscilloscope: how many past samples are kept in its rolling buffer
+# (push_audio appends into it) versus how many of those are actually
+# shown at once (the "time base" - user-adjustable, see below). The
+# buffer needs to hold more than the display window so a trigger point
+# can be searched for with enough trailing samples left to fill a full
+# display window past it (see find_trigger_index).
+SCOPE_BUFFER_SAMPLES = 4096
+SCOPE_DEFAULT_TIME_BASE = 1024
 
 # Sentinel icon_name (not a real GTK icon-theme name) meaning "draw
 # the DVD logo" (see draw_dvd_text_logo) instead of looking anything
@@ -461,6 +471,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.spectrogram_columns = deque(maxlen=SPECTROGRAM_COLUMNS)
         self.last_spectrogram_frame_time = 0.0
 
+        # Oscilloscope-only rolling buffers (see push_audio/
+        # draw_oscilloscope) - unlike self.left/self.right (replaced
+        # wholesale every push_audio, "what's playing right now"),
+        # these accumulate across calls so a trigger point can be
+        # searched for with a full time-base window of samples after
+        # it, regardless of how small a given audio chunk is.
+        self.scope_left = deque(maxlen=SCOPE_BUFFER_SAMPLES)
+        self.scope_right = deque(maxlen=SCOPE_BUFFER_SAMPLES)
+        self.scope_time_base = SCOPE_DEFAULT_TIME_BASE
+        self.scope_trigger = True
+
         motion = Gtk.EventControllerMotion()
         motion.connect("motion", self.mouse_move)
         self.add_controller(motion)
@@ -485,7 +506,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         box.set_margin_top(10)
         box.set_margin_bottom(10)
 
-        if self.kind in ("xy", "spectrum", "vu"):
+        if self.kind in ("xy", "spectrum", "vu", "oscilloscope"):
 
             color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -615,7 +636,46 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             hold_row.append(hold_scale)
             box.append(hold_row)
 
-        if self.kind in ("spectrum", "spectrogram", "vu", "peak"):
+        if self.kind == "oscilloscope":
+
+            time_base_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            time_base_label = Gtk.Label(label="Time Base", xalign=0, hexpand=True)
+            time_base_row.append(time_base_label)
+
+            time_base_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 256, SCOPE_BUFFER_SAMPLES / 2, 32
+            )
+            time_base_scale.set_value(self.scope_time_base)
+            time_base_scale.set_size_request(120, -1)
+            time_base_scale.set_draw_value(False)
+
+            time_base_scale.connect(
+                "value-changed",
+                self.on_scope_time_base_changed
+            )
+
+            time_base_row.append(time_base_scale)
+            box.append(time_base_row)
+
+            trigger_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            trigger_label = Gtk.Label(label="Trigger", xalign=0, hexpand=True)
+            trigger_row.append(trigger_label)
+
+            trigger_switch = Gtk.Switch()
+            trigger_switch.set_active(self.scope_trigger)
+            trigger_switch.set_valign(Gtk.Align.CENTER)
+
+            trigger_switch.connect(
+                "notify::active",
+                self.on_scope_trigger_changed
+            )
+
+            trigger_row.append(trigger_switch)
+            box.append(trigger_row)
+
+        if self.kind in ("spectrum", "spectrogram", "vu", "peak", "oscilloscope"):
 
             labels_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -837,6 +897,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.peak_hold_seconds = scale.get_value()
 
+    def on_scope_time_base_changed(self, scale):
+
+        self.scope_time_base = int(scale.get_value())
+
+    def on_scope_trigger_changed(self, switch, param):
+
+        self.scope_trigger = switch.get_active()
+
     def on_icon_changed(self, dropdown, param):
 
         index = dropdown.get_selected()
@@ -994,6 +1062,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.spectrum_buffer.extend(mono)
             self.spectrum_buffer = self.spectrum_buffer[-FFT_SIZE:]
 
+        if self.kind == "oscilloscope":
+            self.scope_left.extend(left)
+            self.scope_right.extend(right)
+
         self.drawing_area.queue_draw()
 
     def on_draw(self, area, cr, width, height):
@@ -1010,6 +1082,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.render_with_optional_mirror(cr, width, height, self.render_spectrogram)
         elif self.kind == "dvd":
             self.draw_dvd_bounce(cr, width, height)
+        elif self.kind == "oscilloscope":
+            self.draw_oscilloscope(cr, width, height)
         else:
             self.draw_xy_scope(cr, width, height)
 
@@ -1377,6 +1451,103 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             cr.line_to(cx + self.left[i] * scale, cy - self.right[i] * scale)
 
         cr.stroke()
+
+    def find_scope_trigger_index(self, samples, count):
+
+        # A rising zero-crossing (negative sample immediately followed
+        # by a positive one) close to the start of the buffer - the
+        # classic oscilloscope trigger. Without this, plotting a fixed
+        # window of the rolling buffer every frame would show the
+        # waveform sliding/jittering left-right randomly frame to
+        # frame, since successive audio chunks land at an arbitrary
+        # phase relative to the display window - triggering on the
+        # same point in the waveform's own cycle each time is what
+        # makes a real scope's display look "locked" instead. Only
+        # searches within a range that still leaves a full `count`
+        # samples after the match; falls back to 0 (no trigger found -
+        # silence, noise, or content with no clean zero-crossing) so
+        # the trace still draws *something* rather than nothing.
+        n = len(samples)
+        limit = n - count
+
+        if limit <= 0:
+            return 0
+
+        search_limit = min(limit, n // 2)
+
+        for i in range(1, search_limit):
+            if samples[i - 1] <= 0.0 and samples[i] > 0.0:
+                return i
+
+        return 0
+
+    def draw_scope_trace(self, cr, x, y, w, h, samples, opacity, label):
+
+        cr.set_source_rgba(1, 1, 1, 0.06)
+        cr.rectangle(x, y, w, h)
+        cr.fill()
+
+        cr.set_source_rgba(1, 1, 1, 0.15)
+        cr.move_to(x, y + h / 2)
+        cr.line_to(x + w, y + h / 2)
+        cr.stroke()
+
+        n = len(samples)
+
+        if n < 2:
+            return
+
+        count = min(self.scope_time_base, n)
+
+        start = (
+            self.find_scope_trigger_index(samples, count)
+            if self.scope_trigger else max(0, n - count)
+        )
+
+        count = min(count, n - start)
+
+        if count < 2:
+            return
+
+        cr.set_source_rgba(
+            self.color.red, self.color.green, self.color.blue, opacity
+        )
+        cr.set_line_width(1.2)
+
+        for i in range(count):
+
+            px = x + (i / (count - 1)) * w
+            py = y + h / 2 - samples[start + i] * (h / 2 * 0.9)
+
+            if i == 0:
+                cr.move_to(px, py)
+            else:
+                cr.line_to(px, py)
+
+        cr.stroke()
+
+        if self.show_labels:
+            self.draw_text_label(cr, x + 4, y + h - 4, label)
+
+    def draw_oscilloscope(self, cr, width, height):
+
+        cr.set_source_rgb(0.04, 0.07, 0.04)
+        cr.paint()
+
+        margin = 10
+        cell_height = (height - margin * 3) / 2
+
+        left_samples = list(self.scope_left)
+        right_samples = list(self.scope_right)
+
+        self.draw_scope_trace(
+            cr, margin, margin, width - margin * 2, cell_height,
+            left_samples, 1.0, "L"
+        )
+        self.draw_scope_trace(
+            cr, margin, margin * 2 + cell_height, width - margin * 2, cell_height,
+            right_samples, 0.6, "R"
+        )
 
     def dvd_tick(self):
 

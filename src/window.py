@@ -44,6 +44,7 @@ AUX_WINDOW_ACTIONS = {
     "vu": "show-vu-meter",
     "peak": "show-peak-meter",
     "xy": "show-xy-scope",
+    "oscilloscope": "show-oscilloscope",
     "spectrum": "show-spectrum",
     "spectrogram": "show-spectrogram",
     "dvd": "show-dvd-bounce",

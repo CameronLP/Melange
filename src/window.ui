@@ -184,6 +184,11 @@
         </item>
 
         <item>
+          <attribute name="label" translatable="yes">Oscilloscope</attribute>
+          <attribute name="action">win.show-oscilloscope</attribute>
+        </item>
+
+        <item>
           <attribute name="label" translatable="yes">Spectrum</attribute>
           <attribute name="action">win.show-spectrum</attribute>
         </item>

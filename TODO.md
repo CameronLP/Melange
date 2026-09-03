@@ -374,9 +374,10 @@
          loudness are genuinely different readings professionals
          watch for different reasons (peak for clipping headroom, VU
          for perceived loudness) - not just a reskin of the VU Meter.
-      2. Oscilloscope - a scrolling time-domain waveform (amplitude vs
-         time, both channels), distinct from the existing X-Y Scope
-         (which plots L against R, not either channel against time).
+      2. Oscilloscope - built, see below. A time-domain waveform
+         (amplitude vs time, both channels), distinct from the
+         existing X-Y Scope (which plots L against R, not either
+         channel against time).
       3. Vector Scope - a proper phase-correlation "goniometer" style
          display (traditionally rotated 45° from a plain L/R X-Y
          plot, so mono material draws a vertical line and out-of-phase
@@ -438,6 +439,30 @@
       at all (each owns its own hit region), and everything else
       (drag-to-move, header buttons, the popover's own controls)
       keeps working exactly as before.
+
+      Oscilloscope built second: a real triggered scope, not just a
+      naive "plot the last N samples" scroll - a rolling 4096-sample
+      buffer per channel (push_audio appends into it, replacing
+      self.left/self.right's own "latest chunk only, wholesale-
+      replaced" approach that every other kind still uses) is searched
+      each frame for a rising zero-crossing near its start
+      (find_scope_trigger_index), and the display window is drawn
+      starting there. Without that, the fixed-size window plotted
+      every frame would slide/jitter left-right randomly, since
+      successive audio chunks land at an arbitrary phase relative to
+      whatever's being displayed - triggering on the same point in the
+      waveform's own cycle each time is what makes a real hardware
+      scope's display look "locked" instead of swimming. A Trigger
+      switch turns this off (falls back to just the most recent
+      window, useful for looking at noise/silence where there's no
+      clean crossing to lock onto), and a Time Base slider controls
+      how many samples (256 up to half the rolling buffer) are shown
+      at once - smaller reads as more zoomed-in/higher frequency
+      resolution, larger shows more waveform cycles at once. Two
+      channels stacked (L above R, R at reduced opacity, both sharing
+      the Color setting) rather than overlaid in one plot, matching
+      how the VU Meter/Peak Meter already lay out two channels side by
+      side.
 - [ ] **BUG**: some of the aux visualizer windows above (VU Meter/X-Y
       Scope/Spectrum/Spectrogram) reportedly don't react to audio in
       some cases - not yet reproduced or root-caused in this
