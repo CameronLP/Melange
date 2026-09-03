@@ -40,6 +40,7 @@ AUX_WINDOW_TITLES = {
     "spectrum": "Spectrum",
     "spectrogram": "Spectrogram",
     "terrain": "3D Terrain Spectrogram",
+    "waterfall": "3D Waterfall",
     "peak": "Peak Meter",
     "dvd": "DVD Bounce",
     "pipes": "Pipes",
@@ -195,6 +196,15 @@ SPECTROGRAM_FRAME_INTERVAL = 0.05
 TERRAIN_ROWS = 36
 TERRAIN_FRAME_INTERVAL = 0.08
 
+# 3D Waterfall - same shape of underlying data (rows of per-bin FFT
+# magnitude over time) and the same rotatable oblique camera as
+# Terrain, but a flat, per-cell colored surface (like the 2D
+# Spectrogram's own heatmap texture) instead of Terrain's height-
+# extruded ridges - magnitude reads purely as color here, not
+# elevation.
+WATERFALL_ROWS = 36
+WATERFALL_FRAME_INTERVAL = 0.08
+
 
 def gradient_color(level, lo, hi):
 
@@ -329,12 +339,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.mouse_over_toolbar = False
 
         # DVD Bounce wants more room to actually bounce around in, and
-        # the two rotatable 3D kinds read as a cramped sliver at the
+        # the rotatable 3D kinds read as a cramped sliver at the
         # default size, than the other, mostly-fixed-layout aux
         # windows.
         if kind == "dvd":
             self.set_default_size(480, 320)
-        elif kind in ("terrain", "pipes"):
+        elif kind in ("terrain", "waterfall", "pipes"):
             self.set_default_size(520, 360)
         else:
             self.set_default_size(360, 220)
@@ -493,10 +503,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # GestureDrag "shouldn't" claim a no-movement click in
         # principle - moving it here removes the ambiguity outright
         # rather than relying on gesture-arbitration internals.
-        # 3D Terrain Spectrogram and Pipes spend their drag gesture on
-        # rotating the camera instead (see on_terrain_drag_update/
-        # on_pipes_drag_update) - the two kinds here where dragging
-        # the canvas has a more useful meaning than moving the window.
+        # 3D Terrain Spectrogram, 3D Waterfall, and Pipes spend their
+        # drag gesture on rotating the camera instead (see
+        # on_terrain_drag_update/on_waterfall_drag_update/
+        # on_pipes_drag_update) - the kinds here where dragging the
+        # canvas has a more useful meaning than moving the window.
         # Each can still be moved via its header bar, same as every
         # window's native CSD behavior; it just doesn't get the drag-
         # from-anywhere convenience every other aux window kind has.
@@ -506,6 +517,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             rotate_gesture.set_button(Gdk.BUTTON_PRIMARY)
             rotate_gesture.connect("drag-begin", self.on_terrain_drag_begin)
             rotate_gesture.connect("drag-update", self.on_terrain_drag_update)
+            self.drawing_area.add_controller(rotate_gesture)
+
+        elif kind == "waterfall":
+
+            rotate_gesture = Gtk.GestureDrag()
+            rotate_gesture.set_button(Gdk.BUTTON_PRIMARY)
+            rotate_gesture.connect("drag-begin", self.on_waterfall_drag_begin)
+            rotate_gesture.connect("drag-update", self.on_waterfall_drag_update)
             self.drawing_area.add_controller(rotate_gesture)
 
         elif kind == "pipes":
@@ -630,6 +649,27 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_color_lo.parse("#0a1a4d")
         self.terrain_color_hi = Gdk.RGBA()
         self.terrain_color_hi.parse("#ff9933")
+
+        # 3D Waterfall - same rows-of-FFT-magnitude/camera-rotation/
+        # render-cache shape as Terrain above (see waterfall_surface/
+        # waterfall_dirty in draw_waterfall), just flat rather than
+        # height-extruded. Own Low/High gradient (not shared with
+        # Terrain's or the flat Spectrogram's) since it's a genuinely
+        # separate window/instance whenever more than one of these is
+        # open at once.
+        self.waterfall_rows = deque(maxlen=WATERFALL_ROWS)
+        self.last_waterfall_frame_time = 0.0
+        self.waterfall_azimuth = math.radians(35)
+        self.waterfall_elevation = math.radians(55)
+        self.waterfall_rotate_start = (
+            self.waterfall_azimuth, self.waterfall_elevation
+        )
+        self.waterfall_surface = None
+        self.waterfall_dirty = True
+        self.waterfall_color_lo = Gdk.RGBA()
+        self.waterfall_color_lo.parse("#000000")
+        self.waterfall_color_hi = Gdk.RGBA()
+        self.waterfall_color_hi.parse("#ff3300")
 
         # Pipes - pipes_occupied tracks every grid cell any pipe has
         # ever passed through since the last reset (collision check
@@ -833,7 +873,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             segments_row.append(segments_spin)
             box.append(segments_row)
 
-        if self.kind in ("spectrum", "spectrogram", "terrain"):
+        if self.kind in ("spectrum", "spectrogram", "terrain", "waterfall"):
 
             bars_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -842,6 +882,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     "spectrum": "Bars",
                     "spectrogram": "Frequency Bins",
                     "terrain": "Ridge Points",
+                    "waterfall": "Frequency Bins",
                 }[self.kind],
                 xalign=0,
                 hexpand=True
@@ -873,6 +914,67 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             reset_view_row.append(reset_view_button)
             box.append(reset_view_row)
+
+        if self.kind == "waterfall":
+
+            waterfall_lo_color_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_lo_color_label = Gtk.Label(
+                label="Low Color", xalign=0, hexpand=True
+            )
+            waterfall_lo_color_row.append(waterfall_lo_color_label)
+
+            waterfall_lo_color_button = Gtk.ColorDialogButton(
+                dialog=Gtk.ColorDialog()
+            )
+            waterfall_lo_color_button.set_rgba(self.waterfall_color_lo)
+
+            waterfall_lo_color_button.connect(
+                "notify::rgba",
+                self.on_waterfall_color_lo_changed
+            )
+
+            waterfall_lo_color_row.append(waterfall_lo_color_button)
+            box.append(waterfall_lo_color_row)
+
+            waterfall_hi_color_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_hi_color_label = Gtk.Label(
+                label="High Color", xalign=0, hexpand=True
+            )
+            waterfall_hi_color_row.append(waterfall_hi_color_label)
+
+            waterfall_hi_color_button = Gtk.ColorDialogButton(
+                dialog=Gtk.ColorDialog()
+            )
+            waterfall_hi_color_button.set_rgba(self.waterfall_color_hi)
+
+            waterfall_hi_color_button.connect(
+                "notify::rgba",
+                self.on_waterfall_color_hi_changed
+            )
+
+            waterfall_hi_color_row.append(waterfall_hi_color_button)
+            box.append(waterfall_hi_color_row)
+
+            waterfall_reset_view_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_reset_view_button = Gtk.Button(label="Reset View")
+            waterfall_reset_view_button.set_hexpand(True)
+
+            waterfall_reset_view_button.connect(
+                "clicked",
+                self.on_waterfall_reset_view_clicked
+            )
+
+            waterfall_reset_view_row.append(waterfall_reset_view_button)
+            box.append(waterfall_reset_view_row)
 
         if self.kind in ("vu", "spectrum", "peak"):
 
@@ -1575,6 +1677,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.num_bars = int(spin.get_value())
         self.terrain_dirty = True
+        self.waterfall_dirty = True
         self.drawing_area.queue_draw()
 
     def on_decay_changed(self, scale):
@@ -1785,6 +1888,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
+    def on_waterfall_color_lo_changed(self, button, param):
+
+        self.waterfall_color_lo = button.get_rgba()
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_waterfall_color_hi_changed(self, button, param):
+
+        self.waterfall_color_hi = button.get_rgba()
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
     def on_drag_begin(self, gesture, start_x, start_y):
 
         # Dragging a maximized surface is meaningless (nowhere to move
@@ -1851,6 +1966,35 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
+    def on_waterfall_drag_begin(self, gesture, start_x, start_y):
+
+        self.waterfall_rotate_start = (
+            self.waterfall_azimuth, self.waterfall_elevation
+        )
+
+    def on_waterfall_drag_update(self, gesture, offset_x, offset_y):
+
+        start_azimuth, start_elevation = self.waterfall_rotate_start
+
+        self.waterfall_azimuth = start_azimuth - math.radians(offset_x * 0.3)
+
+        self.waterfall_elevation = max(
+            math.radians(10), min(
+                math.radians(85),
+                start_elevation - math.radians(offset_y * 0.3)
+            )
+        )
+
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_waterfall_reset_view_clicked(self, button):
+
+        self.waterfall_azimuth = math.radians(35)
+        self.waterfall_elevation = math.radians(55)
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
     def set_overlay_controls_visible(self, visible):
 
         buttons = (self.settings_button,)
@@ -1906,7 +2050,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.left = left
         self.right = right
 
-        if self.kind in ("spectrum", "spectrogram", "terrain", "pipes"):
+        if self.kind in ("spectrum", "spectrogram", "terrain", "waterfall", "pipes"):
 
             mono = [(l + r) / 2.0 for l, r in zip(left, right)]
 
@@ -1939,6 +2083,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.draw_vector_scope(cr, width, height)
         elif self.kind == "terrain":
             self.draw_terrain(cr, width, height)
+        elif self.kind == "waterfall":
+            self.draw_waterfall(cr, width, height)
         elif self.kind == "pipes":
             self.draw_pipes(cr, width, height)
         else:
@@ -3298,6 +3444,150 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.render_terrain_surface(width, height)
 
         cr.set_source_surface(self.terrain_surface, 0, 0)
+        cr.paint()
+
+    def update_waterfall_rows(self):
+
+        bin_count = self.num_bars
+
+        if len(self.spectrum_buffer) != FFT_SIZE:
+            return
+
+        now = time.monotonic()
+
+        if now - self.last_waterfall_frame_time < WATERFALL_FRAME_INTERVAL:
+            return
+
+        self.last_waterfall_frame_time = now
+
+        windowed = [
+            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
+        ]
+
+        spectrum = fft(windowed)
+        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+
+        self.waterfall_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
+        self.waterfall_dirty = True
+
+    def render_waterfall_surface(self, width, height):
+
+        self.waterfall_surface = cairo.ImageSurface(
+            cairo.FORMAT_ARGB32, max(1, width), max(1, height)
+        )
+        cr = cairo.Context(self.waterfall_surface)
+
+        cr.set_source_rgb(0.03, 0.03, 0.05)
+        cr.paint()
+
+        rows = list(self.waterfall_rows)
+
+        if len(rows) < 2:
+            self.waterfall_dirty = False
+            return
+
+        row_count = len(rows)
+        bin_count = len(rows[0])
+
+        cx = width / 2
+        cy = height * 0.55
+        scale = min(width, height) * 0.42
+
+        # Every point sits at z=0 - a flat plane, unlike Terrain's
+        # height-extruded ridges - so magnitude reads purely as color
+        # (row_colors below) rather than elevation. One projected grid
+        # of points, shared by every quad that touches it (each
+        # interior point belongs to up to 4 neighboring cells) rather
+        # than projecting the same corner repeatedly.
+        row_colors = [
+            [
+                gradient_color(
+                    level, self.waterfall_color_lo, self.waterfall_color_hi
+                )
+                for level in levels
+            ]
+            for levels in rows
+        ]
+
+        grid = []
+
+        for row_index in range(row_count):
+
+            y = (row_index / max(1, row_count - 1) - 0.5) * 2
+            row_points = []
+
+            for bin_index in range(bin_count):
+
+                x = (bin_index / max(1, bin_count - 1) - 0.5) * 2
+                row_points.append(self.project_3d_point(
+                    x, y, 0.0, cx, cy, scale,
+                    self.waterfall_azimuth, self.waterfall_elevation
+                ))
+
+            grid.append(row_points)
+
+        # One quad per grid cell, each flat-shaded with its own
+        # (row, bin) cell's own color - the same per-cell block-color
+        # look the flat 2D Spectrogram already has, just projected
+        # through a rotatable oblique camera instead of drawn straight
+        # onto the canvas. Depth-sorted per quad (not per row, unlike
+        # Terrain, since a flat plane's own rotation can put a far
+        # corner of one row closer to the camera than a near corner of
+        # another once azimuth departs from 0) - painter's algorithm
+        # again, same reasoning as Terrain/Pipes.
+        quads = []
+
+        for row_index in range(row_count - 1):
+
+            for bin_index in range(bin_count - 1):
+
+                p1 = grid[row_index][bin_index]
+                p2 = grid[row_index][bin_index + 1]
+                p3 = grid[row_index + 1][bin_index + 1]
+                p4 = grid[row_index + 1][bin_index]
+
+                depth = (p1[2] + p2[2] + p3[2] + p4[2]) / 4
+                color = row_colors[row_index][bin_index]
+
+                quads.append((depth, p1, p2, p3, p4, color))
+
+        quads.sort(key=lambda entry: entry[0])
+
+        # No antialiasing for the cell fills specifically - adjacent
+        # quads share exact corner coordinates, but AA'd edges between
+        # differently-colored neighbors still leave faint seams
+        # otherwise; crisp edges read as one continuous tiled surface
+        # instead.
+        cr.set_antialias(cairo.ANTIALIAS_NONE)
+
+        for depth, p1, p2, p3, p4, color in quads:
+
+            cr.move_to(p1[0], p1[1])
+            cr.line_to(p2[0], p2[1])
+            cr.line_to(p3[0], p3[1])
+            cr.line_to(p4[0], p4[1])
+            cr.close_path()
+
+            cr.set_source_rgb(*color)
+            cr.fill()
+
+        cr.set_antialias(cairo.ANTIALIAS_DEFAULT)
+
+        self.waterfall_dirty = False
+
+    def draw_waterfall(self, cr, width, height):
+
+        self.update_waterfall_rows()
+
+        if (
+            self.waterfall_dirty
+            or self.waterfall_surface is None
+            or self.waterfall_surface.get_width() != width
+            or self.waterfall_surface.get_height() != height
+        ):
+            self.render_waterfall_surface(width, height)
+
+        cr.set_source_surface(self.waterfall_surface, 0, 0)
         cr.paint()
 
     def spawn_pipe(self):

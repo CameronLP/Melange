@@ -49,6 +49,7 @@ AUX_WINDOW_ACTIONS = {
     "spectrum": "show-spectrum",
     "spectrogram": "show-spectrogram",
     "terrain": "show-terrain",
+    "waterfall": "show-waterfall",
     "dvd": "show-dvd-bounce",
     "pipes": "show-pipes",
 }

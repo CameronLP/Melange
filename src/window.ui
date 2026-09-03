@@ -209,6 +209,11 @@
         </item>
 
         <item>
+          <attribute name="label" translatable="yes">3D Waterfall</attribute>
+          <attribute name="action">win.show-waterfall</attribute>
+        </item>
+
+        <item>
           <attribute name="label" translatable="yes">DVD Bounce</attribute>
           <attribute name="action">win.show-dvd-bounce</attribute>
         </item>

@@ -105,20 +105,38 @@
 
 ## In progress / not started
 
-- [ ] A rotatable 3D spectrogram *waterfall*, requested - distinct
-      from the existing 3D Terrain Spectrogram (aux_window.py), which
-      uses ridge-line height to represent magnitude (an elevation
-      map). A "waterfall" here means the flat 2D Spectrogram's own
-      style instead: magnitude as color on a flat, continuous colored
-      surface (like the existing 2D heatmap), just displayed at an
-      oblique angle in the same rotatable 3D camera space Terrain
-      already has (project_3d_point, drag-to-rotate) rather than
-      Terrain's height-based relief. Could likely reuse most of
-      Terrain's plumbing (rows/columns of FFT magnitude over time,
-      camera rotation state/drag handling, the render-to-cached-
-      surface pattern) with a different geometry per row - a flat
-      quad strip colored per-cell (gradient_color) instead of a ridge
-      polygon extruded by level.
+- [ ] 3D Waterfall built - a new aux window kind, distinct from the
+      existing 3D Terrain Spectrogram: same rows-of-FFT-magnitude-
+      over-time data, same rotatable oblique camera (project_3d_point,
+      generalized when Terrain was built to take azimuth/elevation
+      explicitly rather than reading a single shared value, exactly so
+      more than one such window could exist), and the same render-to-
+      cached-surface pattern (waterfall_surface/waterfall_dirty,
+      mirroring terrain_surface/terrain_dirty) - but flat rather than
+      height-extruded: magnitude reads purely as color
+      (gradient_color, its own separate Low/High pair from Terrain's)
+      on a flat plane, the same per-cell block-color look the 2D
+      Spectrogram's own heatmap already has, just projected through a
+      rotatable camera instead of drawn straight onto the canvas.
+
+      Needed per-cell (not per-row, unlike Terrain) depth sorting: a
+      flat plane's own rotation can put a far corner of one row closer
+      to the camera than a near corner of another once azimuth departs
+      from 0, so painter's algorithm has to operate on individual
+      quads (row_count-1 x bin_count-1 of them) rather than whole rows
+      to stay correct at arbitrary angles. Cell fills are drawn with
+      antialiasing off specifically (only for those fills, restored
+      right after) - adjacent quads share exact corner coordinates,
+      but antialiased edges between differently-colored neighbors
+      still left faint seams otherwise; crisp edges read as one
+      continuous tiled surface instead. Given a steeper default
+      elevation (55° vs Terrain's 28°) and an elevation floor of 10°
+      (vs Terrain's -10°) - a flat plane viewed too edge-on is far
+      harder to read than a ridge relief is at the same angle, since
+      there's no height to hint at the surface's own orientation.
+      Verified against real fabricated row data through the actual
+      rendering path (not just "no exception") - confirmed varied
+      colored output.
 - [ ] `badShaderPattern`'s belt-and-suspenders check (main.js,
       `window.loadPresetFile`, see the bvecN &&/|| bug in Done) has a
       false-positive case, found by batch-converting a large random
