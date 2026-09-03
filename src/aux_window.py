@@ -292,6 +292,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.decay = 0.85
         self.show_labels = False
         self.mirror_reflection = False
+        self.spectrogram_vertical = False
 
         # VU Meter style. "bars" is the original look (draw_vu_bar);
         # "led" is a discrete-segment hardware-style meter
@@ -833,6 +834,27 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             mirror_row.append(mirror_switch)
             box.append(mirror_row)
 
+        if self.kind == "spectrogram":
+
+            vertical_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            vertical_label = Gtk.Label(
+                label="Vertical Orientation", xalign=0, hexpand=True
+            )
+            vertical_row.append(vertical_label)
+
+            vertical_switch = Gtk.Switch()
+            vertical_switch.set_active(self.spectrogram_vertical)
+            vertical_switch.set_valign(Gtk.Align.CENTER)
+
+            vertical_switch.connect(
+                "notify::active",
+                self.on_spectrogram_vertical_changed
+            )
+
+            vertical_row.append(vertical_switch)
+            box.append(vertical_row)
+
         if self.kind == "dvd":
 
             icon_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1084,6 +1106,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_mirror_changed(self, switch, param):
 
         self.mirror_reflection = switch.get_active()
+        self.drawing_area.queue_draw()
+
+    def on_spectrogram_vertical_changed(self, switch, param):
+
+        self.spectrogram_vertical = switch.get_active()
         self.drawing_area.queue_draw()
 
     def on_drag_begin(self, gesture, start_x, start_y):
@@ -2324,26 +2351,51 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             return
 
         bin_count = self.num_bars
-        column_width = width / SPECTROGRAM_COLUMNS
-        row_height = height / bin_count
+        column_count = len(self.spectrogram_columns)
 
-        # Newest column at the right edge, oldest falls off the left -
-        # a live scrolling chart, same left-to-right time convention
-        # as the X-Y scope and the main visualizer's own timeline.
-        start_x = width - column_width * len(self.spectrogram_columns)
+        if self.spectrogram_vertical:
+
+            # Time runs top-to-bottom instead of left-to-right -
+            # newest row at the top, scrolling downward, the usual
+            # convention for a vertically-oriented waterfall (e.g. SDR
+            # receiver software) - and frequency runs left-to-right
+            # instead of bottom-to-top, low frequency at the left.
+            row_height = height / SPECTROGRAM_COLUMNS
+            column_width = width / bin_count
+
+        else:
+
+            column_width = width / SPECTROGRAM_COLUMNS
+            row_height = height / bin_count
+
+        # Newest column nearest the "front" edge (right in horizontal
+        # mode, top in vertical), oldest falls off the far edge - a
+        # live scrolling chart, same convention the X-Y scope and the
+        # main visualizer's own timeline already use for "newest is
+        # closest to now."
+        start_x = width - column_width * column_count
 
         for column_index, levels in enumerate(self.spectrogram_columns):
 
-            x = start_x + column_index * column_width
+            if self.spectrogram_vertical:
+                x = None
+                y = (column_count - 1 - column_index) * row_height
+            else:
+                x = start_x + column_index * column_width
 
             for row_index, level in enumerate(levels):
 
                 r, g, b = heatmap_color(level)
                 cr.set_source_rgb(r, g, b)
 
-                # Low frequencies at the bottom, same up-is-higher
-                # convention as the spectrum bars.
-                y = height - (row_index + 1) * row_height
+                if self.spectrogram_vertical:
+                    # Low frequencies at the left, same left-to-right
+                    # "increasing pitch" reading as the Spectrum bars.
+                    x = row_index * column_width
+                else:
+                    # Low frequencies at the bottom, same up-is-higher
+                    # convention as the Spectrum bars.
+                    y = height - (row_index + 1) * row_height
 
                 # +0.5 so adjacent cells overlap slightly - without it,
                 # Cairo's antialiasing leaves faint seams between
@@ -2536,14 +2588,28 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def draw_spectrogram_labels(self, cr, width, height):
 
         bin_count = self.num_bars
-        row_height = height / bin_count
 
-        for freq, label in ((100, "100Hz"), (1000, "1kHz"), (10000, "10kHz")):
+        if self.spectrogram_vertical:
 
-            index = self.bar_index_for_frequency(freq, bin_count)
-            y = height - (index + 1) * row_height
+            column_width = width / bin_count
 
-            self.draw_text_label(cr, 4, y + row_height - 3, label)
+            for freq, label in ((100, "100Hz"), (1000, "1kHz"), (10000, "10kHz")):
+
+                index = self.bar_index_for_frequency(freq, bin_count)
+                x = index * column_width
+
+                self.draw_text_label(cr, x + 2, 14, label)
+
+        else:
+
+            row_height = height / bin_count
+
+            for freq, label in ((100, "100Hz"), (1000, "1kHz"), (10000, "10kHz")):
+
+                index = self.bar_index_for_frequency(freq, bin_count)
+                y = height - (index + 1) * row_height
+
+                self.draw_text_label(cr, 4, y + row_height - 3, label)
 
     def draw_text_label(self, cr, x, y, text):
 

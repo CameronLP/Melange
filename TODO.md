@@ -392,10 +392,7 @@
          heatmap - a new aux window kind, not a mode of the existing
          Spectrogram.
       5. A vertical-orientation setting for the existing (rectangular)
-         Spectrogram - today it always scrolls left-to-right (time on
-         x, frequency on y, newest column at the right edge); this
-         adds a settings-popover toggle to instead scroll top-to-bottom
-         (time on y, frequency on x, newest row at top or bottom).
+         Spectrogram - built, see below.
       6. Pipes - a "3D Pipes"-screensaver-style aux window: a handful
          of colored tubes turning corners and filling the window on a
          simple grid-walk, not audio-analysis-driven the way the
@@ -536,6 +533,18 @@
       audio-chunk-driven redraw requests. draw_terrain itself just
       blits that cached surface every time, which is cheap regardless
       of how often it's called.
+
+      A Vertical Orientation setting was then added to the existing
+      flat Spectrogram fifth - a settings switch swapping which axis
+      carries time versus frequency (render_spectrogram/
+      draw_spectrogram_labels both branch on spectrogram_vertical).
+      Off (default) is the original behavior unchanged: time left-to-
+      right, frequency bottom-to-top, newest column at the right edge.
+      On: time top-to-bottom, frequency left-to-right (low frequency
+      at the left, same reading direction the Spectrum bars already
+      use), newest row at the top scrolling downward - the usual
+      convention vertically-oriented waterfalls use elsewhere (SDR
+      receiver software, etc.), rather than an arbitrary choice.
 - [ ] **BUG**: some of the aux visualizer windows above (VU Meter/X-Y
       Scope/Spectrum/Spectrogram) reportedly don't react to audio in
       some cases - not yet reproduced or root-caused in this
