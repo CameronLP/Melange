@@ -139,13 +139,6 @@
       this one would need a different transport (e.g. a local
       WebSocket from Python to a JS-side listener) to actually avoid,
       which is a bigger change than fits alongside the other two.
-- [ ] Add a "+" (add to playlist) button per row, matching the existing
-      favorite-star/add-to-queue buttons - currently the only way to
-      get a preset into a specific saved playlist is to build/reorder
-      the queue first and then "Save Current Queue as Playlist…" from
-      the Playlists dialog; there's no direct per-row way to add a
-      preset straight into an existing playlist the way the star adds
-      it straight to favorites.
 - [ ] A larger preset browser window - the dialog itself is still a
       fixed 560x560 even now that it holds three tabs (Presets/
       Favorites/Queue, see Done) rather than just one list; worth
@@ -219,6 +212,43 @@
 
 ## Done
 
+- [x] Per-row "add to playlist" button (bookmark-new-symbolic) next to
+      the existing favorite-star/add-to-queue buttons on every row in
+      the Presets and Favorites tabs (they share one row-rendering
+      function, `build_preset_search_list`, so both got it for free).
+      Previously the only way to get a specific preset into a saved
+      playlist was to build/reorder the whole queue first and then
+      "Save Current Queue as Playlist…" - this adds it straight to an
+      existing playlist (or a brand-new one) in one click, the same
+      way the star adds straight to favorites. Clicking it opens a
+      small ad-hoc `Gtk.Popover` (built fresh each click, not a cached
+      `Gio.Menu`, since which playlists exist can change between
+      clicks) listing every saved playlist plus a "New Playlist…" row;
+      picking an existing one that already contains the preset is a
+      no-op with a toast rather than a duplicate entry.
+      `playlists.json`'s existing shape (`{"name", "presets"}` per
+      playlist) needed no changes - this is just a second way to
+      mutate the same `presets` list `save_playlist_clicked` already
+      writes, reusing `save_playlists`/`refresh_playlists_list`
+      directly. `refresh_playlists_list` picked up one real bug: it
+      unconditionally touched `self.playlists_group`, which only
+      exists once the Playlists dialog has been opened at least once -
+      fine for its previous callers (all inside that dialog already),
+      but this button can now trigger it before that dialog has ever
+      been built, which would have crashed with an `AttributeError`.
+      Fixed with an early return when `self.playlists_dialog is None`.
+      Verified end-to-end via a temporary debug action added to a real
+      running instance (via D-Bus) and removed before committing:
+      exercised creating a brand-new playlist from a preset, adding a
+      second preset into that same existing playlist, and re-adding a
+      preset already in it (confirmed genuinely a no-op - the playlist
+      stayed at 2 presets, not 3) - both with the Playlists dialog
+      never opened yet and with it already open (the
+      previously-unguarded refresh path), all against real
+      `playlists.json` contents on disk, no tracebacks either time.
+      Not independently verified by hand: actually clicking the new
+      button and seeing the popover itself (no GUI interaction
+      capability in this environment).
 - [x] Reorganized the hamburger menu: "_Browse Presets…" and
       "_Queue…" (previously two flat items) are now a "Presets"
       submenu containing Browse Presets…/Favorites…/Queue…/

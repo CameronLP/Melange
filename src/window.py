@@ -1770,6 +1770,13 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         box.append(queue_button)
 
+        playlist_button = Gtk.Button(icon_name="bookmark-new-symbolic")
+
+        playlist_button.add_css_class("flat")
+        playlist_button.set_tooltip_text("Add to Playlist…")
+
+        box.append(playlist_button)
+
         list_item.set_child(box)
 
         # Stashed on the list_item itself (not the widgets) so bind
@@ -1781,6 +1788,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         list_item.favorite_button_handler = None
         list_item.queue_button = queue_button
         list_item.queue_button_handler = None
+        list_item.playlist_button = playlist_button
+        list_item.playlist_button_handler = None
 
     def preset_row_bind(self, factory, list_item):
 
@@ -1807,6 +1816,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         list_item.queue_button_handler = list_item.queue_button.connect(
             "clicked",
             lambda button: self.enqueue_preset(name)
+        )
+
+        if list_item.playlist_button_handler is not None:
+            list_item.playlist_button.disconnect(list_item.playlist_button_handler)
+
+        list_item.playlist_button_handler = list_item.playlist_button.connect(
+            "clicked",
+            lambda button, n=name: self.open_add_to_playlist_popover(button, n)
         )
 
     def favorite_row_clicked(self, button, name):
@@ -2375,7 +2392,150 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.refresh_playlists_list()
         self.show_toast(f"Deleted playlist \"{name}\"")
 
+    # Per-row "add to playlist" popover (Presets/Favorites tabs) - a
+    # flat list of buttons built fresh on every click rather than a
+    # persistent Gio.Menu, since which playlists exist can change
+    # between clicks and there's no menu-model equivalent of "list of
+    # playlist names" to keep in sync otherwise.
+    def open_add_to_playlist_popover(self, button, name):
+
+        popover = Gtk.Popover()
+        popover.set_parent(button)
+        popover.connect("closed", lambda p: p.unparent())
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        box.set_margin_start(6)
+        box.set_margin_end(6)
+        box.set_margin_top(6)
+        box.set_margin_bottom(6)
+
+        if not self.playlists:
+            empty_label = Gtk.Label(label="No playlists yet")
+            empty_label.add_css_class("dim-label")
+            box.append(empty_label)
+        else:
+            for playlist in self.playlists:
+                playlist_row = Gtk.Button(label=playlist["name"])
+                playlist_row.add_css_class("flat")
+
+                row_label = playlist_row.get_child()
+                if isinstance(row_label, Gtk.Label):
+                    row_label.set_xalign(0)
+                    row_label.set_ellipsize(Pango.EllipsizeMode.END)
+                    row_label.set_max_width_chars(1)
+
+                playlist_row.connect(
+                    "clicked",
+                    lambda b, n=name, p=playlist["name"]:
+                        self.add_to_playlist_row_clicked(popover, n, p)
+                )
+
+                box.append(playlist_row)
+
+            box.append(Gtk.Separator())
+
+        new_playlist_row = Gtk.Button(label="New Playlist…")
+        new_playlist_row.add_css_class("flat")
+
+        new_playlist_row.connect(
+            "clicked",
+            lambda b, n=name: self.new_playlist_row_clicked(popover, n)
+        )
+
+        box.append(new_playlist_row)
+
+        popover.set_child(box)
+        popover.popup()
+
+    def add_to_playlist_row_clicked(self, popover, name, playlist_name):
+
+        popover.popdown()
+        self.add_preset_to_playlist(name, playlist_name)
+
+    def new_playlist_row_clicked(self, popover, name):
+
+        popover.popdown()
+        self.new_playlist_from_preset_clicked(name)
+
+    def add_preset_to_playlist(self, name, playlist_name):
+
+        playlist = next(
+            (p for p in self.playlists if p["name"] == playlist_name),
+            None
+        )
+
+        if playlist is None:
+            return
+
+        if name in playlist["presets"]:
+            self.show_toast(f'"{name}" is already in "{playlist_name}"')
+            return
+
+        playlist["presets"].append(name)
+
+        self.save_playlists()
+        self.refresh_playlists_list()
+        self.show_toast(f'Added to "{playlist_name}": {name}')
+
+    def new_playlist_from_preset_clicked(self, name):
+
+        entry = Gtk.Entry()
+        entry.set_placeholder_text("Playlist name")
+
+        dialog = Adw.AlertDialog(
+            heading="New Playlist",
+            body=f'Create a new playlist containing "{name}".'
+        )
+
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("create", "Create")
+        dialog.set_response_appearance("create", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("create")
+        dialog.set_close_response("cancel")
+
+        dialog.connect(
+            "response",
+            lambda d, response: self.on_new_playlist_from_preset_response(
+                response, entry, name
+            )
+        )
+
+        dialog.present(self)
+        entry.grab_focus()
+
+    def on_new_playlist_from_preset_response(self, response, entry, name):
+
+        if response != "create":
+            return
+
+        playlist_name = entry.get_text().strip()
+
+        if not playlist_name:
+            self.show_toast("Playlist needs a name")
+            return
+
+        # Saving over an existing name replaces it, same as
+        # on_save_playlist_response - deliberately consistent rather
+        # than silently creating a duplicate or refusing.
+        self.playlists = [p for p in self.playlists if p["name"] != playlist_name]
+
+        self.playlists.append({
+            "name": playlist_name,
+            "presets": [name]
+        })
+
+        self.save_playlists()
+        self.refresh_playlists_list()
+        self.show_toast(f'Created playlist "{playlist_name}" with "{name}"')
+
     def refresh_playlists_list(self):
+
+        # May be called before the Playlists dialog has ever been
+        # built (e.g. from the new per-row "add to playlist" button) -
+        # nothing to refresh yet in that case.
+        if self.playlists_dialog is None:
+            return
 
         for row in self.playlist_rows:
             self.playlists_group.remove(row)
