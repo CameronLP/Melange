@@ -199,6 +199,33 @@ def gradient_color(level, lo, hi):
         lo.blue + (hi.blue - lo.blue) * level,
     )
 
+
+def ensure_min_brightness(color, minimum=0.35):
+
+    # Scales a color up toward white (preserving its hue, not just
+    # clamping each channel independently - clamping black straight to
+    # gray would erase the hue entirely) if it's darker than `minimum`.
+    # Used for the Terrain ridge-line outline specifically: at a low
+    # gradient level and/or a dark Low Color, the plain gradient result
+    # can get close enough to the near-black background that the
+    # outline all but disappears at some camera angles - reported from
+    # real use ("low outline is hard to see, blends into background").
+    # The filled body underneath is left alone; only the outline needs
+    # to always read as a distinct line regardless of the chosen
+    # palette or how quiet that row was.
+    r, g, b = color
+    brightness = max(r, g, b)
+
+    if brightness >= minimum:
+        return color
+
+    if brightness <= 0.0:
+        return (minimum, minimum, minimum)
+
+    factor = minimum / brightness
+
+    return (min(1.0, r * factor), min(1.0, g * factor), min(1.0, b * factor))
+
 # The pipeline in window.py (start_system_audio) is hardcoded to this
 # rate, so the spectrum window's bin-to-frequency mapping can be too.
 SAMPLE_RATE = 44100
@@ -1605,7 +1632,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         start_azimuth, start_elevation = self.pipes_rotate_start
 
-        self.pipes_azimuth = start_azimuth + math.radians(offset_x * 0.3)
+        # Negated - same reasoning as Terrain's identical handler
+        # (on_terrain_drag_update): reported as feeling reversed.
+        self.pipes_azimuth = start_azimuth - math.radians(offset_x * 0.3)
 
         self.pipes_elevation = max(
             math.radians(-10), min(
@@ -1718,7 +1747,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # can't drift from rounding error over a long drag.
         start_azimuth, start_elevation = self.terrain_rotate_start
 
-        self.terrain_azimuth = start_azimuth + math.radians(offset_x * 0.3)
+        # Negated - reported as feeling reversed (dragging right
+        # visibly rotated the view the "wrong" way, opposite the
+        # usual "grab the surface and drag it the way you want it to
+        # turn" expectation). Same fix as Pipes' identical handler.
+        self.terrain_azimuth = start_azimuth - math.radians(offset_x * 0.3)
 
         self.terrain_elevation = max(
             math.radians(-10), min(
@@ -3158,8 +3191,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
             cr.fill_preserve()
 
-            cr.set_source_rgba(row_color[0], row_color[1], row_color[2], 0.9)
-            cr.set_line_width(1.3)
+            outline_color = ensure_min_brightness(row_color)
+            cr.set_source_rgba(*outline_color, 0.9)
+            cr.set_line_width(1.5)
             cr.new_path()
             cr.move_to(points[0][0], points[0][1])
 

@@ -105,6 +105,20 @@
 
 ## In progress / not started
 
+- [ ] A rotatable 3D spectrogram *waterfall*, requested - distinct
+      from the existing 3D Terrain Spectrogram (aux_window.py), which
+      uses ridge-line height to represent magnitude (an elevation
+      map). A "waterfall" here means the flat 2D Spectrogram's own
+      style instead: magnitude as color on a flat, continuous colored
+      surface (like the existing 2D heatmap), just displayed at an
+      oblique angle in the same rotatable 3D camera space Terrain
+      already has (project_3d_point, drag-to-rotate) rather than
+      Terrain's height-based relief. Could likely reuse most of
+      Terrain's plumbing (rows/columns of FFT magnitude over time,
+      camera rotation state/drag handling, the render-to-cached-
+      surface pattern) with a different geometry per row - a flat
+      quad strip colored per-cell (gradient_color) instead of a ridge
+      polygon extruded by level.
 - [ ] `badShaderPattern`'s belt-and-suspenders check (main.js,
       `window.loadPresetFile`, see the bvecN &&/|| bug in Done) has a
       false-positive case, found by batch-converting a large random
@@ -502,6 +516,31 @@
       self.left[i]/self.right[i] are actually plotted), shown even
       before any real audio has arrived rather than only once a trace
       exists, unlike the trace itself.
+
+      Two more Terrain reports from live use: drag-to-rotate felt
+      reversed (dragging right visibly rotated the opposite way from
+      the usual "grab the surface and drag it the way you want it to
+      turn" expectation) - negated on_terrain_drag_update's azimuth
+      mapping (and on_pipes_drag_update's identical one, same fix,
+      same bug). And at some camera angles the outline of a quiet
+      (low-level) ridge was hard to distinguish from the near-black
+      background - added `ensure_min_brightness`, which scales a color
+      up toward white (preserving hue, not a flat per-channel clamp -
+      that would erase it) if it's darker than a floor, applied to the
+      ridge-line stroke specifically (not the filled body underneath,
+      which is left free to read as naturally dark/quiet) so the
+      outline always stays visible as a distinct line regardless of
+      the chosen Low Color or how quiet that row was.
+
+      A third report ("3d spectrogram colors do not work it is only
+      green") not yet resolved - direct testing (both the actual
+      gradient_color math against the real default Low/High colors,
+      and a real fabricated-data render through render_terrain_surface
+      itself, see above) turned up no code path that could produce
+      green from the current blue-to-orange defaults, so the cause
+      isn't understood yet. Asked the user for a screenshot rather
+      than keep guessing blind - this environment has no way to see
+      the running app itself.
 
       Peak Meter built first: instantaneous per-channel |sample| peak
       (no VU_GAIN, unlike the VU Meter - a peak meter exists to show
