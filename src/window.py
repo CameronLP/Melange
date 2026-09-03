@@ -48,6 +48,7 @@ AUX_WINDOW_ACTIONS = {
     "vectorscope": "show-vectorscope",
     "spectrum": "show-spectrum",
     "spectrogram": "show-spectrogram",
+    "terrain": "show-terrain",
     "dvd": "show-dvd-bounce",
 }
 

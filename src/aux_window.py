@@ -39,6 +39,7 @@ AUX_WINDOW_TITLES = {
     "vectorscope": "Vector Scope",
     "spectrum": "Spectrum",
     "spectrogram": "Spectrogram",
+    "terrain": "3D Terrain Spectrogram",
     "peak": "Peak Meter",
     "dvd": "DVD Bounce",
 }
@@ -136,6 +137,20 @@ VU_STYLE_CHOICES = [
 # from the FFT's own analysis rate.
 SPECTROGRAM_COLUMNS = 200
 SPECTROGRAM_FRAME_INTERVAL = 0.05
+
+# 3D Terrain Spectrogram - same idea as the flat Spectrogram's own
+# column history, but far fewer rows (a rotatable terrain reads fine
+# with a couple dozen ridge lines; it doesn't need anywhere near 200
+# to look like a terrain) and a slightly slower cadence, both
+# deliberately conservative: the flat Spectrogram (see the **PERF**
+# TODO entry for it) redraws its *entire* history on every audio-
+# chunk-driven frame regardless of whether a new column actually
+# arrived, which is the likely cause of reported lag there - this
+# kind avoids repeating that mistake from the start (see
+# terrain_dirty/terrain_surface in draw_terrain) rather than fixing it
+# after the fact.
+TERRAIN_ROWS = 36
+TERRAIN_FRAME_INTERVAL = 0.08
 
 
 def heatmap_color(level):
@@ -389,10 +404,27 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # GestureDrag "shouldn't" claim a no-movement click in
         # principle - moving it here removes the ambiguity outright
         # rather than relying on gesture-arbitration internals.
-        drag_gesture = Gtk.GestureDrag()
-        drag_gesture.set_button(Gdk.BUTTON_PRIMARY)
-        drag_gesture.connect("drag-begin", self.on_drag_begin)
-        self.drawing_area.add_controller(drag_gesture)
+        # 3D Terrain Spectrogram spends its drag gesture on rotating
+        # the camera instead (see on_terrain_drag_update) - the one
+        # kind here where dragging the canvas has a more useful
+        # meaning than moving the window. It can still be moved via
+        # its header bar, same as every window's native CSD behavior;
+        # it just doesn't get the drag-from-anywhere convenience every
+        # other aux window kind has.
+        if kind == "terrain":
+
+            rotate_gesture = Gtk.GestureDrag()
+            rotate_gesture.set_button(Gdk.BUTTON_PRIMARY)
+            rotate_gesture.connect("drag-begin", self.on_terrain_drag_begin)
+            rotate_gesture.connect("drag-update", self.on_terrain_drag_update)
+            self.drawing_area.add_controller(rotate_gesture)
+
+        else:
+
+            drag_gesture = Gtk.GestureDrag()
+            drag_gesture.set_button(Gdk.BUTTON_PRIMARY)
+            drag_gesture.connect("drag-begin", self.on_drag_begin)
+            self.drawing_area.add_controller(drag_gesture)
 
         # Belt-and-suspenders click-outside-to-close for the settings
         # popover, on top of Gtk.Popover's own default autohide - CAPTURE
@@ -472,6 +504,24 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.spectrogram_columns = deque(maxlen=SPECTROGRAM_COLUMNS)
         self.last_spectrogram_frame_time = 0.0
 
+        # 3D Terrain Spectrogram - terrain_rows holds the same shape of
+        # data as spectrogram_columns (one list of per-bin levels per
+        # row, oldest first). terrain_surface/terrain_dirty are a
+        # render cache (see draw_terrain) - the expensive part (project
+        # every point through the current camera rotation, sort rows
+        # by depth, fill/stroke each one) only actually re-runs when a
+        # new row arrives or the camera rotates, not on every redraw
+        # request, unlike the flat Spectrogram (see the TERRAIN_ROWS
+        # comment above). Rotation angles default to a pleasant 3/4
+        # oblique view rather than looking straight down.
+        self.terrain_rows = deque(maxlen=TERRAIN_ROWS)
+        self.last_terrain_frame_time = 0.0
+        self.terrain_azimuth = math.radians(35)
+        self.terrain_elevation = math.radians(28)
+        self.terrain_rotate_start = (self.terrain_azimuth, self.terrain_elevation)
+        self.terrain_surface = None
+        self.terrain_dirty = True
+
         # Oscilloscope-only rolling buffers (see push_audio/
         # draw_oscilloscope) - unlike self.left/self.right (replaced
         # wholesale every push_audio, "what's playing right now"),
@@ -519,7 +569,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         box.set_margin_top(10)
         box.set_margin_bottom(10)
 
-        if self.kind in ("xy", "spectrum", "vu", "oscilloscope", "vectorscope"):
+        if self.kind in (
+            "xy", "spectrum", "vu", "oscilloscope", "vectorscope", "terrain"
+        ):
 
             color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -583,12 +635,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             segments_row.append(segments_spin)
             box.append(segments_row)
 
-        if self.kind in ("spectrum", "spectrogram"):
+        if self.kind in ("spectrum", "spectrogram", "terrain"):
 
             bars_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             bars_label = Gtk.Label(
-                label="Bars" if self.kind == "spectrum" else "Frequency Bins",
+                label={
+                    "spectrum": "Bars",
+                    "spectrogram": "Frequency Bins",
+                    "terrain": "Ridge Points",
+                }[self.kind],
                 xalign=0,
                 hexpand=True
             )
@@ -604,6 +660,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             bars_row.append(bars_spin)
             box.append(bars_row)
+
+        if self.kind == "terrain":
+
+            reset_view_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            reset_view_button = Gtk.Button(label="Reset View")
+            reset_view_button.set_hexpand(True)
+
+            reset_view_button.connect(
+                "clicked",
+                self.on_terrain_reset_view_clicked
+            )
+
+            reset_view_row.append(reset_view_button)
+            box.append(reset_view_row)
 
         if self.kind in ("vu", "spectrum", "peak"):
 
@@ -921,11 +992,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_color_changed(self, button, param):
 
         self.color = button.get_rgba()
+        self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
     def on_bars_changed(self, spin):
 
         self.num_bars = int(spin.get_value())
+        self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
     def on_decay_changed(self, scale):
@@ -1043,6 +1116,38 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if self.settings_popover.get_visible():
             self.settings_popover.popdown()
 
+    def on_terrain_drag_begin(self, gesture, start_x, start_y):
+
+        self.terrain_rotate_start = (self.terrain_azimuth, self.terrain_elevation)
+
+    def on_terrain_drag_update(self, gesture, offset_x, offset_y):
+
+        # offset_x/offset_y are cumulative from drag-begin (GTK's own
+        # GestureDrag semantics), not per-event deltas - recomputing
+        # from terrain_rotate_start every update (rather than
+        # incrementally accumulating a running total here) means this
+        # can't drift from rounding error over a long drag.
+        start_azimuth, start_elevation = self.terrain_rotate_start
+
+        self.terrain_azimuth = start_azimuth + math.radians(offset_x * 0.3)
+
+        self.terrain_elevation = max(
+            math.radians(-10), min(
+                math.radians(85),
+                start_elevation - math.radians(offset_y * 0.3)
+            )
+        )
+
+        self.terrain_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_terrain_reset_view_clicked(self, button):
+
+        self.terrain_azimuth = math.radians(35)
+        self.terrain_elevation = math.radians(28)
+        self.terrain_dirty = True
+        self.drawing_area.queue_draw()
+
     def set_overlay_controls_visible(self, visible):
 
         buttons = (self.settings_button,)
@@ -1098,7 +1203,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.left = left
         self.right = right
 
-        if self.kind in ("spectrum", "spectrogram"):
+        if self.kind in ("spectrum", "spectrogram", "terrain"):
 
             mono = [(l + r) / 2.0 for l, r in zip(left, right)]
 
@@ -1129,6 +1234,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.draw_oscilloscope(cr, width, height)
         elif self.kind == "vectorscope":
             self.draw_vector_scope(cr, width, height)
+        elif self.kind == "terrain":
+            self.draw_terrain(cr, width, height)
         else:
             self.draw_xy_scope(cr, width, height)
 
@@ -2243,6 +2350,166 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 # same-colored neighboring rectangles.
                 cr.rectangle(x, y, column_width + 0.5, row_height + 0.5)
                 cr.fill()
+
+    def update_terrain_rows(self):
+
+        bin_count = self.num_bars
+
+        if len(self.spectrum_buffer) != FFT_SIZE:
+            return
+
+        now = time.monotonic()
+
+        if now - self.last_terrain_frame_time < TERRAIN_FRAME_INTERVAL:
+            return
+
+        self.last_terrain_frame_time = now
+
+        windowed = [
+            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
+        ]
+
+        spectrum = fft(windowed)
+        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+
+        self.terrain_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
+        self.terrain_dirty = True
+
+    def project_terrain_point(self, x, y, z, cx, cy, scale):
+
+        # A simple oblique/orthographic (not perspective-correct) 3D
+        # projection - azimuth rotates around the vertical (height)
+        # axis, elevation then tilts the camera to look down at the
+        # result. No perspective divide - appropriate for a stylized
+        # "terrain map" look (this is the same family of technique
+        # classic ridgeline/mountain-range waterfall displays use),
+        # and far cheaper per point than a real perspective pipeline
+        # would be. Returns the projected screen position plus a
+        # rotated depth value used purely for back-to-front sorting
+        # (render_terrain_surface), not for the projection itself.
+        cos_a, sin_a = math.cos(self.terrain_azimuth), math.sin(self.terrain_azimuth)
+        cos_e, sin_e = math.cos(self.terrain_elevation), math.sin(self.terrain_elevation)
+
+        rx = x * cos_a - y * sin_a
+        ry = x * sin_a + y * cos_a
+
+        depth = ry * cos_e - z * sin_e
+        rz = ry * sin_e + z * cos_e
+
+        return (cx + rx * scale, cy - rz * scale, depth)
+
+    def render_terrain_surface(self, width, height):
+
+        self.terrain_surface = cairo.ImageSurface(
+            cairo.FORMAT_ARGB32, max(1, width), max(1, height)
+        )
+        cr = cairo.Context(self.terrain_surface)
+
+        cr.set_source_rgb(0.03, 0.03, 0.05)
+        cr.paint()
+
+        rows = list(self.terrain_rows)
+
+        if not rows:
+            self.terrain_dirty = False
+            return
+
+        row_count = len(rows)
+        bin_count = len(rows[0])
+
+        cx = width / 2
+        cy = height * 0.6
+        scale = min(width, height) * 0.42
+
+        # Every row shares one Y (time/depth) position, so its own
+        # rotated depth (used for the back-to-front sort below) is the
+        # same for every point in it - only the first point's depth
+        # needs computing per row, not one sort key per point.
+        projected_rows = []
+
+        for row_index, levels in enumerate(rows):
+
+            y = (row_index / max(1, row_count - 1) - 0.5) * 2
+
+            points = []
+
+            for bin_index, level in enumerate(levels):
+
+                x = (bin_index / max(1, bin_count - 1) - 0.5) * 2
+                points.append(self.project_terrain_point(x, y, level, cx, cy, scale))
+
+            base_points = []
+
+            for bin_index in range(bin_count):
+
+                x = (bin_index / max(1, bin_count - 1) - 0.5) * 2
+                base_points.append(
+                    self.project_terrain_point(x, y, 0.0, cx, cy, scale)
+                )
+
+            projected_rows.append((points[0][2], points, base_points))
+
+        # Painter's algorithm: farthest rows (smallest depth) drawn
+        # first, nearest (largest depth) drawn last, on top - correct
+        # occlusion for whatever the current camera rotation is,
+        # without needing true hidden-surface removal.
+        projected_rows.sort(key=lambda entry: entry[0])
+
+        for depth, points, base_points in projected_rows:
+
+            # Filled silhouette under the ridge line, back down to a
+            # flat baseline - an opaque body (not just a wireframe
+            # line) is what lets a nearer row actually occlude a
+            # farther one, the same technique classic ridgeline/
+            # "joy division style" plots use, just projected through a
+            # rotatable camera here instead of stacked flat in 2D.
+            cr.move_to(*points[0])
+
+            for px, py, _ in points[1:]:
+                cr.line_to(px, py)
+
+            for px, py, _ in reversed(base_points):
+                cr.line_to(px, py)
+
+            cr.close_path()
+
+            # High, mostly-opaque alpha - painter's-algorithm occlusion
+            # only actually works if a nearer row's fill is opaque
+            # enough to hide what's behind it. Lightened slightly
+            # toward the front (larger depth) as a cheap depth cue on
+            # top of that, since there's no real lighting model here.
+            brightness = 0.06 + 0.05 * min(1.0, max(0.0, (depth + 1.0) / 2.0))
+            cr.set_source_rgba(brightness, brightness, brightness + 0.02, 0.92)
+            cr.fill_preserve()
+
+            cr.set_source_rgba(
+                self.color.red, self.color.green, self.color.blue, 0.9
+            )
+            cr.set_line_width(1.3)
+            cr.new_path()
+            cr.move_to(*points[0])
+
+            for px, py, _ in points[1:]:
+                cr.line_to(px, py)
+
+            cr.stroke()
+
+        self.terrain_dirty = False
+
+    def draw_terrain(self, cr, width, height):
+
+        self.update_terrain_rows()
+
+        if (
+            self.terrain_dirty
+            or self.terrain_surface is None
+            or self.terrain_surface.get_width() != width
+            or self.terrain_surface.get_height() != height
+        ):
+            self.render_terrain_surface(width, height)
+
+        cr.set_source_surface(self.terrain_surface, 0, 0)
+        cr.paint()
 
     def draw_frequency_labels(self, cr, width, height):
 

@@ -204,6 +204,11 @@
         </item>
 
         <item>
+          <attribute name="label" translatable="yes">3D Terrain Spectrogram</attribute>
+          <attribute name="action">win.show-terrain</attribute>
+        </item>
+
+        <item>
           <attribute name="label" translatable="yes">DVD Bounce</attribute>
           <attribute name="action">win.show-dvd-bounce</attribute>
         </item>

@@ -385,11 +385,12 @@
          intensity/persistence trails, M/S axis labels, and a phase
          correlation reading - a more information-dense relative of
          the existing X-Y Scope, not a duplicate of it.
-      4. 3D Terrain Map Spectrogram - the existing Spectrogram's
-         waterfall data (magnitude per frequency bin per time column)
-         rendered as an oblique/isometric pseudo-3D ridge-line terrain
-         (height = magnitude) instead of the existing flat 2D heatmap -
-         a new aux window kind, not a mode of the existing Spectrogram.
+      4. 3D Terrain Map Spectrogram - built, see below. The existing
+         Spectrogram's waterfall data (magnitude per frequency bin per
+         time column) rendered as an oblique pseudo-3D ridge-line
+         terrain (height = magnitude) instead of the existing flat 2D
+         heatmap - a new aux window kind, not a mode of the existing
+         Spectrogram.
       5. A vertical-orientation setting for the existing (rectangular)
          Spectrogram - today it always scrolls left-to-right (time on
          x, frequency on y, newest column at the right edge); this
@@ -492,6 +493,49 @@
       onto the visible frame every time rather than baked into the
       fading trail surface, since they're fixed reference marks, not
       part of the signal being displayed.
+
+      3D Terrain Spectrogram built fourth, on request also given
+      drag-to-rotate (azimuth from left/right drag, elevation from
+      up/down drag, clamped to -10°..85° so the camera can't flip
+      upside-down or go perfectly top-down and look degenerate) -
+      the one aux window kind that spends its canvas drag gesture on
+      camera rotation instead of the drag-from-anywhere window-move
+      every other aux window kind has (still movable via its header
+      bar, GTK's native CSD behavior, just not from the canvas). A
+      Reset View button in its settings returns to the default 3/4
+      oblique angle.
+
+      Same underlying waterfall data as the flat Spectrogram (FFT
+      magnitude per frequency bin per time row, via
+      bars_from_magnitudes), reused as a row count (TERRAIN_ROWS = 36,
+      well under the flat Spectrogram's 200 - a rotatable terrain
+      reads fine with far fewer ridge lines, and it's one more
+      deliberate perf margin on top of the one below) rather than
+      pixel columns. Projected through a simple oblique/orthographic
+      rotation (project_terrain_point - azimuth around the height
+      axis, then an elevation tilt; no perspective divide, the same
+      family of technique classic ridgeline/mountain-range waterfall
+      displays use, and far cheaper per point than true perspective
+      would be) and rendered as filled, mostly-opaque ridge silhouettes
+      (not a wireframe) sorted back-to-front by rotated depth each
+      time (render_terrain_surface) - a real, if approximate,
+      painter's-algorithm occlusion that looks correct at any camera
+      angle, using the same "big filled shape under a ridge line, not
+      a path along it" idea classic ridgeline plots use, just
+      rotatable here instead of flat.
+
+      Built specifically to avoid repeating the flat Spectrogram's own
+      **PERF** issue logged above (redrawing its *entire* history on
+      every audio-chunk-driven frame, not just when a new column
+      actually arrives) rather than fixing that after the fact:
+      terrain_surface is a cached offscreen render, and the expensive
+      part (re-project every point, re-sort, re-fill/stroke every row)
+      only actually reruns when terrain_dirty is set - a new row
+      arriving, a rotation drag, or a settings change (Ridge Points,
+      Color) - not on every one of the far-more-frequent
+      audio-chunk-driven redraw requests. draw_terrain itself just
+      blits that cached surface every time, which is cheap regardless
+      of how often it's called.
 - [ ] **BUG**: some of the aux visualizer windows above (VU Meter/X-Y
       Scope/Spectrum/Spectrogram) reportedly don't react to audio in
       some cases - not yet reproduced or root-caused in this
