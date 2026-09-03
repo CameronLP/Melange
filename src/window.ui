@@ -213,6 +213,11 @@
           <attribute name="action">win.show-dvd-bounce</attribute>
         </item>
 
+        <item>
+          <attribute name="label" translatable="yes">Pipes</attribute>
+          <attribute name="action">win.show-pipes</attribute>
+        </item>
+
       </submenu>
 
     </section>

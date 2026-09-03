@@ -187,6 +187,20 @@
 
 ### Bigger feature ideas
 
+- [ ] A fractal Butterchurn preset - requested, not yet built. A
+      native Butterchurn (`.json`) preset (Butterchurn presets are
+      HLSL/GLSL-ish shader expressions under the hood, per-pixel/per-
+      vertex equations, not baked images) rendering something
+      fractal - e.g. a Mandelbrot/Julia-set-style iterated escape-time
+      shader, with iteration count/zoom/julia-constant driven off
+      bass/mid/treb the way the existing baron/butterchurn-presets
+      packs already do for their own effects - rather than an .milk
+      file run through the converter, since a from-scratch preset
+      doesn't need repairBadShader's workarounds or hit the converter
+      compatibility issues noted elsewhere in this file (Paused
+      section). Would live alongside the existing bundled packs
+      (src/web, per the Building section of README) rather than
+      needing any Python/GTK-side changes at all.
 - [ ] Slide-in sidebar for the Queue/Playlist - a panel that slides in
       over the visualizer (edge-anchored, like the on-canvas nav-arrow/
       favorite overlays) showing the current queue or loaded playlist,
@@ -393,12 +407,15 @@
          Spectrogram.
       5. A vertical-orientation setting for the existing (rectangular)
          Spectrogram - built, see below.
-      6. Pipes - a "3D Pipes"-screensaver-style aux window: a handful
-         of colored tubes turning corners and filling the window on a
-         simple grid-walk, not audio-analysis-driven the way the
-         others are - live audio just modulates pipe speed/spawn rate,
-         for consistency with the rest of this feature rather than
-         because the reference screensaver itself reacts to anything.
+      6. Pipes - built, see below. A "3D Pipes"-screensaver-style aux
+         window: a handful of colored tubes turning corners and
+         filling the window on a simple grid-walk, not audio-analysis-
+         driven the way the others are - live audio just modulates
+         pipe speed/spawn rate, for consistency with the rest of this
+         feature rather than because the reference screensaver itself
+         reacts to anything.
+
+      Batch complete - all six items above are now built.
 
       Peak Meter built first: instantaneous per-channel |sample| peak
       (no VU_GAIN, unlike the VU Meter - a peak meter exists to show
@@ -545,6 +562,45 @@
       use), newest row at the top scrolling downward - the usual
       convention vertically-oriented waterfalls use elsewhere (SDR
       receiver software, etc.), rather than an arbitrary choice.
+
+      Pipes built sixth and last, closing out this batch. A small
+      cubic grid (PIPES_GRID_SIZE = 8) each pipe occupies one cell of
+      at a time, moving to an adjacent empty cell every grid-step
+      (mostly continuing straight, occasionally turning to one of the
+      4 perpendicular directions - never reversing straight back the
+      way it came, which would read as backtracking rather than a pipe
+      growing) - a dead end (every neighbor occupied or out of bounds)
+      kills that pipe, and pipes_max_pipes (settings-adjustable) are
+      kept active at all times by spawning fresh ones at random empty
+      cells as needed. Segments are never removed once laid, including
+      from pipes that have since died - the grid stays filled until
+      enough of it (PIPES_RESET_FRACTION = 60%) is occupied, at which
+      point everything clears and starts over, the same periodic
+      "reset and start fresh" behavior the reference screensaver has.
+      Reuses the oblique 3D projection built for the Terrain window
+      (project_terrain_point generalized to project_3d_point, taking
+      azimuth/elevation as explicit parameters rather than reading a
+      single shared self.azimuth/elevation, since Terrain and Pipes
+      windows can both be open at once, each with its own camera) and
+      the same drag-to-rotate camera control, requested for "the 3d
+      ones" - like Terrain, Pipes spends its canvas drag gesture on
+      rotation rather than window-move, with a Reset View settings
+      button to return to the default angle. Unlike Terrain, there's
+      no render-caching here (no terrain_surface/terrain_dirty
+      equivalent) - Pipes redraws every ~16ms via its own independent
+      GLib timer regardless (same reasoning DVD Bounce's own timer
+      already established: it has to keep moving smoothly through
+      silence and between audio chunks, not just when audio happens to
+      arrive), and unlike the flat Spectrogram's history, total
+      segment count here is naturally bounded by the small grid
+      volume (512 cells at the default size) rather than an
+      independently-growing buffer, so redrawing fresh every tick was
+      judged cheap enough not to need the same caching treatment.
+      Live audio modulates grid-step speed only (VU-style decayed RMS,
+      same ballistics as the VU Meter/DVD Bounce), not which cells get
+      visited or how pipes turn - per the original plan, not meant to
+      be genuinely audio-analysis-driven the way the other kinds in
+      this batch are.
 - [ ] **BUG**: some of the aux visualizer windows above (VU Meter/X-Y
       Scope/Spectrum/Spectrogram) reportedly don't react to audio in
       some cases - not yet reproduced or root-caused in this

@@ -42,7 +42,27 @@ AUX_WINDOW_TITLES = {
     "terrain": "3D Terrain Spectrogram",
     "peak": "Peak Meter",
     "dvd": "DVD Bounce",
+    "pipes": "Pipes",
 }
+
+# Pipes - classic "3D Pipes"-screensaver-style aux window. A small
+# cubic grid a pipe can occupy one cell of at a time; the 6 axis-
+# aligned directions a pipe can move/turn between.
+PIPE_DIRECTIONS = [
+    (1, 0, 0), (-1, 0, 0),
+    (0, 1, 0), (0, -1, 0),
+    (0, 0, 1), (0, 0, -1),
+]
+
+PIPES_GRID_SIZE = 8
+PIPES_TICK_INTERVAL_MS = 16
+PIPES_BASE_STEP_INTERVAL = 0.12
+
+# Once this fraction of the grid's cells are filled, everything clears
+# and starts over - same periodic "reset and start fresh" behavior the
+# reference screensaver has, since a mostly-full grid leaves pipes
+# with nowhere left to grow.
+PIPES_RESET_FRACTION = 0.6
 
 # Oscilloscope: how many past samples are kept in its rolling buffer
 # (push_audio appends into it) versus how many of those are actually
@@ -405,19 +425,27 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # GestureDrag "shouldn't" claim a no-movement click in
         # principle - moving it here removes the ambiguity outright
         # rather than relying on gesture-arbitration internals.
-        # 3D Terrain Spectrogram spends its drag gesture on rotating
-        # the camera instead (see on_terrain_drag_update) - the one
-        # kind here where dragging the canvas has a more useful
-        # meaning than moving the window. It can still be moved via
-        # its header bar, same as every window's native CSD behavior;
-        # it just doesn't get the drag-from-anywhere convenience every
-        # other aux window kind has.
+        # 3D Terrain Spectrogram and Pipes spend their drag gesture on
+        # rotating the camera instead (see on_terrain_drag_update/
+        # on_pipes_drag_update) - the two kinds here where dragging
+        # the canvas has a more useful meaning than moving the window.
+        # Each can still be moved via its header bar, same as every
+        # window's native CSD behavior; it just doesn't get the drag-
+        # from-anywhere convenience every other aux window kind has.
         if kind == "terrain":
 
             rotate_gesture = Gtk.GestureDrag()
             rotate_gesture.set_button(Gdk.BUTTON_PRIMARY)
             rotate_gesture.connect("drag-begin", self.on_terrain_drag_begin)
             rotate_gesture.connect("drag-update", self.on_terrain_drag_update)
+            self.drawing_area.add_controller(rotate_gesture)
+
+        elif kind == "pipes":
+
+            rotate_gesture = Gtk.GestureDrag()
+            rotate_gesture.set_button(Gdk.BUTTON_PRIMARY)
+            rotate_gesture.connect("drag-begin", self.on_pipes_drag_begin)
+            rotate_gesture.connect("drag-update", self.on_pipes_drag_update)
             self.drawing_area.add_controller(rotate_gesture)
 
         else:
@@ -523,6 +551,29 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_surface = None
         self.terrain_dirty = True
 
+        # Pipes - pipes_occupied tracks every grid cell any pipe has
+        # ever passed through since the last reset (collision check
+        # for new moves); pipes_segments is every laid segment, drawn
+        # every frame until reset_pipes clears it - segments from dead
+        # pipes are deliberately left in place rather than removed,
+        # same as the reference screensaver's grid staying filled
+        # until a full reset. pipes_active holds the pipes still
+        # growing right now. Populated by reset_pipes() once
+        # everything else below is set up (needs pipes_max_pipes to
+        # know how many to spawn).
+        self.pipes_azimuth = math.radians(35)
+        self.pipes_elevation = math.radians(28)
+        self.pipes_rotate_start = (self.pipes_azimuth, self.pipes_elevation)
+        self.pipes_max_pipes = 4
+        self.pipes_speed_scale = 1.0
+        self.pipes_reactivity = 1.0
+        self.pipes_level = 0.0
+        self.pipes_step_timer = 0.0
+        self.pipes_occupied = set()
+        self.pipes_segments = []
+        self.pipes_active = []
+        self.pipes_timer = None
+
         # Oscilloscope-only rolling buffers (see push_audio/
         # draw_oscilloscope) - unlike self.left/self.right (replaced
         # wholesale every push_audio, "what's playing right now"),
@@ -560,6 +611,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if self.kind == "dvd":
             self.dvd_timer = GLib.timeout_add(
                 DVD_TICK_INTERVAL_MS, self.dvd_tick
+            )
+
+        if self.kind == "pipes":
+            self.reset_pipes()
+            self.pipes_timer = GLib.timeout_add(
+                PIPES_TICK_INTERVAL_MS, self.pipes_tick
             )
 
     def build_settings_popover(self):
@@ -1006,6 +1063,96 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             beat_sensitivity_row.append(beat_sensitivity_scale)
             box.append(beat_sensitivity_row)
 
+        if self.kind == "pipes":
+
+            max_pipes_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            max_pipes_label = Gtk.Label(label="Max Pipes", xalign=0, hexpand=True)
+            max_pipes_row.append(max_pipes_label)
+
+            max_pipes_spin = Gtk.SpinButton.new_with_range(1, 8, 1)
+            max_pipes_spin.set_value(self.pipes_max_pipes)
+
+            max_pipes_spin.connect(
+                "value-changed",
+                self.on_pipes_max_pipes_changed
+            )
+
+            max_pipes_row.append(max_pipes_spin)
+            box.append(max_pipes_row)
+
+            pipes_speed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            pipes_speed_label = Gtk.Label(label="Speed", xalign=0, hexpand=True)
+            pipes_speed_row.append(pipes_speed_label)
+
+            pipes_speed_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.25, 3.0, 0.05
+            )
+            pipes_speed_scale.set_value(self.pipes_speed_scale)
+            pipes_speed_scale.set_size_request(120, -1)
+            pipes_speed_scale.set_draw_value(False)
+
+            pipes_speed_scale.connect(
+                "value-changed",
+                self.on_pipes_speed_changed
+            )
+
+            pipes_speed_row.append(pipes_speed_scale)
+            box.append(pipes_speed_row)
+
+            pipes_reactivity_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_reactivity_label = Gtk.Label(
+                label="Audio Reactivity", xalign=0, hexpand=True
+            )
+            pipes_reactivity_row.append(pipes_reactivity_label)
+
+            pipes_reactivity_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.0, 2.5, 0.05
+            )
+            pipes_reactivity_scale.set_value(self.pipes_reactivity)
+            pipes_reactivity_scale.set_size_request(120, -1)
+            pipes_reactivity_scale.set_draw_value(False)
+
+            pipes_reactivity_scale.connect(
+                "value-changed",
+                self.on_pipes_reactivity_changed
+            )
+
+            pipes_reactivity_row.append(pipes_reactivity_scale)
+            box.append(pipes_reactivity_row)
+
+            pipes_reset_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            pipes_reset_button = Gtk.Button(label="Reset")
+            pipes_reset_button.set_hexpand(True)
+
+            pipes_reset_button.connect(
+                "clicked",
+                self.on_pipes_reset_clicked
+            )
+
+            pipes_reset_row.append(pipes_reset_button)
+            box.append(pipes_reset_row)
+
+            pipes_reset_view_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_reset_view_button = Gtk.Button(label="Reset View")
+            pipes_reset_view_button.set_hexpand(True)
+
+            pipes_reset_view_button.connect(
+                "clicked",
+                self.on_pipes_reset_view_clicked
+            )
+
+            pipes_reset_view_row.append(pipes_reset_view_button)
+            box.append(pipes_reset_view_row)
+
         popover = Gtk.Popover()
         popover.set_child(box)
 
@@ -1082,6 +1229,48 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_dvd_beat_sensitivity_changed(self, scale):
 
         self.dvd_beat_sensitivity = scale.get_value()
+
+    def on_pipes_max_pipes_changed(self, spin):
+
+        self.pipes_max_pipes = int(spin.get_value())
+
+    def on_pipes_speed_changed(self, scale):
+
+        self.pipes_speed_scale = scale.get_value()
+
+    def on_pipes_reactivity_changed(self, scale):
+
+        self.pipes_reactivity = scale.get_value()
+
+    def on_pipes_reset_clicked(self, button):
+
+        self.reset_pipes()
+        self.drawing_area.queue_draw()
+
+    def on_pipes_reset_view_clicked(self, button):
+
+        self.pipes_azimuth = math.radians(35)
+        self.pipes_elevation = math.radians(28)
+        self.drawing_area.queue_draw()
+
+    def on_pipes_drag_begin(self, gesture, start_x, start_y):
+
+        self.pipes_rotate_start = (self.pipes_azimuth, self.pipes_elevation)
+
+    def on_pipes_drag_update(self, gesture, offset_x, offset_y):
+
+        start_azimuth, start_elevation = self.pipes_rotate_start
+
+        self.pipes_azimuth = start_azimuth + math.radians(offset_x * 0.3)
+
+        self.pipes_elevation = max(
+            math.radians(-10), min(
+                math.radians(85),
+                start_elevation - math.radians(offset_y * 0.3)
+            )
+        )
+
+        self.drawing_area.queue_draw()
 
     def on_vu_style_changed(self, dropdown, param):
 
@@ -1263,6 +1452,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.draw_vector_scope(cr, width, height)
         elif self.kind == "terrain":
             self.draw_terrain(cr, width, height)
+        elif self.kind == "pipes":
+            self.draw_pipes(cr, width, height)
         else:
             self.draw_xy_scope(cr, width, height)
 
@@ -2427,20 +2618,26 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
         self.terrain_dirty = True
 
-    def project_terrain_point(self, x, y, z, cx, cy, scale):
+    def project_3d_point(self, x, y, z, cx, cy, scale, azimuth, elevation):
 
         # A simple oblique/orthographic (not perspective-correct) 3D
-        # projection - azimuth rotates around the vertical (height)
-        # axis, elevation then tilts the camera to look down at the
-        # result. No perspective divide - appropriate for a stylized
-        # "terrain map" look (this is the same family of technique
-        # classic ridgeline/mountain-range waterfall displays use),
-        # and far cheaper per point than a real perspective pipeline
-        # would be. Returns the projected screen position plus a
-        # rotated depth value used purely for back-to-front sorting
-        # (render_terrain_surface), not for the projection itself.
-        cos_a, sin_a = math.cos(self.terrain_azimuth), math.sin(self.terrain_azimuth)
-        cos_e, sin_e = math.cos(self.terrain_elevation), math.sin(self.terrain_elevation)
+        # projection, shared by every "3D" aux window kind (Terrain,
+        # Pipes) - each keeps its own azimuth/elevation state (drag-
+        # to-rotate, see on_terrain_drag_update/on_pipes_drag_update)
+        # and passes it in explicitly rather than this method reading
+        # a single shared self.azimuth/elevation, since more than one
+        # such window can be open at once. Azimuth rotates around the
+        # vertical (height) axis, elevation then tilts the camera to
+        # look down at the result. No perspective divide - appropriate
+        # for a stylized look (the same family of technique classic
+        # ridgeline/mountain-range waterfall displays and simple
+        # wireframe screensavers both use), and far cheaper per point
+        # than a real perspective pipeline would be. Returns the
+        # projected screen position plus a rotated depth value used
+        # purely for back-to-front painter's-algorithm sorting, not
+        # for the projection itself.
+        cos_a, sin_a = math.cos(azimuth), math.sin(azimuth)
+        cos_e, sin_e = math.cos(elevation), math.sin(elevation)
 
         rx = x * cos_a - y * sin_a
         ry = x * sin_a + y * cos_a
@@ -2488,16 +2685,20 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             for bin_index, level in enumerate(levels):
 
                 x = (bin_index / max(1, bin_count - 1) - 0.5) * 2
-                points.append(self.project_terrain_point(x, y, level, cx, cy, scale))
+                points.append(self.project_3d_point(
+                    x, y, level, cx, cy, scale,
+                    self.terrain_azimuth, self.terrain_elevation
+                ))
 
             base_points = []
 
             for bin_index in range(bin_count):
 
                 x = (bin_index / max(1, bin_count - 1) - 0.5) * 2
-                base_points.append(
-                    self.project_terrain_point(x, y, 0.0, cx, cy, scale)
-                )
+                base_points.append(self.project_3d_point(
+                    x, y, 0.0, cx, cy, scale,
+                    self.terrain_azimuth, self.terrain_elevation
+                ))
 
             projected_rows.append((points[0][2], points, base_points))
 
@@ -2562,6 +2763,201 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cr.set_source_surface(self.terrain_surface, 0, 0)
         cr.paint()
+
+    def spawn_pipe(self):
+
+        # A fresh list of every empty cell, scanned each spawn - only
+        # called occasionally (topping up to pipes_max_pipes after a
+        # pipe dies, or on a full reset), not every tick, so rescanning
+        # up to PIPES_GRID_SIZE**3 cells (512 at the default size) each
+        # time is cheap enough not to bother caching.
+        size = PIPES_GRID_SIZE
+
+        empty_cells = [
+            (x, y, z)
+            for x in range(size) for y in range(size) for z in range(size)
+            if (x, y, z) not in self.pipes_occupied
+        ]
+
+        if not empty_cells:
+            return None
+
+        position = random.choice(empty_cells)
+        self.pipes_occupied.add(position)
+
+        return {
+            "pos": position,
+            "dir": random.choice(PIPE_DIRECTIONS),
+            "color": random_bounce_color(),
+        }
+
+    def reset_pipes(self):
+
+        self.pipes_occupied = set()
+        self.pipes_segments = []
+        self.pipes_active = []
+
+        for _ in range(self.pipes_max_pipes):
+
+            spawned = self.spawn_pipe()
+
+            if spawned is None:
+                break
+
+            self.pipes_active.append(spawned)
+
+    def step_pipe(self, pipe):
+
+        size = PIPES_GRID_SIZE
+        x, y, z = pipe["pos"]
+        current_dir = pipe["dir"]
+
+        # Mostly keeps going straight (a pipe that turns every single
+        # step looks like noise, not a pipe) - occasionally considers
+        # turning instead, trying the perpendicular directions (never
+        # reversing straight back the way it came - that would look
+        # like backtracking, not a pipe growing) before falling back
+        # to continuing straight if every turn is blocked.
+        perpendicular = [
+            d for d in PIPE_DIRECTIONS
+            if d != current_dir and d != tuple(-v for v in current_dir)
+        ]
+        random.shuffle(perpendicular)
+
+        if random.random() < 0.25:
+            candidates = perpendicular + [current_dir]
+        else:
+            candidates = [current_dir] + perpendicular
+
+        for direction in candidates:
+
+            next_pos = (
+                x + direction[0], y + direction[1], z + direction[2]
+            )
+
+            in_bounds = all(0 <= v < size for v in next_pos)
+
+            if in_bounds and next_pos not in self.pipes_occupied:
+
+                self.pipes_segments.append((pipe["pos"], next_pos, pipe["color"]))
+                self.pipes_occupied.add(next_pos)
+                pipe["pos"] = next_pos
+                pipe["dir"] = direction
+
+                return True
+
+        return False
+
+    def advance_pipes(self):
+
+        still_active = []
+
+        for pipe in self.pipes_active:
+            if self.step_pipe(pipe):
+                still_active.append(pipe)
+
+        self.pipes_active = still_active
+
+        while len(self.pipes_active) < self.pipes_max_pipes:
+
+            spawned = self.spawn_pipe()
+
+            if spawned is None:
+                break
+
+            self.pipes_active.append(spawned)
+
+        total_cells = PIPES_GRID_SIZE ** 3
+
+        if (
+            not self.pipes_active
+            or len(self.pipes_occupied) >= total_cells * PIPES_RESET_FRACTION
+        ):
+            self.reset_pipes()
+
+    def pipes_tick(self):
+
+        dt = PIPES_TICK_INTERVAL_MS / 1000.0
+
+        level = max(rms(self.left), rms(self.right)) * VU_GAIN
+        self.pipes_level = max(level, self.pipes_level * 0.9)
+        level = min(self.pipes_level, 1.0)
+
+        speed = self.pipes_speed_scale * (1.0 + level * 1.2 * self.pipes_reactivity)
+        self.pipes_step_timer += dt * speed
+
+        # A while loop (not "if") so a very high Speed/Reactivity
+        # combination can advance more than one grid step in a single
+        # tick instead of being capped at one step per 16ms regardless
+        # of how large the requested speed is.
+        while self.pipes_step_timer >= PIPES_BASE_STEP_INTERVAL:
+            self.pipes_step_timer -= PIPES_BASE_STEP_INTERVAL
+            self.advance_pipes()
+
+        self.drawing_area.queue_draw()
+
+        return True
+
+    def draw_pipes(self, cr, width, height):
+
+        cr.set_source_rgb(0.03, 0.03, 0.05)
+        cr.paint()
+
+        size = PIPES_GRID_SIZE
+        cx, cy = width / 2, height / 2
+        scale = min(width, height) * 0.38
+
+        def to_unit(v):
+            return (v / (size - 1) - 0.5) * 2
+
+        projected = []
+
+        for cell_a, cell_b, color in self.pipes_segments:
+
+            sx1, sy1, d1 = self.project_3d_point(
+                to_unit(cell_a[0]), to_unit(cell_a[1]), to_unit(cell_a[2]),
+                cx, cy, scale, self.pipes_azimuth, self.pipes_elevation
+            )
+            sx2, sy2, d2 = self.project_3d_point(
+                to_unit(cell_b[0]), to_unit(cell_b[1]), to_unit(cell_b[2]),
+                cx, cy, scale, self.pipes_azimuth, self.pipes_elevation
+            )
+
+            projected.append(((d1 + d2) / 2, sx1, sy1, sx2, sy2, color))
+
+        # Painter's algorithm again (see render_terrain_surface) - not
+        # perfect for pipes genuinely crossing in front of/behind one
+        # another mid-segment, but a per-segment back-to-front sort
+        # reads correctly in the vast majority of cases and is far
+        # cheaper than real per-pixel depth testing would be.
+        projected.sort(key=lambda entry: entry[0])
+
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
+        cr.set_line_width(6)
+
+        for depth, sx1, sy1, sx2, sy2, color in projected:
+
+            cr.set_source_rgba(color.red, color.green, color.blue, 0.95)
+            cr.move_to(sx1, sy1)
+            cr.line_to(sx2, sy2)
+            cr.stroke()
+
+        # A bright cap on each still-growing pipe's current head -
+        # otherwise the newest segment's own line end looks identical
+        # to any other joint, with no visual cue for "this is where
+        # it's actively growing from right now."
+        for pipe in self.pipes_active:
+
+            x, y, z = pipe["pos"]
+
+            sx, sy, _ = self.project_3d_point(
+                to_unit(x), to_unit(y), to_unit(z),
+                cx, cy, scale, self.pipes_azimuth, self.pipes_elevation
+            )
+
+            cr.set_source_rgba(1, 1, 1, 0.9)
+            cr.arc(sx, sy, 4, 0, 2 * math.pi)
+            cr.fill()
 
     def draw_frequency_labels(self, cr, width, height):
 
@@ -2721,6 +3117,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if self.dvd_timer:
             GLib.source_remove(self.dvd_timer)
             self.dvd_timer = None
+
+        if self.pipes_timer:
+            GLib.source_remove(self.pipes_timer)
+            self.pipes_timer = None
 
         self.primary.aux_window_closed(self.kind)
 

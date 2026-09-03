@@ -50,6 +50,7 @@ AUX_WINDOW_ACTIONS = {
     "spectrogram": "show-spectrogram",
     "terrain": "show-terrain",
     "dvd": "show-dvd-bounce",
+    "pipes": "show-pipes",
 }
 
 Gst.init(None)
