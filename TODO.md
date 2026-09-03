@@ -176,6 +176,215 @@
       drawing). Supersedes the old standalone "X-Y scope visualizer"
       idea - folds it in as one of several possible auxiliary window
       types instead of a one-off feature.
+
+      First cut in progress: VU Meter, X-Y Scope, Spectrum, and
+      Spectrogram (a pure-Python FFT, no numpy) aux_window.py windows,
+      each toggled from a new "Visualizer Windows" menu. Per-window
+      settings popover (color, bar count, decay, frequency labels,
+      mirror-reflection-below), fullscreen toggle, and the same
+      auto-hiding header/overlay-button style and drag-from-anywhere
+      as the main window/mirror windows - the settings/fullscreen
+      overlay buttons were briefly not matching that style (see Done
+      once committed) because Gtk.MenuButton's CSS node name is
+      "menubutton", not "button", so style.css's
+      "button.nav-arrow-button" selector never matched it - switched
+      to a plain Gtk.Button with the popover opened/closed by hand
+      (manual `.set_parent()` + `.popup()`) to work around it.
+
+      That workaround turned out to be the wrong fix: reported from
+      real usage, the settings gear didn't open a popover at all.
+      Reverted to Gtk.MenuButton (GTK's own purpose-built button-that-
+      shows-a-popover widget, `set_popover()` instead of driving
+      `Gtk.Popover.popup()`/`popdown()` by hand - the same widget the
+      hamburger menu itself already uses successfully elsewhere in
+      this app) and fixed the actual styling problem instead of
+      routing around it: style.css's selectors widened from
+      "button.nav-arrow-button" to plain ".nav-arrow-button" (no type
+      qualifier), so they match a "menubutton" CSS node too. Not yet
+      re-confirmed against the live report, since this environment
+      has no GUI interaction capability to click it - the fullscreen
+      button's placement (header.pack_end, same as MirrorWindow's own
+      header fullscreen button) was also separately reported as not
+      appearing in the aux window's top bar, but on inspection the
+      code already does this identically to MirrorWindow; possibly a
+      stale Flatpak build rather than a real gap - worth a clean
+      `flatpak-builder --force-clean` rebuild before assuming
+      otherwise.
+
+      VU meter was also found reading yellow/red almost constantly -
+      it drove off the instantaneous per-chunk sample peak rather than
+      RMS, and loud/modern masters routinely have individual samples
+      near full scale even when the track isn't objectively "hot".
+      Switched to RMS (average power, like a real VU meter's
+      ballistics) with an empirical VU_GAIN so normal material still
+      uses the full visible range.
+
+      VU Meter later given a Style choice (settings popover) on top of
+      the original continuous bars: LED Segments (a fixed stack of
+      individually lit/unlit blocks, same fixed green/yellow/red zone
+      convention as the bars but by segment position rather than a
+      continuous fill - segment count adjustable) and Needle (a
+      classic analog dial gauge per channel, pivot at the bottom,
+      needle sweeping a fixed angle range - tinted via the Color
+      picker, now shown for VU Meter too, unlike the fixed-color bars/
+      LEDs, since a real analog needle's color isn't the information
+      the way the bars'/LEDs' zone colors are). A general Labels
+      switch (renamed from "Frequency Labels", now shown for VU Meter
+      too) adds L/R channel labels beneath each column in every style,
+      plus tick marks on the needle gauge specifically.
+
+      Spectrum/Spectrogram's low end also had many bars/rows reading
+      identically - FFT_SIZE was 512 (~86Hz/bin), and the log-spaced
+      bar/row boundaries below a few hundred Hz are narrower than one
+      bin there, so several consecutive low bars ended up reading the
+      exact same FFT bin. Bumped to 2048 (~21.5Hz/bin, ~46ms added
+      buffering latency, imperceptible for a passive visualizer) -
+      the classic STFT time/frequency trade-off, not a bug in the
+      binning logic itself; a large enough window still won't fully
+      resolve the very lowest handful of bars, since log spacing gets
+      arbitrarily narrow near 20Hz.
+- [ ] "DVD Bounce" aux window built - a fifth Visualizer Windows entry
+      (aux_window.py). A chosen icon (defaults to the real DVD logo -
+      see below; a settings-popover dropdown offers Tux, the app's own
+      logo, and a few symbolic alternates - Star/Heart/Sun/Smiley/
+      Wireless) bounces around the window, classic-DVD-screensaver
+      style: reflects off each wall, and
+      cycles to a new random color from a fixed palette on every wall
+      hit (kept separate from continuous audio reactivity - a
+      constant hue shift and a discrete per-bounce one would fight
+      each other) - the actual iconic part of the reference, not just
+      a moving shape. Size and speed both scale continuously with the
+      live audio level (RMS, same VU-meter-style attack/decay as the
+      VU Meter window) on top of that, plus a user Speed multiplier in
+      its settings popover. Symbolic icons (the alternates, not the
+      full-color app logo) are recolored to the current bounce color
+      by loading the icon as a plain GdkPixbuf, then using it as a
+      Cairo mask against a flat color fill (push_group/pop_group/mask,
+      the same technique the mirror-reflection fade elsewhere in this
+      file already uses) - GTK's own symbolic-icon recoloring is CSS-
+      driven and doesn't apply to a bare pixbuf load. Runs its own
+      independent ~60fps GLib timer (dvd_tick) rather than only
+      redrawing when push_audio delivers a new audio chunk (every
+      other aux window kind's approach) - needed since the icon has to
+      keep moving smoothly through silence and between chunks, not
+      just when new audio happens to arrive; cancelled alongside the
+      existing hide_timer in on_close_request. Icon lookups are
+      cached (icon name + current pixel size, since size is
+      continuously audio-reactive) rather than hitting the icon
+      theme/disk on every tick. Not yet confirmed against a live
+      display - this environment has no GUI interaction capability
+      (same limitation as everything else in this file marked that
+      way), so the bounce physics, wall-collision math, and icon
+      recoloring are reasoned through and compile-checked but not
+      eyeballed running.
+
+      The default "DVD Logo" choice is the real thing - Wikimedia
+      Commons' File:DVD_logo.svg, tagged there as public domain
+      (PD-textlogo: simple shapes/text, below copyright's threshold of
+      originality), fetched from the URL the user gave directly and
+      bundled into melange.gresource (src/dvd-logo.svg,
+      melange.gresource.xml) rather than the real trademarked artwork
+      being reproduced by hand. Commons separately flags it as
+      possibly trademark-protected regardless of copyright status -
+      noted for awareness, not a blocker for a nostalgic screensaver
+      parody use like this one, and the user's call to make as project
+      owner. Loaded via GdkPixbuf.Pixbuf.new_from_resource_at_scale at
+      its own aspect ratio (~2.27:1, not stretched into the square
+      bounce bbox) and recolored via the same push_group/mask
+      technique as the symbolic icon choices, since the source path is
+      a plain black fill on transparent - falls back to an original
+      hand-drawn "DVD" wordmark plate (Cairo text, not image-based) if
+      resource loading ever fails (e.g. gdk-pixbuf's SVG loader/
+      librsvg missing at runtime), so the window still shows something
+      recognizable either way. A Tux option was also added the same
+      way - given a URL to Wikipedia's File:Tux.svg, fetched Larry
+      Ewing's real, original artwork (freely licensed - credited in
+      README's Credits section per its usual terms) and bundled it
+      (src/tux.svg) the same way as the DVD logo. Genuinely full-color
+      (confirmed via its own SVG fill attributes: black, off-white,
+      several yellow/orange shades), so shown as-is rather than
+      recolored, unlike the DVD wordmark - the same treatment already
+      given the full-color app-logo option. Falls back to an original,
+      simplified Cairo-drawn penguin doodle (not a reproduction of
+      Ewing's specific linework) if the bundled resource ever fails to
+      load.
+
+      Also given a settings-popover Size (base icon size, replacing
+      the previously-hardcoded DVD_BASE_SIZE) and Audio Reactivity
+      (a single multiplier scaling how strongly the continuous level-
+      driven size/speed effects react, generalizing what were
+      previously hardcoded 0.35/1.5 factors) slider, plus beat
+      reactivity: a React to Beats switch and Beat Sensitivity slider
+      driving a separate, snappier size pop layered on top of the
+      continuous level-based scaling (dvd_tick) - detects a beat as a
+      sudden jump in instantaneous level *above its own recent rolling
+      average* (a ~1s history at the tick rate), not just "loud right
+      now" (level, VU-ballistics-style, stays high throughout a
+      sustained loud passage with no discrete beats in that sense). A
+      self-contained Python-side detector, same idea as the app's own
+      Energy Threshold beat mode (docs/beat-detection.md) but not
+      reusing it directly - that one runs JS-side off a different tap
+      of the audio graph, with no existing path forwarding its
+      detections to aux windows at all.
+- [ ] One more aux window idea raised, not yet built: a circular/
+      radial spectrogram - same waterfall data as the rectangular
+      Spectrogram, but frequency as radius and time as angle around a
+      circle instead of x/y axes (Cairo `arc`-based wedge segments
+      instead of rectangles - render cost per frame needs checking, an
+      arc fill is pricier than a plain rectangle and there could be
+      many more of them at usable resolution).
+- [ ] Requested batch of further aux window work, not yet built - one
+      at a time, each committed on its own once done:
+      1. Peak Meter - a hardware-style peak meter distinct from the
+         existing VU Meter: instantaneous per-channel peak (not RMS)
+         with a peak-hold indicator (a thin line that jumps to a new
+         peak instantly and decays back down slowly on its own timer,
+         separate from the bar's own fast-attack/slow-release
+         ballistics) and a dBFS scale, since peak and VU-style average
+         loudness are genuinely different readings professionals
+         watch for different reasons (peak for clipping headroom, VU
+         for perceived loudness) - not just a reskin of the VU Meter.
+      2. Oscilloscope - a scrolling time-domain waveform (amplitude vs
+         time, both channels), distinct from the existing X-Y Scope
+         (which plots L against R, not either channel against time).
+      3. Vector Scope - a proper phase-correlation "goniometer" style
+         display (traditionally rotated 45° from a plain L/R X-Y
+         plot, so mono material draws a vertical line and out-of-phase
+         material spreads horizontally), with intensity/persistence
+         trails, L/R/M/S axis labels, and a phase correlation reading -
+         a more information-dense relative of the existing X-Y Scope,
+         not a duplicate of it.
+      4. 3D Terrain Map Spectrogram - the existing Spectrogram's
+         waterfall data (magnitude per frequency bin per time column)
+         rendered as an oblique/isometric pseudo-3D ridge-line terrain
+         (height = magnitude) instead of the existing flat 2D heatmap -
+         a new aux window kind, not a mode of the existing Spectrogram.
+      5. A vertical-orientation setting for the existing (rectangular)
+         Spectrogram - today it always scrolls left-to-right (time on
+         x, frequency on y, newest column at the right edge); this
+         adds a settings-popover toggle to instead scroll top-to-bottom
+         (time on y, frequency on x, newest row at top or bottom).
+      6. Pipes - a "3D Pipes"-screensaver-style aux window: a handful
+         of colored tubes turning corners and filling the window on a
+         simple grid-walk, not audio-analysis-driven the way the
+         others are - live audio just modulates pipe speed/spawn rate,
+         for consistency with the rest of this feature rather than
+         because the reference screensaver itself reacts to anything.
+- [ ] **BUG**: some of the aux visualizer windows above (VU Meter/X-Y
+      Scope/Spectrum/Spectrogram) reportedly don't react to audio in
+      some cases - not yet reproduced or root-caused in this
+      environment (no real speaker/mic loop to confirm against).
+      Worth checking: whether it's every window of a given kind or
+      only some sessions/some audio sources; whether it's specific to
+      one kind (e.g. Spectrum/Spectrogram need a full FFT_SIZE-sample
+      rolling buffer before their first real frame -
+      aux_window.py's `push_audio`/`update_spectrum_levels`/
+      `update_spectrogram_columns` - so a very short burst of audio
+      might never fill it) or affects all of them equally (which would
+      point at the shared forwarding path instead -
+      `forward_audio_to_aux_windows`/`on_audio_sample` in window.py);
+      and whether it only affects windows opened *after* audio
+      playback already started, versus ones open from the start.
 - [ ] MPRIS "now playing" integration - pull actual track/artist from whatever's playing (Spotify, etc.) via D-Bus instead of just the preset name; also enables auto-advancing the preset on track change
 - [ ] Recording/export - save the visualizer output as a video clip, or grab a screenshot of a good moment
 - [ ] MIDI controller support - map physical knobs/pads to sensitivity, blend time, next/prev preset
