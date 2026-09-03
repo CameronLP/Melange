@@ -144,7 +144,6 @@
       Favorites/Queue, see Done) rather than just one list; worth
       revisiting now that there's more to fit.
 - [ ] Optional "now playing" overlay in the corner of the canvas
-- [ ] X-Y scope visualizer
 - [ ] Frequency-range control for what feeds the visualizer (so presets that only react to bass, etc. can be tuned)
 - [ ] Logo + symbolic icon polish - the scalable app icon was replaced (Bottles-based, data/icons/hicolor/scalable/apps), but the symbolic icon at data/icons/hicolor/symbolic/apps/com.cameronlp.Melange-symbolic.svg is still the original template placeholder and doesn't match
 - [ ] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
@@ -158,6 +157,25 @@
 
 ### Bigger feature ideas
 
+- [ ] Slide-in sidebar for the Queue/Playlist - a panel that slides in
+      over the visualizer (edge-anchored, like the on-canvas nav-arrow/
+      favorite overlays) showing the current queue or loaded playlist,
+      reorderable in place, instead of requiring the separate Presets
+      browser dialog - so the up-next list stays visible without
+      leaving fullscreen or interrupting the visualizer
+- [ ] Experimental: togglable auxiliary visualizer windows - separate
+      small windows (VU meter, X-Y/Lissajous oscilloscope scope, etc.)
+      driven from the same real-time audio data as the main
+      visualizer, each independently opened/closed rather than baked
+      into the main canvas. Likely built on the existing Mirror
+      Windows infrastructure (mirror_window.py, window.py) - a
+      separate `Gtk.Window` per aux view - rather than a wholly new
+      window-management path, though the content itself won't be a
+      pixel mirror of the main canvas (each shows its own
+      analysis/rendering of the audio, not what the main preset is
+      drawing). Supersedes the old standalone "X-Y scope visualizer"
+      idea - folds it in as one of several possible auxiliary window
+      types instead of a one-off feature.
 - [ ] MPRIS "now playing" integration - pull actual track/artist from whatever's playing (Spotify, etc.) via D-Bus instead of just the preset name; also enables auto-advancing the preset on track change
 - [ ] Recording/export - save the visualizer output as a video clip, or grab a screenshot of a good moment
 - [ ] MIDI controller support - map physical knobs/pads to sensitivity, blend time, next/prev preset
