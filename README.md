@@ -83,6 +83,14 @@ flatpak run com.cameronlp.Melange
   used to load `.milk` files
 - [baron](https://github.com/uvmain/butterchurn-presets-baron) — the
   bundled `butterchurn-presets-baron` preset pack
+- The DVD logo used in the DVD Bounce visualizer window is
+  [Wikimedia Commons' File:DVD_logo.svg](https://commons.wikimedia.org/wiki/File:DVD_logo.svg),
+  public domain (below the threshold of originality for copyright)
+- Tux, also selectable in the DVD Bounce window, is
+  [Larry Ewing](mailto:lewing@isc.tamu.edu)'s original artwork, created
+  with [The GIMP](https://www.gimp.org/) — used here per its usual
+  permission terms (free to use/modify with credit to Larry Ewing and
+  The GIMP)
 
 ## License
 

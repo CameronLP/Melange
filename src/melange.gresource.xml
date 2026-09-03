@@ -3,5 +3,7 @@
   <gresource prefix="/com/cameronlp/Melange">
     <file preprocess="xml-stripblanks">window.ui</file>
     <file preprocess="xml-stripblanks">shortcuts-dialog.ui</file>
+    <file>dvd-logo.svg</file>
+    <file>tux.svg</file>
   </gresource>
 </gresources>

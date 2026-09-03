@@ -23,6 +23,7 @@ import subprocess
 import threading
 import base64
 import time
+import array
 from pathlib import Path
 
 gi.require_version("Gst", "1.0")
@@ -33,6 +34,20 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.webview import create_webview
 from melange.mirror_window import MirrorWindow
+from melange.aux_window import AuxVisualizerWindow
+
+# kind -> the win.show-* stateful action toggling that aux window,
+# shared between the action setup in __init__ and aux_window_closed
+# (which flips the action back to unchecked when the window's closed
+# via its own close button rather than the menu item).
+AUX_WINDOW_ACTIONS = {
+    "vu": "show-vu-meter",
+    "peak": "show-peak-meter",
+    "xy": "show-xy-scope",
+    "spectrum": "show-spectrum",
+    "spectrogram": "show-spectrogram",
+    "dvd": "show-dvd-bounce",
+}
 
 Gst.init(None)
 
@@ -128,6 +143,22 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         webview_overlay.add_overlay(self.favorite_button)
 
+        # Same corner as the favorite button, immediately to its left.
+        # Disabled for now (see TODO.md - slide-in Queue/Playlist
+        # sidebar) rather than wired to the add-to-queue-or-playlist
+        # popover.
+        self.playlist_queue_button = Gtk.Button(icon_name="list-add-symbolic")
+        self.playlist_queue_button.add_css_class("nav-arrow-button")
+        self.playlist_queue_button.set_size_request(48, 48)
+        self.playlist_queue_button.set_halign(Gtk.Align.END)
+        self.playlist_queue_button.set_valign(Gtk.Align.END)
+        self.playlist_queue_button.set_margin_end(68)
+        self.playlist_queue_button.set_margin_bottom(12)
+        self.playlist_queue_button.set_tooltip_text("Add to Queue or Playlist…")
+        self.playlist_queue_button.set_sensitive(False)
+
+        webview_overlay.add_overlay(self.playlist_queue_button)
+
         self.content_box.append(
             webview_overlay
         )
@@ -167,6 +198,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.playlists = self.load_playlists()
         self.playlists_dialog = None
         self.mirror_windows = []
+        self.aux_windows = {}
         self.current_preset_name = None
         self.current_playlist_name = None
 
@@ -508,6 +540,26 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(shuffle_action)
 
+        # Experimental (see TODO.md) - VU Meter/X-Y Scope aux windows,
+        # each a plain stateful boolean toggle (same pattern as
+        # lock-preset/shuffle-preset above) rather than a "New Window"
+        # action like Mirror Windows uses, since only one of each
+        # makes sense open at a time.
+        for kind, action_name in AUX_WINDOW_ACTIONS.items():
+
+            aux_action = Gio.SimpleAction.new_stateful(
+                action_name,
+                None,
+                GLib.Variant("b", False)
+            )
+
+            aux_action.connect(
+                "change-state",
+                lambda action, value, kind=kind: self.aux_window_toggled(action, value, kind)
+            )
+
+            self.add_action(aux_action)
+
         preferences_action = Gio.SimpleAction.new("preferences", None)
 
         preferences_action.connect(
@@ -770,7 +822,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         buttons = (
             self.prev_arrow_button,
             self.next_arrow_button,
-            self.favorite_button
+            self.favorite_button,
+            self.playlist_queue_button
         )
 
         for button in buttons:
@@ -856,6 +909,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         for mirror in list(self.mirror_windows):
             mirror.close()
 
+        # Same reasoning as the mirror windows above - an aux window
+        # only ever shows this window's own live audio (see
+        # aux_window.py), so there's nothing left to feed it once this
+        # window is gone.
+        for aux_window in list(self.aux_windows.values()):
+            aux_window.close()
+
         # Returning False here (the usual "let the default handler
         # run" convention for this signal) was found - while building
         # the mirror-window close path above - to leave the window
@@ -912,6 +972,53 @@ class MelangeWindow(Adw.ApplicationWindow):
             if mirror.mirror_number == mirror_number:
                 mirror.present()
                 return
+
+    def aux_window_toggled(self, action, value, kind):
+
+        action.set_state(value)
+
+        if value.get_boolean():
+
+            if kind not in self.aux_windows:
+
+                aux_window = AuxVisualizerWindow(self, kind)
+                self.aux_windows[kind] = aux_window
+                aux_window.present()
+
+            else:
+                self.aux_windows[kind].present()
+
+        else:
+
+            aux_window = self.aux_windows.pop(kind, None)
+
+            if aux_window is not None:
+                aux_window.close()
+
+    def aux_window_closed(self, kind):
+
+        self.aux_windows.pop(kind, None)
+
+        action = self.lookup_action(AUX_WINDOW_ACTIONS[kind])
+
+        if action is not None:
+            action.set_state(GLib.Variant("b", False))
+
+    def forward_audio_to_aux_windows(self, data):
+
+        if not self.aux_windows:
+            return False
+
+        samples = array.array("h")
+        samples.frombytes(data)
+
+        left = [s / 32768.0 for s in samples[0::2]]
+        right = [s / 32768.0 for s in samples[1::2]]
+
+        for aux_window in self.aux_windows.values():
+            aux_window.push_audio(left, right)
+
+        return False
 
     def rebuild_mirror_windows_menu(self):
 
@@ -2397,7 +2504,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     # persistent Gio.Menu, since which playlists exist can change
     # between clicks and there's no menu-model equivalent of "list of
     # playlist names" to keep in sync otherwise.
-    def open_add_to_playlist_popover(self, button, name):
+    def open_add_to_playlist_popover(self, button, name, include_queue=False):
 
         popover = Gtk.Popover()
         popover.set_parent(button)
@@ -2408,6 +2515,22 @@ class MelangeWindow(Adw.ApplicationWindow):
         box.set_margin_end(6)
         box.set_margin_top(6)
         box.set_margin_bottom(6)
+
+        if include_queue:
+            queue_row = Gtk.Button(label="Add to Queue")
+            queue_row.add_css_class("flat")
+
+            row_label = queue_row.get_child()
+            if isinstance(row_label, Gtk.Label):
+                row_label.set_xalign(0)
+
+            queue_row.connect(
+                "clicked",
+                lambda b, n=name: self.add_to_queue_row_clicked(popover, n)
+            )
+
+            box.append(queue_row)
+            box.append(Gtk.Separator())
 
         if not self.playlists:
             empty_label = Gtk.Label(label="No playlists yet")
@@ -2446,6 +2569,11 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         popover.set_child(box)
         popover.popup()
+
+    def add_to_queue_row_clicked(self, popover, name):
+
+        popover.popdown()
+        self.enqueue_preset(name)
 
     def add_to_playlist_row_clicked(self, popover, name, playlist_name):
 
@@ -2743,6 +2871,12 @@ class MelangeWindow(Adw.ApplicationWindow):
                     self.send_audio_to_webview,
                     data
                 )
+
+                if self.aux_windows:
+                    GLib.idle_add(
+                        self.forward_audio_to_aux_windows,
+                        data
+                    )
 
         return Gst.FlowReturn.OK
 

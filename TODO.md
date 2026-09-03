@@ -2,6 +2,36 @@
 
 ## Urgent
 
+- [ ] **PERF**: Spectrogram aux window (aux_window.py) reported to
+      cause lag - not yet fixed, but a likely cause is already visible
+      from the code: `render_spectrogram` redraws its *entire* history
+      (up to `SPECTROGRAM_COLUMNS` = 200 columns x `num_bars` bars,
+      12,800 rectangle fills at the default settings, more with a
+      higher bar count) on every single `on_draw`, and `on_draw` fires
+      on every `push_audio()` call - which is every audio chunk
+      forwarded from `window.py`'s `forward_audio_to_aux_windows`
+      (tens of times/sec while audio plays, the same delivery rate
+      noted elsewhere in this file for the main webview audio bridge),
+      not just when `update_spectrogram_columns` actually appends a
+      *new* column (throttled separately, to `SPECTROGRAM_FRAME_INTERVAL`
+      = every 50ms). So ~199 of every 200 redraws re-fill columns that
+      haven't changed since the last frame, for no visible benefit -
+      only the newest column ever actually differs between two
+      consecutive draws at the current 50ms column rate. Likely fix:
+      cache the already-drawn history to an offscreen Cairo
+      `ImageSurface`/`cairo.Group` and blit-plus-append instead of
+      redrawing from scratch each time, or throttle `queue_draw`
+      itself (in `push_audio`) to the same 50ms cadence for this kind
+      specifically rather than firing on every audio chunk. The pure-
+      Python FFT (`fft`, radix-2 Cooley-Tukey on `FFT_SIZE` = 2048
+      samples, no numpy) is already correctly throttled to the 50ms
+      column rate and is a secondary suspect at most - worth
+      profiling rather than assuming, but the redraw path above is the
+      more obviously wasteful one from a straight code read. Also
+      worth checking: whether having Spectrum *and* Spectrogram open
+      at once doubles FFT cost for no reason, since each keeps its own
+      separate `spectrum_buffer`/FFT call with no sharing between
+      windows.
 - [ ] **BUG**: In fullscreen, if the mouse cursor comes to rest over
       the window (rather than moving off it or leaving entirely), the
       toolbar/cursor never auto-hides. Reported by the user, not yet
@@ -333,9 +363,9 @@
       instead of rectangles - render cost per frame needs checking, an
       arc fill is pricier than a plain rectangle and there could be
       many more of them at usable resolution).
-- [ ] Requested batch of further aux window work, not yet built - one
-      at a time, each committed on its own once done:
-      1. Peak Meter - a hardware-style peak meter distinct from the
+- [ ] Requested batch of further aux window work, one at a time, each
+      committed on its own once done:
+      1. Peak Meter - built, see below. A hardware-style peak meter distinct from the
          existing VU Meter: instantaneous per-channel peak (not RMS)
          with a peak-hold indicator (a thin line that jumps to a new
          peak instantly and decays back down slowly on its own timer,
@@ -370,6 +400,44 @@
          others are - live audio just modulates pipe speed/spawn rate,
          for consistency with the rest of this feature rather than
          because the reference screensaver itself reacts to anything.
+
+      Peak Meter built first: instantaneous per-channel |sample| peak
+      (no VU_GAIN, unlike the VU Meter - a peak meter exists to show
+      real headroom against 0dBFS, and artificially inflating that
+      would defeat the point), decayed the same fast-attack/slow-
+      release way as the VU Meter's own bars (shared Decay setting).
+      Displayed on a proper -60..0 dBFS log scale (db_frac) rather
+      than linear - most of a track's dynamic range lives in the top
+      ~20dB, which linear would crush into a sliver - with its own
+      red-zone threshold (>-3dB) tighter than the VU Meter's, since a
+      peak meter's red means "near clipping", not "loud". A peak-hold
+      marker (a thin line, separate from the bar's own fill) jumps to
+      a new peak instantly and lingers for a settings-adjustable Peak
+      Hold Time before falling back down at a fixed rate, never below
+      the live reading - the classic hardware behavior, so a brief
+      transient stays readable past the very next frame. Labels
+      (shared switch/row with VU Meter, generalized from "Frequency
+      Labels" to "Labels") shows a dB scale down the left edge plus
+      L/R channel labels, same as VU Meter's L/R labels.
+
+      Two more things fixed/added alongside this, from live testing
+      feedback: a Background Color setting for DVD Bounce (previously
+      a hardcoded dark gray), and a real bug in the settings popover
+      itself - clicking outside it was reported to not close it,
+      despite Gtk.Popover's own default autohide=True (no code was
+      found disabling it, and every other Popover already in this
+      codebase - including this exact settings popover once it was
+      switched to Gtk.MenuButton, see the earlier "settings gear
+      doesn't open" fix above - relies on that same default). Rather
+      than leave that unresolved on faith in a default that wasn't
+      visibly working, added an explicit belt-and-suspenders fallback:
+      a CAPTURE-phase Gtk.GestureClick on the whole aux window that
+      pops the settings popover down on any press, without claiming
+      the event sequence - so a click that lands on the settings
+      button or the popover's own content never reaches this handler
+      at all (each owns its own hit region), and everything else
+      (drag-to-move, header buttons, the popover's own controls)
+      keeps working exactly as before.
 - [ ] **BUG**: some of the aux visualizer windows above (VU Meter/X-Y
       Scope/Spectrum/Spectrogram) reportedly don't react to audio in
       some cases - not yet reproduced or root-caused in this

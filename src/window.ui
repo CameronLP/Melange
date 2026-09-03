@@ -161,6 +161,45 @@
 
       </submenu>
 
+      <!-- Experimental (see TODO.md) - each a plain checkable toggle
+           (win.show-vu-meter/win.show-xy-scope) rather than a
+           New Window action, since only one of each makes sense open
+           at a time. -->
+      <submenu id="aux_windows_submenu">
+        <attribute name="label" translatable="yes">Visualizer Windows</attribute>
+
+        <item>
+          <attribute name="label" translatable="yes">VU Meter</attribute>
+          <attribute name="action">win.show-vu-meter</attribute>
+        </item>
+
+        <item>
+          <attribute name="label" translatable="yes">Peak Meter</attribute>
+          <attribute name="action">win.show-peak-meter</attribute>
+        </item>
+
+        <item>
+          <attribute name="label" translatable="yes">X-Y Scope</attribute>
+          <attribute name="action">win.show-xy-scope</attribute>
+        </item>
+
+        <item>
+          <attribute name="label" translatable="yes">Spectrum</attribute>
+          <attribute name="action">win.show-spectrum</attribute>
+        </item>
+
+        <item>
+          <attribute name="label" translatable="yes">Spectrogram</attribute>
+          <attribute name="action">win.show-spectrogram</attribute>
+        </item>
+
+        <item>
+          <attribute name="label" translatable="yes">DVD Bounce</attribute>
+          <attribute name="action">win.show-dvd-bounce</attribute>
+        </item>
+
+      </submenu>
+
     </section>
 
 

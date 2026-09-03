@@ -29,6 +29,7 @@ configure_file(
 melange_sources = [
   '__init__.py',
   'main.py',
+  'aux_window.py',
   'mirror_window.py',
   'webview.py',
   'window.py',

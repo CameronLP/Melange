@@ -91,7 +91,11 @@ headerbar.melange-header.attention-flash {
    Same look as the original HTML version: circular, translucent
    black, hidden until the toolbar/cursor auto-reveal makes it visible
    (see set_nav_arrows_visible in window.py), same fade transition. */
-button.nav-arrow-button {
+/* No type qualifier (not "button.nav-arrow-button") - the aux
+   visualizer windows' settings trigger (aux_window.py) is a
+   Gtk.MenuButton, whose CSS node name is "menubutton", not "button";
+   a type-qualified selector would silently never match it. */
+.nav-arrow-button {
     background-color: rgba(0, 0, 0, 0.4);
     color: #fff;
     border-radius: 9999px;
@@ -99,10 +103,42 @@ button.nav-arrow-button {
     transition: opacity 200ms ease, background-color 200ms ease;
 }
 
-button.nav-arrow-button.nav-arrow-visible {
+.nav-arrow-button.nav-arrow-visible {
     opacity: 1;
 }
 
-button.nav-arrow-button:hover {
+.nav-arrow-button:hover {
     background-color: rgba(0, 0, 0, 0.65);
+}
+
+/* Gtk.MenuButton (the aux windows' settings trigger) isn't a single
+   CSS node - per GTK's own docs its structure is
+   "menubutton > button.toggle", an inner real button that does its
+   own default flat-button painting (a rectangular hover/pressed
+   background) independently of whatever the outer ".nav-arrow-button"
+   rule above draws. Left alone, that inner node's own highlight shows
+   through on hover/press, on top of/behind the translucent circle -
+   a literal rectangular-button-shaped artifact clashing with the
+   circular look every other overlay control has. Stripped of all its
+   own background/border/shadow in every state so only the outer
+   node's circle ever paints. */
+.nav-arrow-button > button {
+    background: none;
+    box-shadow: none;
+    border: none;
+    outline: none;
+    padding: 0;
+    min-width: 0;
+    min-height: 0;
+    border-radius: 9999px;
+}
+
+.nav-arrow-button > button:hover,
+.nav-arrow-button > button:active,
+.nav-arrow-button > button:checked,
+.nav-arrow-button > button:focus {
+    background: none;
+    box-shadow: none;
+    border: none;
+    outline: none;
 }
