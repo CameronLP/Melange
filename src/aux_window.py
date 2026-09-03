@@ -17,6 +17,7 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+import colorsys
 import math
 import cmath
 import random
@@ -222,6 +223,38 @@ def gradient_color(level, lo, hi):
     )
 
 
+def rainbow_color(level):
+
+    # A full hue sweep instead of a 2-stop lerp between two fixed
+    # endpoints - the classic "rainbow" spectrum-analyzer look (red at
+    # full scale, sweeping down through orange/yellow/green/cyan to
+    # blue-violet at silence), same red=hot/blue=cool convention as
+    # the old heatmap_color this whole gradient system replaced.
+    # Brightness also rises with level (val) so quiet cells read as
+    # dim rather than a fully saturated color at any level.
+    level = max(0.0, min(1.0, level))
+
+    hue = (1.0 - level) * 0.72
+    r, g, b = colorsys.hsv_to_rgb(hue, 0.9, 0.35 + 0.65 * level)
+
+    return (r, g, b)
+
+
+# Palette choices shared by every gradient-capable kind (Spectrogram,
+# Terrain, Waterfall) - key stored in e.g. self.terrain_palette,
+# label shown in that kind's settings popover dropdown.
+PALETTE_CHOICES = [("gradient", "Gradient"), ("rainbow", "Rainbow")]
+
+# Same idea as PALETTE_CHOICES, for the kinds that only ever had a
+# single solid Color (X-Y Scope, Spectrum, VU Meter's needle style,
+# Oscilloscope, Vector Scope) rather than a Low/High gradient pair -
+# "Gradient" wouldn't mean anything for those, so this offers "Solid"
+# (today's only behavior) against "Rainbow" instead. Backed by one
+# shared self.color_mode field, the same way self.color itself is
+# already shared generic state across these kinds.
+COLOR_MODE_CHOICES = [("solid", "Solid"), ("rainbow", "Rainbow")]
+
+
 def ensure_min_brightness(color, minimum=0.35):
 
     # Scales a color up toward white (preserving its hue, not just
@@ -365,6 +398,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.color = Gdk.RGBA()
         self.color.parse("#33cc55")
 
+        # Rainbow mode draws the trace as many short per-point-colored
+        # segments instead of one continuous stroke - cheap for X-Y
+        # Scope/Vector Scope (bounded by the current audio chunk size)
+        # but Oscilloscope's Time Base can run up to 2048 points per
+        # channel, which would mean thousands of tiny stroke() calls
+        # every redraw at the same unthrottled audio-chunk-driven rate
+        # already flagged as the likely cause of the flat Spectrogram's
+        # own reported lag - defaulting Oscilloscope to Solid instead
+        # avoids reintroducing that exact class of problem; Rainbow is
+        # still there to opt into.
+        self.color_mode = "solid" if kind == "oscilloscope" else "rainbow"
+
         self.num_bars = 24
         self.decay = 0.85
         self.show_labels = False
@@ -379,6 +424,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.spectrogram_color_lo.parse("#000000")
         self.spectrogram_color_hi = Gdk.RGBA()
         self.spectrogram_color_hi.parse("#ff3300")
+        self.spectrogram_palette = "rainbow"
 
         # VU Meter style. "bars" is the original look (draw_vu_bar);
         # "led" is a discrete-segment hardware-style meter
@@ -649,6 +695,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_color_lo.parse("#0a1a4d")
         self.terrain_color_hi = Gdk.RGBA()
         self.terrain_color_hi.parse("#ff9933")
+        self.terrain_palette = "rainbow"
 
         # 3D Waterfall - same rows-of-FFT-magnitude/camera-rotation/
         # render-cache shape as Terrain above (see waterfall_surface/
@@ -670,6 +717,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.waterfall_color_lo.parse("#000000")
         self.waterfall_color_hi = Gdk.RGBA()
         self.waterfall_color_hi.parse("#ff3300")
+        self.waterfall_palette = "rainbow"
+        self.waterfall_textured = True
 
         # Pipes - pipes_occupied tracks every grid cell any pipe has
         # ever passed through since the last reset (collision check
@@ -827,6 +876,32 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             color_row.append(color_button)
             box.append(color_row)
 
+            color_mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            color_mode_label = Gtk.Label(label="Color Mode", xalign=0, hexpand=True)
+            color_mode_row.append(color_mode_label)
+
+            color_mode_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in COLOR_MODE_CHOICES]
+            )
+
+            current_color_mode_index = next(
+                (
+                    i for i, (key, _) in enumerate(COLOR_MODE_CHOICES)
+                    if key == self.color_mode
+                ),
+                0
+            )
+            color_mode_dropdown.set_selected(current_color_mode_index)
+
+            color_mode_dropdown.connect(
+                "notify::selected",
+                self.on_color_mode_changed
+            )
+
+            color_mode_row.append(color_mode_dropdown)
+            box.append(color_mode_row)
+
         if self.kind == "vu":
 
             style_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -916,6 +991,57 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             box.append(reset_view_row)
 
         if self.kind == "waterfall":
+
+            waterfall_palette_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_palette_label = Gtk.Label(
+                label="Palette", xalign=0, hexpand=True
+            )
+            waterfall_palette_row.append(waterfall_palette_label)
+
+            waterfall_palette_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in PALETTE_CHOICES]
+            )
+
+            current_waterfall_palette_index = next(
+                (
+                    i for i, (key, _) in enumerate(PALETTE_CHOICES)
+                    if key == self.waterfall_palette
+                ),
+                0
+            )
+            waterfall_palette_dropdown.set_selected(current_waterfall_palette_index)
+
+            waterfall_palette_dropdown.connect(
+                "notify::selected",
+                self.on_waterfall_palette_changed
+            )
+
+            waterfall_palette_row.append(waterfall_palette_dropdown)
+            box.append(waterfall_palette_row)
+
+            waterfall_textured_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_textured_label = Gtk.Label(
+                label="Textured", xalign=0, hexpand=True
+            )
+            waterfall_textured_row.append(waterfall_textured_label)
+
+            waterfall_textured_switch = Gtk.Switch()
+            waterfall_textured_switch.set_active(self.waterfall_textured)
+            waterfall_textured_switch.set_valign(Gtk.Align.CENTER)
+
+            waterfall_textured_switch.connect(
+                "notify::active",
+                self.on_waterfall_textured_changed
+            )
+
+            waterfall_textured_row.append(waterfall_textured_switch)
+            box.append(waterfall_textured_row)
 
             waterfall_lo_color_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
@@ -1175,6 +1301,32 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             vertical_row.append(vertical_switch)
             box.append(vertical_row)
 
+            palette_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            palette_label = Gtk.Label(label="Palette", xalign=0, hexpand=True)
+            palette_row.append(palette_label)
+
+            palette_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in PALETTE_CHOICES]
+            )
+
+            current_palette_index = next(
+                (
+                    i for i, (key, _) in enumerate(PALETTE_CHOICES)
+                    if key == self.spectrogram_palette
+                ),
+                0
+            )
+            palette_dropdown.set_selected(current_palette_index)
+
+            palette_dropdown.connect(
+                "notify::selected",
+                self.on_spectrogram_palette_changed
+            )
+
+            palette_row.append(palette_dropdown)
+            box.append(palette_row)
+
             lo_color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             lo_color_label = Gtk.Label(label="Low Color", xalign=0, hexpand=True)
@@ -1208,6 +1360,36 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             box.append(hi_color_row)
 
         if self.kind == "terrain":
+
+            terrain_palette_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            terrain_palette_label = Gtk.Label(
+                label="Palette", xalign=0, hexpand=True
+            )
+            terrain_palette_row.append(terrain_palette_label)
+
+            terrain_palette_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in PALETTE_CHOICES]
+            )
+
+            current_terrain_palette_index = next(
+                (
+                    i for i, (key, _) in enumerate(PALETTE_CHOICES)
+                    if key == self.terrain_palette
+                ),
+                0
+            )
+            terrain_palette_dropdown.set_selected(current_terrain_palette_index)
+
+            terrain_palette_dropdown.connect(
+                "notify::selected",
+                self.on_terrain_palette_changed
+            )
+
+            terrain_palette_row.append(terrain_palette_dropdown)
+            box.append(terrain_palette_row)
 
             terrain_lo_color_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
@@ -1673,6 +1855,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
+    def on_color_mode_changed(self, dropdown, param):
+
+        index = dropdown.get_selected()
+
+        if 0 <= index < len(COLOR_MODE_CHOICES):
+            self.color_mode = COLOR_MODE_CHOICES[index][0]
+            self.drawing_area.queue_draw()
+
     def on_bars_changed(self, spin):
 
         self.num_bars = int(spin.get_value())
@@ -1897,6 +2087,38 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_waterfall_color_hi_changed(self, button, param):
 
         self.waterfall_color_hi = button.get_rgba()
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_spectrogram_palette_changed(self, dropdown, param):
+
+        index = dropdown.get_selected()
+
+        if 0 <= index < len(PALETTE_CHOICES):
+            self.spectrogram_palette = PALETTE_CHOICES[index][0]
+            self.drawing_area.queue_draw()
+
+    def on_terrain_palette_changed(self, dropdown, param):
+
+        index = dropdown.get_selected()
+
+        if 0 <= index < len(PALETTE_CHOICES):
+            self.terrain_palette = PALETTE_CHOICES[index][0]
+            self.terrain_dirty = True
+            self.drawing_area.queue_draw()
+
+    def on_waterfall_palette_changed(self, dropdown, param):
+
+        index = dropdown.get_selected()
+
+        if 0 <= index < len(PALETTE_CHOICES):
+            self.waterfall_palette = PALETTE_CHOICES[index][0]
+            self.waterfall_dirty = True
+            self.drawing_area.queue_draw()
+
+    def on_waterfall_textured_changed(self, switch, param):
+
+        self.waterfall_textured = switch.get_active()
         self.waterfall_dirty = True
         self.drawing_area.queue_draw()
 
@@ -2296,7 +2518,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         needle_angle = -sweep + level * 2 * sweep
         tip_x, tip_y = point_at(needle_angle, radius * 0.92)
 
-        cr.set_source_rgb(self.color.red, self.color.green, self.color.blue)
+        if self.color_mode == "rainbow":
+            cr.set_source_rgb(*rainbow_color(level))
+        else:
+            cr.set_source_rgb(self.color.red, self.color.green, self.color.blue)
+
         cr.set_line_width(2.5)
         cr.move_to(cx, cy)
         cr.line_to(tip_x, tip_y)
@@ -2460,17 +2686,39 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if count == 0:
             return
 
-        cr.set_source_rgba(
-            self.color.red, self.color.green, self.color.blue, 0.85
-        )
         cr.set_line_width(1.0)
 
-        cr.move_to(cx + self.left[0] * scale, cy - self.right[0] * scale)
+        if self.color_mode == "rainbow":
 
-        for i in range(1, count):
-            cr.line_to(cx + self.left[i] * scale, cy - self.right[i] * scale)
+            # A continuous single-color path can't have a color that
+            # itself changes along its length - drawn as one short
+            # segment per sample pair instead, each colored by its own
+            # position in the trace, for a "rainbow comet trail"
+            # look. Costs one stroke call per sample rather than one
+            # for the whole path; count is bounded by the audio chunk
+            # size (not a large rolling buffer here, unlike the
+            # Oscilloscope), so this stays cheap.
+            for i in range(1, count):
 
-        cr.stroke()
+                cr.set_source_rgba(*rainbow_color(i / max(1, count - 1)), 0.85)
+                cr.move_to(
+                    cx + self.left[i - 1] * scale, cy - self.right[i - 1] * scale
+                )
+                cr.line_to(cx + self.left[i] * scale, cy - self.right[i] * scale)
+                cr.stroke()
+
+        else:
+
+            cr.set_source_rgba(
+                self.color.red, self.color.green, self.color.blue, 0.85
+            )
+
+            cr.move_to(cx + self.left[0] * scale, cy - self.right[0] * scale)
+
+            for i in range(1, count):
+                cr.line_to(cx + self.left[i] * scale, cy - self.right[i] * scale)
+
+            cr.stroke()
 
     def find_scope_trigger_index(self, samples, count):
 
@@ -2529,22 +2777,42 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if count < 2:
             return
 
-        cr.set_source_rgba(
-            self.color.red, self.color.green, self.color.blue, opacity
-        )
         cr.set_line_width(1.2)
 
-        for i in range(count):
+        if self.color_mode == "rainbow":
 
-            px = x + (i / (count - 1)) * w
-            py = y + h / 2 - samples[start + i] * (h / 2 * 0.9)
+            prev_px, prev_py = None, None
 
-            if i == 0:
-                cr.move_to(px, py)
-            else:
-                cr.line_to(px, py)
+            for i in range(count):
 
-        cr.stroke()
+                px = x + (i / (count - 1)) * w
+                py = y + h / 2 - samples[start + i] * (h / 2 * 0.9)
+
+                if prev_px is not None:
+                    cr.set_source_rgba(*rainbow_color(i / (count - 1)), opacity)
+                    cr.move_to(prev_px, prev_py)
+                    cr.line_to(px, py)
+                    cr.stroke()
+
+                prev_px, prev_py = px, py
+
+        else:
+
+            cr.set_source_rgba(
+                self.color.red, self.color.green, self.color.blue, opacity
+            )
+
+            for i in range(count):
+
+                px = x + (i / (count - 1)) * w
+                py = y + h / 2 - samples[start + i] * (h / 2 * 0.9)
+
+                if i == 0:
+                    cr.move_to(px, py)
+                else:
+                    cr.line_to(px, py)
+
+            cr.stroke()
 
         if self.show_labels:
             self.draw_text_label(cr, x + 4, y + h - 4, label)
@@ -2635,12 +2903,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # is always 0. A plain, unrotated L-vs-R plot (the existing X-Y
         # Scope) doesn't carry this same "read stereo width/phase at a
         # glance" meaning.
-        trail_cr.set_source_rgba(
-            self.color.red, self.color.green, self.color.blue, 0.85
-        )
-
         count = min(len(self.left), len(self.right))
         half_dot = self.vector_dot_size / 2
+        rainbow = self.color_mode == "rainbow"
+
+        if not rainbow:
+            trail_cr.set_source_rgba(
+                self.color.red, self.color.green, self.color.blue, 0.85
+            )
 
         for i in range(count):
 
@@ -2650,9 +2920,28 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             px = cx + side * scale
             py = cy - mid * scale
 
-            trail_cr.rectangle(px - half_dot, py - half_dot, self.vector_dot_size, self.vector_dot_size)
+            if rainbow:
+                # Colored by sample index within the current chunk,
+                # not position in the M/S plane - a moving rainbow
+                # cycling through the cloud over time, rather than a
+                # fixed color-by-location scheme that would fight the
+                # persistence trail's own sense of "recent."
+                trail_cr.set_source_rgba(
+                    *rainbow_color(i / max(1, count - 1)), 0.85
+                )
+                trail_cr.rectangle(
+                    px - half_dot, py - half_dot,
+                    self.vector_dot_size, self.vector_dot_size
+                )
+                trail_cr.fill()
+            else:
+                trail_cr.rectangle(
+                    px - half_dot, py - half_dot,
+                    self.vector_dot_size, self.vector_dot_size
+                )
 
-        trail_cr.fill()
+        if not rainbow:
+            trail_cr.fill()
 
         cr.set_source_surface(self.vector_surface, 0, 0)
         cr.paint()
@@ -3166,12 +3455,23 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         bar_width = max(1.0, (bar_area_width - gap * (bar_count - 1)) / bar_count)
         bar_height = height - margin * 2
 
-        cr.set_source_rgb(self.color.red, self.color.green, self.color.blue)
+        rainbow = self.color_mode == "rainbow"
+
+        if not rainbow:
+            cr.set_source_rgb(self.color.red, self.color.green, self.color.blue)
 
         for i, level in enumerate(self.bar_levels):
 
             x = margin + i * (bar_width + gap)
             filled = bar_height * min(level, 1.0)
+
+            if rainbow:
+                # By position across the frequency axis (a fixed hue
+                # per bar) rather than by that bar's own level - the
+                # classic "rainbow spectrum analyzer" look, a stable
+                # gradient across the bars rather than colors
+                # flickering with loudness.
+                cr.set_source_rgb(*rainbow_color(i / max(1, bar_count - 1)))
 
             cr.rectangle(x, margin + (bar_height - filled), bar_width, filled)
             cr.fill()
@@ -3241,9 +3541,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             for row_index, level in enumerate(levels):
 
-                r, g, b = gradient_color(
-                    level, self.spectrogram_color_lo, self.spectrogram_color_hi
-                )
+                if self.spectrogram_palette == "rainbow":
+                    r, g, b = rainbow_color(level)
+                else:
+                    r, g, b = gradient_color(
+                        level, self.spectrogram_color_lo, self.spectrogram_color_hi
+                    )
                 cr.set_source_rgb(r, g, b)
 
                 if self.spectrogram_vertical:
@@ -3367,15 +3670,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     self.terrain_azimuth, self.terrain_elevation
                 ))
 
-            # This row's own average loudness, mapped through the
-            # Low/High gradient (gradient_color) - a genuine elevation-
-            # style color map (quiet moments read one color, loud ones
-            # another) rather than one flat hue across every ridge
-            # regardless of how loud it was.
+            # This row's own average loudness, mapped through a color
+            # scale - a genuine elevation-style color map (quiet
+            # moments read one color, loud ones another) rather than
+            # one flat hue across every ridge regardless of how loud
+            # it was.
             avg_level = sum(levels) / len(levels) if levels else 0.0
-            row_color = gradient_color(
-                avg_level, self.terrain_color_lo, self.terrain_color_hi
-            )
+
+            if self.terrain_palette == "rainbow":
+                row_color = rainbow_color(avg_level)
+            else:
+                row_color = gradient_color(
+                    avg_level, self.terrain_color_lo, self.terrain_color_hi
+                )
 
             projected_rows.append((points[0][2], points, base_points, row_color))
 
@@ -3499,15 +3806,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # of points, shared by every quad that touches it (each
         # interior point belongs to up to 4 neighboring cells) rather
         # than projecting the same corner repeatedly.
-        row_colors = [
-            [
-                gradient_color(
-                    level, self.waterfall_color_lo, self.waterfall_color_hi
-                )
-                for level in levels
+        if self.waterfall_palette == "rainbow":
+            row_colors = [
+                [rainbow_color(level) for level in levels]
+                for levels in rows
             ]
-            for levels in rows
-        ]
+        else:
+            row_colors = [
+                [
+                    gradient_color(
+                        level, self.waterfall_color_lo, self.waterfall_color_hi
+                    )
+                    for level in levels
+                ]
+                for levels in rows
+            ]
 
         grid = []
 
@@ -3572,6 +3885,27 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             cr.fill()
 
         cr.set_antialias(cairo.ANTIALIAS_DEFAULT)
+
+        # A thin dark outline on every cell - what actually makes this
+        # read as a *textured*, tiled surface rather than a smoothly
+        # blended one, the same way a real grid of physical tiles
+        # (unlike a printed gradient poster) shows its own seams. A
+        # second pass over the same quads, done after every fill
+        # rather than interleaved, so the antialiasing mode only needs
+        # switching twice total instead of per quad.
+        if self.waterfall_textured:
+
+            cr.set_source_rgba(0, 0, 0, 0.35)
+            cr.set_line_width(1.0)
+
+            for depth, p1, p2, p3, p4, color in quads:
+
+                cr.move_to(p1[0], p1[1])
+                cr.line_to(p2[0], p2[1])
+                cr.line_to(p3[0], p3[1])
+                cr.line_to(p4[0], p4[1])
+                cr.close_path()
+                cr.stroke()
 
         self.waterfall_dirty = False
 

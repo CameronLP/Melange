@@ -105,6 +105,41 @@
 
 ## In progress / not started
 
+- [ ] Share one FFT computation across the aux windows that each run
+      their own right now, requested - Spectrum, Spectrogram, Terrain,
+      Waterfall, and Pipes (aux_window.py) each keep an entirely
+      separate self.spectrum_buffer and independently run fft() on it,
+      even though every one of them is analyzing the exact same live
+      audio stream (window.py's forward_audio_to_aux_windows pushes
+      identical chunks to all open aux windows via push_audio). With
+      several of these kinds open at once - a real scenario now that
+      there are five of them - that's the same 2048-sample Hann-
+      windowed radix-2 FFT recomputed redundantly, once per window,
+      every ~50-80ms each. Real fix would move the FFT up a level -
+      computed once per audio chunk in window.py (or a small shared
+      helper aux windows pull from) and handed to every open FFT-
+      consuming aux window, rather than each one owning its own
+      buffer/FFT call - not attempted yet since it means restructuring
+      where spectrum_buffer/fft() actually live (out of
+      AuxVisualizerWindow and into something MelangeWindow owns and
+      distributes), not a small change.
+- [ ] Pipes reported as still not reactive enough even after the
+      per-band gain compensation, stronger speed/width/turn-chance
+      multipliers, and turn-probability-driven-by-band-level changes
+      above - not yet revisited in more depth. Worth trying next,
+      roughly in order of likely impact: (1) confirming with the user
+      whether this is post-rebuild (the gain-compensation fix needs a
+      fresh install to take effect) before assuming the fix itself
+      fell short; (2) tuning PIPES_BAND_GAINS further against real
+      music rather than the synthetic test signal used to verify the
+      pipeline mechanically works (a sawtooth-like repeating pattern,
+      not representative of real spectral balance); (3) an adaptive
+      per-band normalization (track each band's own recent rolling
+      max/average and react to *relative* changes within that band's
+      own range, rather than comparing against one fixed absolute
+      scale calibrated for a full-scale sine) instead of/alongside
+      fixed gains, which would adapt to whatever's actually playing
+      rather than needing hand-tuned constants at all.
 - [ ] 3D Waterfall built - a new aux window kind, distinct from the
       existing 3D Terrain Spectrogram: same rows-of-FFT-magnitude-
       over-time data, same rotatable oblique camera (project_3d_point,
@@ -137,6 +172,59 @@
       Verified against real fabricated row data through the actual
       rendering path (not just "no exception") - confirmed varied
       colored output.
+
+      Given a Rainbow palette option on request, alongside the
+      existing Low/High Gradient one - a full hue sweep
+      (rainbow_color, colorsys.hsv_to_rgb: red at full scale down
+      through orange/yellow/green/cyan to blue-violet at silence,
+      brightness rising with level) rather than a 2-stop lerp between
+      two fixed endpoints, the classic "rainbow spectrum analyzer"
+      look. Added to Spectrogram and Terrain too (a Palette dropdown,
+      PALETTE_CHOICES, each kind's own field -
+      spectrogram_palette/terrain_palette/waterfall_palette), not just
+      Waterfall - defaults to Rainbow on all three now, on request
+      ("rainbow option for all spectrogram[s]"). Waterfall additionally
+      given a Textured toggle (default on) - a thin dark outline
+      stroked around every cell after all the fills, in a second pass
+      (antialiasing switched back on just for that pass) rather than
+      interleaved with the fills, so the surface reads as a tiled grid
+      instead of one smoothly blended blob, the way "other audio
+      visualizers" tend to render this kind of display; off reverts to
+      the original smooth-blend look.
+
+      Then extended further on request ("rainbow color scheme option
+      for all the mini visualizers") to every other kind that already
+      had a plain Color setting - X-Y Scope, Spectrum, VU Meter
+      (needle style only - bars/LED intentionally keep their fixed
+      green/yellow/red zone colors, since those carry real meaning
+      about headroom/loudness that a rainbow would erase), Oscilloscope,
+      and Vector Scope - via a shared Color Mode dropdown
+      (COLOR_MODE_CHOICES: Solid/Rainbow, one shared self.color_mode
+      field, the same way self.color itself is already shared generic
+      state across these kinds) added right alongside each kind's
+      existing Color row. What "rainbow" means differs by kind, since
+      a continuous single-color stroke can't have a color that changes
+      along its own length: Spectrum bars are colored by bar position
+      (a stable gradient across frequency, not fluctuating with
+      loudness - the classic rainbow-EQ look); X-Y Scope/Oscilloscope
+      traces and Vector Scope's dot cloud are colored by sample index
+      within the current chunk (a moving "rainbow comet trail" instead
+      of one flat trace color), drawn as many short per-point-colored
+      segments/dots instead of one batched stroke/fill, which does
+      cost more draw calls than the solid-color path; VU Meter's
+      needle is colored by its own live level, the same "hue by
+      magnitude" idea Terrain/Waterfall/Spectrogram use.
+
+      Oscilloscope specifically defaults to Solid rather than Rainbow
+      (unlike every other kind above) - its Time Base can run up to
+      2048 points per channel, and rainbow mode there would mean
+      thousands of individual stroke() calls every redraw at the same
+      unthrottled audio-chunk-driven rate already identified as the
+      likely cause of the flat Spectrogram's own reported lag (see
+      the **PERF** entry under Urgent) - defaulting it off avoids
+      reintroducing that same class of problem by default; still
+      selectable for whoever wants the trail look enough to accept the
+      cost.
 - [ ] `badShaderPattern`'s belt-and-suspenders check (main.js,
       `window.loadPresetFile`, see the bvecN &&/|| bug in Done) has a
       false-positive case, found by batch-converting a large random
