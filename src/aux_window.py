@@ -381,12 +381,24 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # "button.nav-arrow-button") was widened to match either, or
         # this would render with GTK's bare default menubutton look
         # instead of matching the other overlay controls.
-        self.settings_popover = self.build_settings_popover()
-
+        #
+        # build_settings_popover() itself isn't called here, though -
+        # it reads kind-specific state (self.peak_hold_seconds,
+        # self.pipes_max_pipes, self.scope_time_base,
+        # self.vector_persistence...) that, for several kinds, isn't
+        # actually assigned until further down in this same method.
+        # Calling it this early crashed __init__ with an AttributeError
+        # for exactly those kinds (Peak Meter, Oscilloscope, Vector
+        # Scope, Pipes) the moment their window was opened - silently,
+        # from the caller's side (window.py's aux_window_toggled),
+        # since nothing here catches it: the toggle action's state
+        # still flips to "on" but the window itself never gets
+        # created. See the real popover build + set_popover() call at
+        # the end of this method instead, once every kind's state is
+        # guaranteed to exist.
         self.settings_button = Gtk.MenuButton(
             icon_name="emblem-system-symbolic",
-            tooltip_text="Settings",
-            popover=self.settings_popover
+            tooltip_text="Settings"
         )
         self.settings_button.add_css_class("nav-arrow-button")
         self.settings_button.add_css_class("flat")
@@ -618,6 +630,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.pipes_timer = GLib.timeout_add(
                 PIPES_TICK_INTERVAL_MS, self.pipes_tick
             )
+
+        # Built here, not up near settings_button's own construction -
+        # see the comment there for why (every kind's state needs to
+        # exist first, and this is the first point in __init__ where
+        # that's guaranteed).
+        self.settings_popover = self.build_settings_popover()
+        self.settings_button.set_popover(self.settings_popover)
 
     def build_settings_popover(self):
 
