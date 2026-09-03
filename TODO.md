@@ -417,6 +417,29 @@
 
       Batch complete - all six items above are now built.
 
+      A few follow-up fixes/polish from live testing after the batch
+      landed: Peak Meter/Oscilloscope/Vector Scope/Pipes windows
+      weren't opening at all - build_settings_popover() was called
+      partway through AuxVisualizerWindow.__init__, before those four
+      kinds' own settings state was actually assigned further down in
+      the same method, so opening one raised an AttributeError mid-
+      construction with nothing catching it (the toggle action's state
+      still flipped "on", but the window itself never got created) -
+      fixed by deferring the popover build to the true end of
+      __init__. Separately, launching Melange was sometimes presenting
+      a leftover aux/mirror window instead of the main one -
+      do_activate() (main.py) used get_active_window(), which returns
+      whichever of the application's windows last had focus, not
+      necessarily the real main window; fixed by tracking the main
+      window explicitly as self.main_window instead. The Oscilloscope
+      also had its R channel drawn at reduced opacity relative to L (a
+      deliberate but unrequested stylistic choice) - reported as
+      looking wrong, so both are now full opacity. Vector Scope
+      gained a Dot Size setting (previously a hardcoded 1.2px).
+      Terrain and Pipes' default window size was bumped from 360x220
+      to 520x360 - a rotatable 3D view reads as a cramped sliver at
+      the smaller size.
+
       Peak Meter built first: instantaneous per-channel |sample| peak
       (no VU_GAIN, unlike the VU Meter - a peak meter exists to show
       real headroom against 0dBFS, and artificially inflating that
@@ -596,11 +619,35 @@
       volume (512 cells at the default size) rather than an
       independently-growing buffer, so redrawing fresh every tick was
       judged cheap enough not to need the same caching treatment.
-      Live audio modulates grid-step speed only (VU-style decayed RMS,
-      same ballistics as the VU Meter/DVD Bounce), not which cells get
-      visited or how pipes turn - per the original plan, not meant to
-      be genuinely audio-analysis-driven the way the other kinds in
-      this batch are.
+      Live audio originally modulated grid-step speed only (one shared
+      broadband level, VU-style decayed RMS) - since upgraded (see
+      below) to a real per-pipe frequency split, so this no longer
+      applies as written; kept for the history.
+
+      Pipes later given per-pipe frequency-band reactivity, on
+      request: each pipe is assigned one of four bands
+      (PIPES_BANDS - Bass/Low Mid/High Mid/Treble, 20-250/250-1000/
+      1000-4000/4000-16000Hz) at spawn, cycled rather than randomly
+      picked so a handful of pipes spread evenly across the spectrum
+      instead of clustering, and colored to match
+      (PIPES_BAND_COLOR_HEXES, same index) so the effect is actually
+      visible, not just a hidden behavioral difference. Needed a real
+      structural change, not just a new formula: pipes_tick used one
+      shared step_timer/speed for every pipe, so each pipe now carries
+      its own step_timer and steps independently at a speed driven by
+      its own band's level (update_pipes_band_levels - a small,
+      throttled FFT, same rolling spectrum_buffer/Hann-window/fft()
+      machinery as Spectrum/Spectrogram/Terrain, feeding
+      magnitude_in_band, a generalization of bars_from_magnitudes to
+      an arbitrary Hz range instead of one of its own log-spaced
+      bars). Also given a fade-out transition on reset (automatic or
+      the settings Reset button), on request: the batch about to be
+      cleared is kept as pipes_fading_segments and drawn alongside the
+      new batch at a linearly-decaying alpha (Fade Time,
+      settings-adjustable) instead of vanishing instantly, expiring
+      once fully faded rather than continuing to be
+      projected/sorted/drawn for nothing; a Fade Old Segments switch
+      turns this off entirely (reverts to the original instant clear).
 - [ ] **BUG**: some of the aux visualizer windows above (VU Meter/X-Y
       Scope/Spectrum/Spectrogram) reportedly don't react to audio in
       some cases - not yet reproduced or root-caused in this

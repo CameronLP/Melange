@@ -64,6 +64,17 @@ PIPES_BASE_STEP_INTERVAL = 0.12
 # with nowhere left to grow.
 PIPES_RESET_FRACTION = 0.6
 
+# Each pipe is assigned one of these frequency bands (cycled through
+# at spawn - see reset_pipes/spawn_pipe) and moves at a speed driven
+# by that band's own live level rather than one shared broadband
+# level - so different pipes visibly react to different parts of the
+# mix. Colored to match (PIPES_BAND_COLOR_HEXES, same index), so the
+# effect is actually visible rather than just an invisible behavioral
+# difference.
+PIPES_BANDS = [(20, 250), (250, 1000), (1000, 4000), (4000, 16000)]
+PIPES_BAND_COLOR_HEXES = ["#e6394b", "#ffcc33", "#33cccc", "#cc66ff"]
+PIPES_BAND_FRAME_INTERVAL = 0.08
+
 # Oscilloscope: how many past samples are kept in its rolling buffer
 # (push_audio appends into it) versus how many of those are actually
 # shown at once (the "time base" - user-adjustable, see below). The
@@ -285,10 +296,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.hide_timer = None
         self.mouse_over_toolbar = False
 
-        # DVD Bounce wants more room to actually bounce around in than
-        # the other, mostly-fixed-layout aux windows.
+        # DVD Bounce wants more room to actually bounce around in, and
+        # the two rotatable 3D kinds read as a cramped sliver at the
+        # default size, than the other, mostly-fixed-layout aux
+        # windows.
         if kind == "dvd":
             self.set_default_size(480, 320)
+        elif kind in ("terrain", "pipes"):
+            self.set_default_size(520, 360)
         else:
             self.set_default_size(360, 220)
 
@@ -579,12 +594,28 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.pipes_max_pipes = 4
         self.pipes_speed_scale = 1.0
         self.pipes_reactivity = 1.0
-        self.pipes_level = 0.0
-        self.pipes_step_timer = 0.0
         self.pipes_occupied = set()
         self.pipes_segments = []
         self.pipes_active = []
         self.pipes_timer = None
+        self.pipes_next_band = 0
+
+        # Each active pipe's step_timer (see spawn_pipe) is its own
+        # accumulator now, not a single shared one - that's what lets
+        # different pipes actually move at different speeds. Per-band
+        # levels (see update_pipes_band_levels) are decayed the same
+        # VU-ballistics way as everything else audio-reactive in this
+        # file, one per PIPES_BANDS entry.
+        self.pipes_band_levels = [0.0] * len(PIPES_BANDS)
+        self.last_pipes_band_frame_time = 0.0
+
+        # Old batch fades out over pipes_fade_seconds instead of
+        # vanishing instantly on reset (automatic or the settings
+        # Reset button) - see reset_pipes/draw_pipes.
+        self.pipes_fade_enabled = True
+        self.pipes_fade_seconds = 1.5
+        self.pipes_fading_segments = []
+        self.pipes_fade_start_time = 0.0
 
         # Oscilloscope-only rolling buffers (see push_audio/
         # draw_oscilloscope) - unlike self.left/self.right (replaced
@@ -608,6 +639,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # as the Decay setting elsewhere in this file).
         self.vector_surface = None
         self.vector_persistence = 0.90
+        self.vector_dot_size = 1.2
 
         motion = Gtk.EventControllerMotion()
         motion.connect("motion", self.mouse_move)
@@ -859,6 +891,26 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             persistence_row.append(persistence_scale)
             box.append(persistence_row)
+
+            dot_size_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            dot_size_label = Gtk.Label(label="Dot Size", xalign=0, hexpand=True)
+            dot_size_row.append(dot_size_label)
+
+            dot_size_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.5, 4.0, 0.1
+            )
+            dot_size_scale.set_value(self.vector_dot_size)
+            dot_size_scale.set_size_request(120, -1)
+            dot_size_scale.set_draw_value(False)
+
+            dot_size_scale.connect(
+                "value-changed",
+                self.on_vector_dot_size_changed
+            )
+
+            dot_size_row.append(dot_size_scale)
+            box.append(dot_size_row)
 
         if self.kind in (
             "spectrum", "spectrogram", "vu", "peak", "oscilloscope", "vectorscope"
@@ -1172,6 +1224,49 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             pipes_reset_view_row.append(pipes_reset_view_button)
             box.append(pipes_reset_view_row)
 
+            pipes_fade_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            pipes_fade_label = Gtk.Label(
+                label="Fade Old Segments", xalign=0, hexpand=True
+            )
+            pipes_fade_row.append(pipes_fade_label)
+
+            pipes_fade_switch = Gtk.Switch()
+            pipes_fade_switch.set_active(self.pipes_fade_enabled)
+            pipes_fade_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_fade_switch.connect(
+                "notify::active",
+                self.on_pipes_fade_enabled_changed
+            )
+
+            pipes_fade_row.append(pipes_fade_switch)
+            box.append(pipes_fade_row)
+
+            pipes_fade_time_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_fade_time_label = Gtk.Label(
+                label="Fade Time", xalign=0, hexpand=True
+            )
+            pipes_fade_time_row.append(pipes_fade_time_label)
+
+            pipes_fade_time_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.2, 4.0, 0.1
+            )
+            pipes_fade_time_scale.set_value(self.pipes_fade_seconds)
+            pipes_fade_time_scale.set_size_request(120, -1)
+            pipes_fade_time_scale.set_draw_value(False)
+
+            pipes_fade_time_scale.connect(
+                "value-changed",
+                self.on_pipes_fade_seconds_changed
+            )
+
+            pipes_fade_time_row.append(pipes_fade_time_scale)
+            box.append(pipes_fade_time_row)
+
         popover = Gtk.Popover()
         popover.set_child(box)
 
@@ -1208,6 +1303,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_vector_persistence_changed(self, scale):
 
         self.vector_persistence = scale.get_value()
+
+    def on_vector_dot_size_changed(self, scale):
+
+        self.vector_dot_size = scale.get_value()
 
     def on_icon_changed(self, dropdown, param):
 
@@ -1271,6 +1370,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.pipes_azimuth = math.radians(35)
         self.pipes_elevation = math.radians(28)
         self.drawing_area.queue_draw()
+
+    def on_pipes_fade_enabled_changed(self, switch, param):
+
+        self.pipes_fade_enabled = switch.get_active()
+
+    def on_pipes_fade_seconds_changed(self, scale):
+
+        self.pipes_fade_seconds = scale.get_value()
 
     def on_pipes_drag_begin(self, gesture, start_x, start_y):
 
@@ -1438,7 +1545,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.left = left
         self.right = right
 
-        if self.kind in ("spectrum", "spectrogram", "terrain"):
+        if self.kind in ("spectrum", "spectrogram", "terrain", "pipes"):
 
             mono = [(l + r) / 2.0 for l, r in zip(left, right)]
 
@@ -1935,7 +2042,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         )
         self.draw_scope_trace(
             cr, margin, margin * 2 + cell_height, width - margin * 2, cell_height,
-            right_samples, 0.6, "R"
+            right_samples, 1.0, "R"
         )
 
     def stereo_correlation(self):
@@ -2009,6 +2116,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         )
 
         count = min(len(self.left), len(self.right))
+        half_dot = self.vector_dot_size / 2
 
         for i in range(count):
 
@@ -2018,7 +2126,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             px = cx + side * scale
             py = cy - mid * scale
 
-            trail_cr.rectangle(px - 0.6, py - 0.6, 1.2, 1.2)
+            trail_cr.rectangle(px - half_dot, py - half_dot, self.vector_dot_size, self.vector_dot_size)
 
         trail_cr.fill()
 
@@ -2804,13 +2912,36 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         position = random.choice(empty_cells)
         self.pipes_occupied.add(position)
 
+        # Cycled (not random) across the bands, so a handful of pipes
+        # spread evenly across the spectrum instead of randomly
+        # clustering on the same one or two bands.
+        band = self.pipes_next_band
+        self.pipes_next_band = (self.pipes_next_band + 1) % len(PIPES_BANDS)
+
+        color = Gdk.RGBA()
+        color.parse(PIPES_BAND_COLOR_HEXES[band % len(PIPES_BAND_COLOR_HEXES)])
+
         return {
             "pos": position,
             "dir": random.choice(PIPE_DIRECTIONS),
-            "color": random_bounce_color(),
+            "color": color,
+            "band": band,
+            "step_timer": 0.0,
         }
 
     def reset_pipes(self):
+
+        # The batch about to be cleared fades out instead of vanishing
+        # instantly, if enabled - see draw_pipes for how
+        # pipes_fading_segments actually gets rendered and expired.
+        # Skipped when there's nothing to fade (a fresh window that's
+        # never had a batch yet) so the very first reset doesn't fade
+        # in an empty list for no reason.
+        if self.pipes_fade_enabled and self.pipes_segments:
+            self.pipes_fading_segments = list(self.pipes_segments)
+            self.pipes_fade_start_time = time.monotonic()
+        else:
+            self.pipes_fading_segments = []
 
         self.pipes_occupied = set()
         self.pipes_segments = []
@@ -2824,6 +2955,52 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 break
 
             self.pipes_active.append(spawned)
+
+    def magnitude_in_band(self, magnitudes, f_lo, f_hi):
+
+        # Same peak-in-range + sqrt-compression approach as
+        # bars_from_magnitudes, generalized to an arbitrary Hz range
+        # instead of one of its own log-spaced bars specifically.
+        bin_hz = SAMPLE_RATE / FFT_SIZE
+
+        bin_lo = max(0, int(f_lo / bin_hz))
+        bin_hi = max(bin_lo + 1, int(f_hi / bin_hz))
+        bin_hi = min(bin_hi, len(magnitudes))
+
+        if bin_lo >= len(magnitudes):
+            return 0.0
+
+        peak = max(magnitudes[bin_lo:bin_hi])
+
+        return math.sqrt(min(peak / (FFT_SIZE / 4), 1.0))
+
+    def update_pipes_band_levels(self):
+
+        if len(self.spectrum_buffer) != FFT_SIZE:
+            return
+
+        now = time.monotonic()
+
+        if now - self.last_pipes_band_frame_time < PIPES_BAND_FRAME_INTERVAL:
+            return
+
+        self.last_pipes_band_frame_time = now
+
+        windowed = [
+            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
+        ]
+
+        spectrum = fft(windowed)
+        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+
+        for i, (f_lo, f_hi) in enumerate(PIPES_BANDS):
+
+            raw = self.magnitude_in_band(magnitudes, f_lo, f_hi)
+
+            # Same VU-style fast-attack/slow-release ballistics as
+            # everything else audio-reactive in this file, so a pipe's
+            # speed doesn't flicker with every single FFT frame.
+            self.pipes_band_levels[i] = max(raw, self.pipes_band_levels[i] * 0.85)
 
     def step_pipe(self, pipe):
 
@@ -2867,12 +3044,40 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         return False
 
-    def advance_pipes(self):
+    def pipes_tick(self):
 
+        dt = PIPES_TICK_INTERVAL_MS / 1000.0
+
+        self.update_pipes_band_levels()
+
+        # Each pipe advances on its own accumulator now, driven by its
+        # own assigned band's level (see spawn_pipe/
+        # update_pipes_band_levels) - not one shared timer/level for
+        # every pipe - so different pipes visibly move at different
+        # speeds depending on what's happening in their own part of
+        # the spectrum right now.
         still_active = []
 
         for pipe in self.pipes_active:
-            if self.step_pipe(pipe):
+
+            band_level = self.pipes_band_levels[pipe["band"] % len(self.pipes_band_levels)]
+
+            speed = self.pipes_speed_scale * (
+                1.0 + band_level * 1.2 * self.pipes_reactivity
+            )
+            pipe["step_timer"] += dt * speed
+
+            alive = True
+
+            # A while loop (not "if") so a very high Speed/Reactivity
+            # combination can advance more than one grid step in a
+            # single tick, rather than being capped at one step per
+            # 16ms regardless of how large the requested speed is.
+            while alive and pipe["step_timer"] >= PIPES_BASE_STEP_INTERVAL:
+                pipe["step_timer"] -= PIPES_BASE_STEP_INTERVAL
+                alive = self.step_pipe(pipe)
+
+            if alive:
                 still_active.append(pipe)
 
         self.pipes_active = still_active
@@ -2894,25 +3099,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         ):
             self.reset_pipes()
 
-    def pipes_tick(self):
-
-        dt = PIPES_TICK_INTERVAL_MS / 1000.0
-
-        level = max(rms(self.left), rms(self.right)) * VU_GAIN
-        self.pipes_level = max(level, self.pipes_level * 0.9)
-        level = min(self.pipes_level, 1.0)
-
-        speed = self.pipes_speed_scale * (1.0 + level * 1.2 * self.pipes_reactivity)
-        self.pipes_step_timer += dt * speed
-
-        # A while loop (not "if") so a very high Speed/Reactivity
-        # combination can advance more than one grid step in a single
-        # tick instead of being capped at one step per 16ms regardless
-        # of how large the requested speed is.
-        while self.pipes_step_timer >= PIPES_BASE_STEP_INTERVAL:
-            self.pipes_step_timer -= PIPES_BASE_STEP_INTERVAL
-            self.advance_pipes()
-
         self.drawing_area.queue_draw()
 
         return True
@@ -2929,6 +3115,23 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         def to_unit(v):
             return (v / (size - 1) - 0.5) * 2
 
+        # The previous batch, if still fading (see reset_pipes) - its
+        # own alpha decays linearly over pipes_fade_seconds, expiring
+        # (dropped entirely, not just drawn at 0 alpha) once the fade
+        # finishes, so a fully-faded batch isn't still being projected
+        # and sorted every frame for nothing.
+        fade_alpha = 0.0
+
+        if self.pipes_fading_segments:
+
+            elapsed = time.monotonic() - self.pipes_fade_start_time
+            fade_alpha = max(
+                0.0, 1.0 - elapsed / max(0.01, self.pipes_fade_seconds)
+            )
+
+            if fade_alpha <= 0.0:
+                self.pipes_fading_segments = []
+
         projected = []
 
         for cell_a, cell_b, color in self.pipes_segments:
@@ -2942,7 +3145,24 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 cx, cy, scale, self.pipes_azimuth, self.pipes_elevation
             )
 
-            projected.append(((d1 + d2) / 2, sx1, sy1, sx2, sy2, color))
+            projected.append(((d1 + d2) / 2, sx1, sy1, sx2, sy2, color, 1.0))
+
+        if fade_alpha > 0.0:
+
+            for cell_a, cell_b, color in self.pipes_fading_segments:
+
+                sx1, sy1, d1 = self.project_3d_point(
+                    to_unit(cell_a[0]), to_unit(cell_a[1]), to_unit(cell_a[2]),
+                    cx, cy, scale, self.pipes_azimuth, self.pipes_elevation
+                )
+                sx2, sy2, d2 = self.project_3d_point(
+                    to_unit(cell_b[0]), to_unit(cell_b[1]), to_unit(cell_b[2]),
+                    cx, cy, scale, self.pipes_azimuth, self.pipes_elevation
+                )
+
+                projected.append(
+                    ((d1 + d2) / 2, sx1, sy1, sx2, sy2, color, fade_alpha)
+                )
 
         # Painter's algorithm again (see render_terrain_surface) - not
         # perfect for pipes genuinely crossing in front of/behind one
@@ -2954,9 +3174,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         cr.set_line_cap(cairo.LINE_CAP_ROUND)
         cr.set_line_width(6)
 
-        for depth, sx1, sy1, sx2, sy2, color in projected:
+        for depth, sx1, sy1, sx2, sy2, color, alpha in projected:
 
-            cr.set_source_rgba(color.red, color.green, color.blue, 0.95)
+            cr.set_source_rgba(color.red, color.green, color.blue, 0.95 * alpha)
             cr.move_to(sx1, sy1)
             cr.line_to(sx2, sy2)
             cr.stroke()
