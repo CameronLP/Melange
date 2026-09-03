@@ -175,6 +175,8 @@ VU_STYLE_CHOICES = [
     ("needle", "Needle"),
 ]
 
+SPECTRUM_STYLE_CHOICES = [("bars", "Bars"), ("smooth", "Smooth")]
+
 # How many past frames the spectrogram keeps on screen at once, and
 # how far apart (in wall-clock time) those frames are taken - a new
 # column every FFT_SIZE samples (~11.6ms at 44100Hz) would scroll by
@@ -238,6 +240,21 @@ def rainbow_color(level):
     r, g, b = colorsys.hsv_to_rgb(hue, 0.9, 0.35 + 0.65 * level)
 
     return (r, g, b)
+
+
+def scale_level_for_color(level, ceiling):
+
+    # Remaps level so that `ceiling` (settings-adjustable per kind:
+    # spectrogram_color_ceiling/terrain_color_ceiling/
+    # waterfall_color_ceiling, "High Level" in each one's settings
+    # popover) reads as the top of the color scale (fully "hot"/
+    # highest gradient stop) instead of a true 1.0 - lets the color
+    # scale's own visible range be dialed in against whatever a given
+    # track's real levels typically reach, rather than requiring an
+    # actual full-scale reading to ever show the hottest color at all.
+    # 1.0 (the default) is the identity mapping - today's original
+    # behavior, unchanged unless this is actually turned down.
+    return min(1.0, level / max(0.05, ceiling))
 
 
 # Palette choices shared by every gradient-capable kind (Spectrogram,
@@ -426,6 +443,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.spectrogram_color_hi = Gdk.RGBA()
         self.spectrogram_color_hi.parse("#ff3300")
         self.spectrogram_palette = "rainbow"
+        self.spectrogram_color_ceiling = 1.0
 
         # VU Meter style. "bars" is the original look (draw_vu_bar);
         # "led" is a discrete-segment hardware-style meter
@@ -655,6 +673,25 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.vu_right = 0.0
         self.bar_levels = []
 
+        # Spectrum-only lagging peak caps - a small marker above each
+        # bar that jumps to a new peak instantly then falls back down
+        # on its own, the classic hardware EQ "peak indicator" look.
+        # Reuses update_peak_hold/peak_hold_seconds, the same generic
+        # peak-hold logic and settings field the Peak Meter window
+        # already has (each window instance keeps its own copy of
+        # peak_hold_seconds, so adjusting it here doesn't touch a Peak
+        # Meter window's own value).
+        self.spectrum_peak_hold = True
+        self.spectrum_bar_holds = []
+        self.spectrum_bar_hold_times = []
+
+        # "Smooth" is a continuous curve through the same per-bar
+        # levels (render_spectrum_smooth) instead of discrete
+        # rectangles (render_spectrum_bars) - same underlying data
+        # either way, just a different render function selected at
+        # draw time (on_draw).
+        self.spectrum_style = "bars"
+
         # Peak Meter state - deliberately separate from vu_left/right
         # above rather than reusing them: a peak meter tracks the true
         # instantaneous sample peak (raw abs(), no VU_GAIN) rather than
@@ -717,6 +754,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_color_hi = Gdk.RGBA()
         self.terrain_color_hi.parse("#ff9933")
         self.terrain_palette = "rainbow"
+        self.terrain_color_ceiling = 1.0
 
         # 3D Waterfall - same rows-of-FFT-magnitude/camera-rotation/
         # render-cache shape as Terrain above (see waterfall_surface/
@@ -739,6 +777,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.waterfall_color_hi = Gdk.RGBA()
         self.waterfall_color_hi.parse("#ff3300")
         self.waterfall_palette = "rainbow"
+        self.waterfall_color_ceiling = 1.0
         self.waterfall_textured = True
 
         # How much magnitude also lifts each grid point in Z, on top
@@ -827,6 +866,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # reinforcement of the per-band reactivity on top of speed.
         self.pipes_pulse_width = True
         self.pipes_pulse_color = True
+
+        # A cheap pseudo-3D "glossy tube" trick, not real lighting -
+        # Cairo has no shading/lighting model to actually compute this
+        # from. A thin, semi-transparent light stroke offset to one
+        # side of each segment's main colored line (draw_pipes),
+        # mimicking a specular highlight running along the top of a
+        # cylinder, the same technique commonly used for "tube-style"
+        # chart lines generally.
+        self.pipes_tube_shading = True
         self.pipes_base_width = 6.0
 
         # Oscilloscope-only rolling buffers (see push_audio/
@@ -1158,6 +1206,30 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             waterfall_hi_color_row.append(waterfall_hi_color_button)
             box.append(waterfall_hi_color_row)
 
+            waterfall_ceiling_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            waterfall_ceiling_label = Gtk.Label(
+                label="High Level", xalign=0, hexpand=True
+            )
+            waterfall_ceiling_row.append(waterfall_ceiling_label)
+
+            waterfall_ceiling_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.1, 1.0, 0.05
+            )
+            waterfall_ceiling_scale.set_value(self.waterfall_color_ceiling)
+            waterfall_ceiling_scale.set_size_request(120, -1)
+            waterfall_ceiling_scale.set_draw_value(False)
+
+            waterfall_ceiling_scale.connect(
+                "value-changed",
+                self.on_waterfall_color_ceiling_changed
+            )
+
+            waterfall_ceiling_row.append(waterfall_ceiling_scale)
+            box.append(waterfall_ceiling_row)
+
             waterfall_reset_view_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
             )
@@ -1262,7 +1334,60 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             decay_row.append(decay_scale)
             box.append(decay_row)
 
-        if self.kind == "peak":
+        if self.kind == "spectrum":
+
+            spectrum_style_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            spectrum_style_label = Gtk.Label(
+                label="Style", xalign=0, hexpand=True
+            )
+            spectrum_style_row.append(spectrum_style_label)
+
+            spectrum_style_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in SPECTRUM_STYLE_CHOICES]
+            )
+
+            current_spectrum_style_index = next(
+                (
+                    i for i, (key, _) in enumerate(SPECTRUM_STYLE_CHOICES)
+                    if key == self.spectrum_style
+                ),
+                0
+            )
+            spectrum_style_dropdown.set_selected(current_spectrum_style_index)
+
+            spectrum_style_dropdown.connect(
+                "notify::selected",
+                self.on_spectrum_style_changed
+            )
+
+            spectrum_style_row.append(spectrum_style_dropdown)
+            box.append(spectrum_style_row)
+
+            spectrum_hold_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            spectrum_hold_label = Gtk.Label(
+                label="Peak Hold", xalign=0, hexpand=True
+            )
+            spectrum_hold_row.append(spectrum_hold_label)
+
+            spectrum_hold_switch = Gtk.Switch()
+            spectrum_hold_switch.set_active(self.spectrum_peak_hold)
+            spectrum_hold_switch.set_valign(Gtk.Align.CENTER)
+
+            spectrum_hold_switch.connect(
+                "notify::active",
+                self.on_spectrum_peak_hold_changed
+            )
+
+            spectrum_hold_row.append(spectrum_hold_switch)
+            box.append(spectrum_hold_row)
+
+        if self.kind in ("peak", "spectrum"):
 
             hold_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -1497,6 +1622,26 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             hi_color_row.append(hi_color_button)
             box.append(hi_color_row)
 
+            ceiling_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            ceiling_label = Gtk.Label(label="High Level", xalign=0, hexpand=True)
+            ceiling_row.append(ceiling_label)
+
+            ceiling_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.1, 1.0, 0.05
+            )
+            ceiling_scale.set_value(self.spectrogram_color_ceiling)
+            ceiling_scale.set_size_request(120, -1)
+            ceiling_scale.set_draw_value(False)
+
+            ceiling_scale.connect(
+                "value-changed",
+                self.on_spectrogram_color_ceiling_changed
+            )
+
+            ceiling_row.append(ceiling_scale)
+            box.append(ceiling_row)
+
         if self.kind == "terrain":
 
             terrain_palette_row = Gtk.Box(
@@ -1568,6 +1713,30 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             terrain_hi_color_row.append(terrain_hi_color_button)
             box.append(terrain_hi_color_row)
+
+            terrain_ceiling_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            terrain_ceiling_label = Gtk.Label(
+                label="High Level", xalign=0, hexpand=True
+            )
+            terrain_ceiling_row.append(terrain_ceiling_label)
+
+            terrain_ceiling_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.1, 1.0, 0.05
+            )
+            terrain_ceiling_scale.set_value(self.terrain_color_ceiling)
+            terrain_ceiling_scale.set_size_request(120, -1)
+            terrain_ceiling_scale.set_draw_value(False)
+
+            terrain_ceiling_scale.connect(
+                "value-changed",
+                self.on_terrain_color_ceiling_changed
+            )
+
+            terrain_ceiling_row.append(terrain_ceiling_scale)
+            box.append(terrain_ceiling_row)
 
         if self.kind == "dvd":
 
@@ -2003,6 +2172,25 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             pipes_pulse_color_row.append(pipes_pulse_color_switch)
             box.append(pipes_pulse_color_row)
 
+            pipes_shading_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            pipes_shading_label = Gtk.Label(
+                label="Tube Shading", xalign=0, hexpand=True
+            )
+            pipes_shading_row.append(pipes_shading_label)
+
+            pipes_shading_switch = Gtk.Switch()
+            pipes_shading_switch.set_active(self.pipes_tube_shading)
+            pipes_shading_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_shading_switch.connect(
+                "notify::active",
+                self.on_pipes_tube_shading_changed
+            )
+
+            pipes_shading_row.append(pipes_shading_switch)
+            box.append(pipes_shading_row)
+
             pipes_zoom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             pipes_zoom_label = Gtk.Label(label="Zoom", xalign=0, hexpand=True)
@@ -2099,6 +2287,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_peak_hold_seconds_changed(self, scale):
 
         self.peak_hold_seconds = scale.get_value()
+
+    def on_spectrum_peak_hold_changed(self, switch, param):
+
+        self.spectrum_peak_hold = switch.get_active()
+
+    def on_spectrum_style_changed(self, dropdown, param):
+
+        index = dropdown.get_selected()
+
+        if 0 <= index < len(SPECTRUM_STYLE_CHOICES):
+            self.spectrum_style = SPECTRUM_STYLE_CHOICES[index][0]
+            self.drawing_area.queue_draw()
 
     def on_scope_time_base_changed(self, scale):
 
@@ -2236,6 +2436,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.pipes_pulse_color = switch.get_active()
 
+    def on_pipes_tube_shading_changed(self, switch, param):
+
+        self.pipes_tube_shading = switch.get_active()
+
     def on_pipes_zoom_changed(self, scale):
 
         self.pipes_zoom = scale.get_value()
@@ -2315,6 +2519,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.spectrogram_color_hi = button.get_rgba()
         self.drawing_area.queue_draw()
 
+    def on_spectrogram_color_ceiling_changed(self, scale):
+
+        self.spectrogram_color_ceiling = scale.get_value()
+        self.drawing_area.queue_draw()
+
     def on_terrain_color_lo_changed(self, button, param):
 
         self.terrain_color_lo = button.get_rgba()
@@ -2324,6 +2533,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_terrain_color_hi_changed(self, button, param):
 
         self.terrain_color_hi = button.get_rgba()
+        self.terrain_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_terrain_color_ceiling_changed(self, scale):
+
+        self.terrain_color_ceiling = scale.get_value()
         self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
@@ -2350,6 +2565,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_waterfall_color_hi_changed(self, button, param):
 
         self.waterfall_color_hi = button.get_rgba()
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_waterfall_color_ceiling_changed(self, scale):
+
+        self.waterfall_color_ceiling = scale.get_value()
         self.waterfall_dirty = True
         self.drawing_area.queue_draw()
 
@@ -2519,6 +2740,29 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         return True
 
+    def canvas_background_rgb(self):
+
+        # Queried fresh at every draw rather than cached/tracked via a
+        # notify signal - Adw.StyleManager.get_default().dark already
+        # reflects the app's own Light/Dark/Follow System selection
+        # (the same property window.py's own header-tinting reads),
+        # so a plain per-frame read is enough to stay correct without
+        # any extra plumbing; it's a cheap property read, not a real
+        # cost at redraw time. Every aux window kind's canvas
+        # previously painted one of a few near-identical hardcoded
+        # dark grays regardless of theme - now light-reactive, sharing
+        # this one shade rather than each kind keeping its own
+        # slightly different dark tone (a difference small enough not
+        # to be worth preserving against the cost of hand-picking a
+        # light counterpart for each one). DVD Bounce is the one
+        # exception - its background is already a user-set color
+        # (dvd_bg_color), so automatically overriding it with the
+        # theme would fight an explicit choice rather than respect it.
+        if Adw.StyleManager.get_default().get_dark():
+            return (0.05, 0.05, 0.06)
+
+        return (0.90, 0.90, 0.91)
+
     def set_overlay_controls_visible(self, visible):
 
         buttons = (self.settings_button,)
@@ -2595,7 +2839,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.draw_peak_meter(cr, width, height)
         elif self.kind == "spectrum":
             self.update_spectrum_levels()
-            self.render_with_optional_mirror(cr, width, height, self.render_spectrum_bars)
+            spectrum_render_func = (
+                self.render_spectrum_smooth
+                if self.spectrum_style == "smooth"
+                else self.render_spectrum_bars
+            )
+            self.render_with_optional_mirror(cr, width, height, spectrum_render_func)
         elif self.kind == "spectrogram":
             self.update_spectrogram_columns()
             self.render_with_optional_mirror(cr, width, height, self.render_spectrogram)
@@ -2616,7 +2865,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def render_with_optional_mirror(self, cr, width, height, render_func):
 
-        cr.set_source_rgb(0.05, 0.05, 0.05)
+        cr.set_source_rgb(*self.canvas_background_rgb())
         cr.paint()
 
         if not self.mirror_reflection:
@@ -2671,7 +2920,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_vu_meter(self, cr, width, height):
 
-        cr.set_source_rgb(0.1, 0.1, 0.1)
+        cr.set_source_rgb(*self.canvas_background_rgb())
         cr.paint()
 
         # RMS (average power over the chunk), not the instantaneous
@@ -2906,7 +3155,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_peak_meter(self, cr, width, height):
 
-        cr.set_source_rgb(0.1, 0.1, 0.1)
+        cr.set_source_rgb(*self.canvas_background_rgb())
         cr.paint()
 
         # True instantaneous sample peak - no VU_GAIN, unlike the VU
@@ -2959,7 +3208,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_xy_scope(self, cr, width, height):
 
-        cr.set_source_rgb(0.05, 0.05, 0.05)
+        cr.set_source_rgb(*self.canvas_background_rgb())
         cr.paint()
 
         cx = width / 2
@@ -3121,7 +3370,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_oscilloscope(self, cr, width, height):
 
-        cr.set_source_rgb(0.04, 0.07, 0.04)
+        cr.set_source_rgb(*self.canvas_background_rgb())
         cr.paint()
 
         margin = 10
@@ -3165,7 +3414,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_vector_scope(self, cr, width, height):
 
-        bg = (0.03, 0.03, 0.04)
+        bg = self.canvas_background_rgb()
 
         if (
             self.vector_surface is None
@@ -3732,6 +3981,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if len(self.bar_levels) != bar_count:
             self.bar_levels = [0.0] * bar_count
 
+        if len(self.spectrum_bar_holds) != bar_count:
+            self.spectrum_bar_holds = [0.0] * bar_count
+            self.spectrum_bar_hold_times = [0.0] * bar_count
+
         if len(self.spectrum_buffer) == FFT_SIZE:
 
             windowed = [
@@ -3747,6 +4000,25 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 self.bar_levels[i] = max(
                     new_levels[i], self.bar_levels[i] * self.decay
                 )
+
+            if self.spectrum_peak_hold:
+
+                # A small lagging cap above each bar - jumps to a new
+                # peak instantly, lingers, then falls back down on its
+                # own, same update_peak_hold logic the Peak Meter
+                # already uses (its own peak-hold marker), just run
+                # once per bar here instead of once per channel.
+                now = time.monotonic()
+
+                for i in range(bar_count):
+                    self.spectrum_bar_holds[i], self.spectrum_bar_hold_times[i] = (
+                        self.update_peak_hold(
+                            self.bar_levels[i],
+                            self.spectrum_bar_holds[i],
+                            self.spectrum_bar_hold_times[i],
+                            now
+                        )
+                    )
 
     def render_spectrum_bars(self, cr, width, height):
 
@@ -3777,6 +4049,110 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             cr.rectangle(x, margin + (bar_height - filled), bar_width, filled)
             cr.fill()
+
+            if self.spectrum_peak_hold and i < len(self.spectrum_bar_holds):
+
+                hold_height = bar_height * min(self.spectrum_bar_holds[i], 1.0)
+                hold_y = margin + (bar_height - hold_height)
+
+                cr.set_source_rgb(1, 1, 1)
+                cr.rectangle(x, hold_y - 2, bar_width, 2)
+                cr.fill()
+
+                if not rainbow:
+                    cr.set_source_rgb(self.color.red, self.color.green, self.color.blue)
+
+    def render_spectrum_smooth(self, cr, width, height):
+
+        # A continuous curve through the same per-bar levels
+        # render_spectrum_bars uses, instead of discrete rectangles -
+        # a Catmull-Rom spline (converted to Cairo's own cubic Bezier
+        # curve_to, which is what Cairo actually has) through each
+        # bar's own (x, level) point, one bar-center apart, rather
+        # than straight lines between them - what makes this read as
+        # genuinely smooth rather than just "the same bars with their
+        # corners connected."
+        bar_count = self.num_bars
+        margin = 8
+        inner_width = width - margin * 2
+        bar_height = height - margin * 2
+        baseline_y = margin + bar_height
+
+        if bar_count < 2 or len(self.bar_levels) < 2:
+            return
+
+        points = []
+
+        for i, level in enumerate(self.bar_levels):
+
+            x = margin + inner_width * (i / (bar_count - 1))
+            y = margin + bar_height * (1.0 - min(level, 1.0))
+            points.append((x, y))
+
+        cr.move_to(points[0][0], points[0][1])
+
+        for i in range(len(points) - 1):
+
+            p0 = points[i - 1] if i > 0 else points[i]
+            p1 = points[i]
+            p2 = points[i + 1]
+            p3 = points[i + 2] if i + 2 < len(points) else points[i + 1]
+
+            # Standard Catmull-Rom -> cubic Bezier control point
+            # conversion (each segment's tangent estimated from its
+            # neighbors on either side).
+            c1x = p1[0] + (p2[0] - p0[0]) / 6.0
+            c1y = p1[1] + (p2[1] - p0[1]) / 6.0
+            c2x = p2[0] - (p3[0] - p1[0]) / 6.0
+            c2y = p2[1] - (p3[1] - p1[1]) / 6.0
+
+            cr.curve_to(c1x, c1y, c2x, c2y, p2[0], p2[1])
+
+        cr.line_to(points[-1][0], baseline_y)
+        cr.line_to(points[0][0], baseline_y)
+        cr.close_path()
+
+        if self.color_mode == "rainbow":
+
+            # A real left-to-right rainbow gradient fill (Cairo's own
+            # LinearGradient), rather than per-bar solid fills the way
+            # render_spectrum_bars does it - there's no per-bar
+            # boundary left to color independently once this is one
+            # continuous filled shape.
+            gradient = cairo.LinearGradient(margin, 0, margin + inner_width, 0)
+
+            stops = 8
+
+            for s in range(stops + 1):
+                t = s / stops
+                gradient.add_color_stop_rgb(t, *rainbow_color(t))
+
+            cr.set_source(gradient)
+
+        else:
+            cr.set_source_rgba(
+                self.color.red, self.color.green, self.color.blue, 0.85
+            )
+
+        cr.fill_preserve()
+
+        cr.set_source_rgba(1, 1, 1, 0.3)
+        cr.set_line_width(1.2)
+        cr.stroke()
+
+        if self.spectrum_peak_hold:
+
+            for i, hold in enumerate(self.spectrum_bar_holds):
+
+                if i >= bar_count:
+                    break
+
+                x = margin + inner_width * (i / (bar_count - 1))
+                y = margin + bar_height * (1.0 - min(hold, 1.0))
+
+                cr.set_source_rgba(1, 1, 1, 0.8)
+                cr.rectangle(x - 3, y - 1, 6, 2)
+                cr.fill()
 
     def update_spectrogram_columns(self):
 
@@ -3843,11 +4219,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             for row_index, level in enumerate(levels):
 
+                scaled_level = scale_level_for_color(
+                    level, self.spectrogram_color_ceiling
+                )
+
                 if self.spectrogram_palette == "rainbow":
-                    r, g, b = rainbow_color(level)
+                    r, g, b = rainbow_color(scaled_level)
                 else:
                     r, g, b = gradient_color(
-                        level, self.spectrogram_color_lo, self.spectrogram_color_hi
+                        scaled_level, self.spectrogram_color_lo,
+                        self.spectrogram_color_hi
                     )
                 cr.set_source_rgb(r, g, b)
 
@@ -3926,7 +4307,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         )
         cr = cairo.Context(self.terrain_surface)
 
-        cr.set_source_rgb(0.03, 0.03, 0.05)
+        cr.set_source_rgb(*self.canvas_background_rgb())
         cr.paint()
 
         rows = list(self.terrain_rows)
@@ -3987,12 +4368,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             # palette. A row's peak - did *any* frequency in it hit
             # hard - reflects what's actually happening far better.
             peak_level = max(levels) if levels else 0.0
+            scaled_peak_level = scale_level_for_color(
+                peak_level, self.terrain_color_ceiling
+            )
 
             if self.terrain_palette == "rainbow":
-                row_color = rainbow_color(peak_level)
+                row_color = rainbow_color(scaled_peak_level)
             else:
                 row_color = gradient_color(
-                    peak_level, self.terrain_color_lo, self.terrain_color_hi
+                    scaled_peak_level, self.terrain_color_lo, self.terrain_color_hi
                 )
 
             projected_rows.append((points[0][2], points, base_points, row_color))
@@ -4152,7 +4536,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         )
         cr = cairo.Context(self.waterfall_surface)
 
-        cr.set_source_rgb(0.03, 0.03, 0.05)
+        cr.set_source_rgb(*self.canvas_background_rgb())
         cr.paint()
 
         rows = list(self.waterfall_rows)
@@ -4181,14 +4565,20 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # repeatedly.
         if self.waterfall_palette == "rainbow":
             row_colors = [
-                [rainbow_color(level) for level in levels]
+                [
+                    rainbow_color(
+                        scale_level_for_color(level, self.waterfall_color_ceiling)
+                    )
+                    for level in levels
+                ]
                 for levels in rows
             ]
         else:
             row_colors = [
                 [
                     gradient_color(
-                        level, self.waterfall_color_lo, self.waterfall_color_hi
+                        scale_level_for_color(level, self.waterfall_color_ceiling),
+                        self.waterfall_color_lo, self.waterfall_color_hi
                     )
                     for level in levels
                 ]
@@ -4246,9 +4636,24 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # differently-colored neighbors still leave faint seams
         # otherwise; crisp edges read as one continuous tiled surface
         # instead.
-        cr.set_antialias(cairo.ANTIALIAS_NONE)
-
+        # Fill and outline (see waterfall_textured below) are done
+        # together per quad, in the same depth-sorted pass - not as
+        # two full separate passes (an earlier version drew every fill
+        # first, then every outline). That was wrong wherever the
+        # surface has real height variation (waterfall_height_scale >
+        # 0): a fill-only pass already establishes correct back-to-
+        # front occlusion on its own, but a *second*, fully separate
+        # outline pass runs entirely after it regardless of depth - so
+        # a farther quad's outline (say, the mostly-hidden side of a
+        # tall peak) could still get drawn *after*, and therefore on
+        # top of, a nearer quad's already-painted fill. Reported from
+        # real use as stray wireframe lines cutting across tall peaks.
+        # Interleaving fixes it at the cost of switching antialiasing
+        # twice per quad instead of twice total - fine given the
+        # bounded quad count here.
         for depth, p1, p2, p3, p4, color in quads:
+
+            cr.set_antialias(cairo.ANTIALIAS_NONE)
 
             cr.move_to(p1[0], p1[1])
             cr.line_to(p2[0], p2[1])
@@ -4257,30 +4662,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             cr.close_path()
 
             cr.set_source_rgb(*color)
-            cr.fill()
+            cr.fill_preserve()
+
+            if self.waterfall_textured:
+                cr.set_antialias(cairo.ANTIALIAS_DEFAULT)
+                cr.set_source_rgba(0, 0, 0, 0.35)
+                cr.set_line_width(1.0)
+                cr.stroke()
+            else:
+                cr.new_path()
 
         cr.set_antialias(cairo.ANTIALIAS_DEFAULT)
-
-        # A thin dark outline on every cell - what actually makes this
-        # read as a *textured*, tiled surface rather than a smoothly
-        # blended one, the same way a real grid of physical tiles
-        # (unlike a printed gradient poster) shows its own seams. A
-        # second pass over the same quads, done after every fill
-        # rather than interleaved, so the antialiasing mode only needs
-        # switching twice total instead of per quad.
-        if self.waterfall_textured:
-
-            cr.set_source_rgba(0, 0, 0, 0.35)
-            cr.set_line_width(1.0)
-
-            for depth, p1, p2, p3, p4, color in quads:
-
-                cr.move_to(p1[0], p1[1])
-                cr.line_to(p2[0], p2[1])
-                cr.line_to(p3[0], p3[1])
-                cr.line_to(p4[0], p4[1])
-                cr.close_path()
-                cr.stroke()
 
         self.waterfall_dirty = False
 
@@ -4615,7 +5007,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_pipes(self, cr, width, height):
 
-        cr.set_source_rgb(0.03, 0.03, 0.05)
+        cr.set_source_rgb(*self.canvas_background_rgb())
         cr.paint()
 
         size = PIPES_GRID_SIZE
@@ -4724,6 +5116,33 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             cr.move_to(sx1, sy1)
             cr.line_to(sx2, sy2)
             cr.stroke()
+
+            if self.pipes_tube_shading:
+
+                # A thin, semi-transparent light stroke offset toward
+                # one side of the segment - a specular highlight
+                # running along the top of a cylinder, the cheapest
+                # plausible stand-in for real lighting Cairo has no
+                # model for. Offset perpendicular to the segment's own
+                # direction, scaled by the segment's current width (a
+                # fatter pulsing tube gets a proportionally wider-
+                # spaced highlight) rather than a fixed pixel amount.
+                current_width = cr.get_line_width()
+                dx = sx2 - sx1
+                dy = sy2 - sy1
+                length = math.hypot(dx, dy)
+
+                if length > 0.001:
+
+                    offset = current_width * 0.22
+                    perp_x = -dy / length * offset
+                    perp_y = dx / length * offset
+
+                    cr.set_source_rgba(1, 1, 1, 0.35 * alpha)
+                    cr.set_line_width(max(0.6, current_width * 0.28))
+                    cr.move_to(sx1 + perp_x, sy1 + perp_y)
+                    cr.line_to(sx2 + perp_x, sy2 + perp_y)
+                    cr.stroke()
 
         # A bright cap on each still-growing pipe's current head -
         # otherwise the newest segment's own line end looks identical

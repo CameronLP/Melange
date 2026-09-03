@@ -105,6 +105,65 @@
 
 ## In progress / not started
 
+- [ ] **BUG**: settings popover (the gear button every aux window has)
+      still reported as not closing on an outside click. A belt-and-
+      suspenders fix was already attempted for this earlier (a
+      CAPTURE-phase Gtk.GestureClick on the whole window, popping the
+      popover down on any press without claiming the sequence - see
+      the "settings gear doesn't open" writeup further down this
+      file) and seemed to address the original report, but it's
+      apparently still not working, or not working for every kind.
+      Not yet re-investigated - candidates worth checking: whether the
+      newly-added GestureDrag (rotate) and Gtk.EventControllerScroll
+      (zoom) controllers on Terrain/Waterfall/Pipes' drawing_area,
+      added since that original fix, interfere with the CAPTURE-phase
+      click controller's own event delivery in some way the simpler
+      kinds don't hit; or whether the issue was never actually fixed
+      for every kind in the first place and this is a re-report of
+      the same unresolved bug rather than a new regression. This
+      environment has no way to click a real running popover to
+      confirm either way.
+- [ ] Real, tested fixes/additions from this round, all requested:
+      - 3D Waterfall: fixed stray wireframe lines cutting across tall
+        peaks (once Height was added) - an earlier version drew every
+        cell's fill in one full depth-sorted pass, then every cell's
+        outline in a *second*, fully separate pass after it,
+        regardless of depth; a farther quad's outline (e.g. the
+        mostly-hidden side of a tall peak) could then get painted
+        *after*, and on top of, a nearer quad's already-correct fill.
+        Interleaved into one pass (fill then outline per quad, in
+        depth order) so occlusion is correct again.
+      - Spectrogram/Terrain/Waterfall given a "High Level" setting
+        (scale_level_for_color) - remaps a chosen level to read as the
+        top of the color scale instead of requiring a true 1.0 reading
+        to ever show the hottest color, letting the visible color
+        range be dialed in against whatever a track's real levels
+        typically reach. Defaults to 1.0 (today's original behavior,
+        unchanged) rather than a lowered default, so this is purely an
+        added control, not a changed default.
+      - Pipes given Tube Shading (on by default) - a thin, semi-
+        transparent light stroke offset to one side of each segment,
+        mimicking a specular highlight along a cylinder - the cheapest
+        plausible stand-in for real lighting Cairo has no model for,
+        requested as "shading/reflection."
+      - Spectrum given a lagging Peak Hold indicator per bar (reuses
+        update_peak_hold/peak_hold_seconds, the same generic logic and
+        settings field the Peak Meter window already has) and a Style
+        choice - Smooth, a continuous Catmull-Rom-spline curve through
+        the same per-bar levels (with a real left-to-right rainbow
+        gradient fill in Rainbow mode, via Cairo's own LinearGradient,
+        since there's no longer a per-bar boundary to color
+        independently once it's one filled shape) - alongside the
+        original Bars.
+      - Every aux window's canvas background is now theme-reactive
+        (canvas_background_rgb, reading
+        Adw.StyleManager.get_default().dark fresh each draw - the same
+        property window.py's own header-tinting already uses) instead
+        of one of a few near-identical hardcoded dark grays regardless
+        of the app's Light/Dark/Follow System setting. DVD Bounce is
+        the one exception - its background is already a user-set
+        color (dvd_bg_color), so this would override an explicit
+        choice rather than respect it.
 - [ ] A "coordinator" window to launch/toggle every visualizer type
       from one place, including the main Butterchurn visualizer
       itself - requested. Today, opening each of the 11 aux window
