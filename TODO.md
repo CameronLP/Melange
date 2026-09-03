@@ -440,6 +440,69 @@
       to 520x360 - a rotatable 3D view reads as a cramped sliver at
       the smaller size.
 
+      A real, serious bug then turned up in Terrain from live testing
+      ("I only see grey" / "does not work"): `render_terrain_surface`
+      called `cr.move_to(*points[0])`, splatting a 3-element
+      `(screen_x, screen_y, depth)` tuple (project_3d_point's return
+      value) into a Cairo method that only accepts 2 args - a
+      TypeError on every real frame once any row data existed at all.
+      Missed entirely by the earlier direct-construction test (see
+      above) because that test never fed real audio/FFT data, so
+      terrain_rows stayed empty and this code path never actually ran;
+      only caught by re-running that same test with fabricated row
+      data force-appended, which is what turned up the traceback.
+      GTK/PyGObject swallows an exception raised inside a
+      Gtk.DrawingArea's draw_func rather than crashing the app, which
+      is why the window still opened - it just never painted anything
+      but its own initial dark background fill and (per the report) a
+      generic gray fallback where the widget's own snapshot should
+      have been. Fixed (`cr.move_to(points[0][0], points[0][1])`, both
+      occurrences) and re-verified against real fabricated row data
+      through the actual rendering path this time - confirmed varied,
+      real gradient-colored output (317 distinct sampled colors, not a
+      flat fill) rather than just "no exception was raised."
+
+      Also while addressing this: Spectrogram gained selectable Low/
+      Color and High Color settings (gradient_color, a plain 2-stop
+      linear interpolation) replacing the previous fixed 4-stop
+      black-blue-green-yellow-red thermal colormap (heatmap_color,
+      removed - fully superseded, not left as dead code). Terrain's
+      ridges are now colored by that row's own average loudness
+      through the same two-stop gradient (its own separate Low/High
+      Color pair) rather than one flat Color tint across the whole
+      terrain regardless of how loud any part of it was - a real
+      elevation-map-style visualization now, not just a colored
+      wireframe.
+
+      Pipes given three more audio-triggered effects, on request:
+      tube width now pulses with each pipe's own band's live level
+      (Pulse Tube Width switch - a second, more continuous
+      reinforcement of the per-band reactivity on top of speed);
+      React to Beats (same rolling-average energy-jump detector as DVD
+      Bounce's own, kept separate/self-contained) spawns one bonus
+      pipe beyond pipes_max_pipes right on a detected hit, fading back
+      to the normal count as it eventually dies out; and slow ambient
+      Auto-Rotate (adjustable Rotation Speed) continuously turns the
+      camera on its own, pausing cleanly while a manual rotate drag is
+      in progress and resuming from wherever that drag left it
+      afterward, rather than fighting the drag or snapping back.
+
+      DVD Bounce's icon was reported expanding from its top-left
+      corner instead of its center as it pulsed with level/beats -
+      dvd_x/dvd_y are the bounding box's corner (what the collision
+      math and every draw function already treat them as), so growing
+      dvd_size alone visibly grew the box from that corner. Fixed by
+      shifting the corner by half of whatever the size just changed by
+      on every resize, keeping the box's center fixed across it - a
+      purely cosmetic correction, doesn't touch movement or bouncing.
+
+      X-Y Scope given the same Labels toggle every other scope-family
+      kind already has, on request - faint crosshair axis lines plus
+      L/R labels (L horizontal, R vertical, matching how
+      self.left[i]/self.right[i] are actually plotted), shown even
+      before any real audio has arrived rather than only once a trace
+      exists, unlike the trace itself.
+
       Peak Meter built first: instantaneous per-channel |sample| peak
       (no VU_GAIN, unlike the VU Meter - a peak meter exists to show
       real headroom against 0dBFS, and artificially inflating that

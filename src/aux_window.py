@@ -184,27 +184,20 @@ TERRAIN_ROWS = 36
 TERRAIN_FRAME_INTERVAL = 0.08
 
 
-def heatmap_color(level):
+def gradient_color(level, lo, hi):
 
-    # Black -> blue -> green -> yellow -> red, the classic
-    # spectrogram/thermal colormap (same idea as the Wikipedia STFT
-    # illustration and most waterfall displays) - reads magnitude as
-    # color instead of bar height, so a whole frequency axis fits in
-    # one screen column.
+    # Plain linear interpolation between two user-chosen endpoint
+    # colors, reading magnitude as color the same way a classic
+    # spectrogram/thermal colormap does - just a straight 2-stop
+    # gradient (Low/High, settings-selectable) rather than a fixed
+    # multi-stop one, so it isn't locked to any single palette.
     level = max(0.0, min(1.0, level))
 
-    if level < 0.25:
-        t = level / 0.25
-        return (0.0, 0.0, t)
-    elif level < 0.5:
-        t = (level - 0.25) / 0.25
-        return (0.0, t, 1.0 - t)
-    elif level < 0.75:
-        t = (level - 0.5) / 0.25
-        return (t, 1.0, 0.0)
-    else:
-        t = (level - 0.75) / 0.25
-        return (1.0, 1.0 - t, 0.0)
+    return (
+        lo.red + (hi.red - lo.red) * level,
+        lo.green + (hi.green - lo.green) * level,
+        lo.blue + (hi.blue - lo.blue) * level,
+    )
 
 # The pipeline in window.py (start_system_audio) is hardcoded to this
 # rate, so the spectrum window's bin-to-frequency mapping can be too.
@@ -328,6 +321,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.show_labels = False
         self.mirror_reflection = False
         self.spectrogram_vertical = False
+
+        # Spectrogram heatmap gradient endpoints (see gradient_color) -
+        # defaults approximate the look of the fixed 4-stop thermal
+        # colormap this replaced (black at silence, warm red-orange at
+        # full scale) without being locked to it.
+        self.spectrogram_color_lo = Gdk.RGBA()
+        self.spectrogram_color_lo.parse("#000000")
+        self.spectrogram_color_hi = Gdk.RGBA()
+        self.spectrogram_color_hi.parse("#ff3300")
 
         # VU Meter style. "bars" is the original look (draw_vu_bar);
         # "led" is a discrete-segment hardware-style meter
@@ -473,6 +475,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             rotate_gesture.set_button(Gdk.BUTTON_PRIMARY)
             rotate_gesture.connect("drag-begin", self.on_pipes_drag_begin)
             rotate_gesture.connect("drag-update", self.on_pipes_drag_update)
+            rotate_gesture.connect("drag-end", self.on_pipes_drag_end)
             self.drawing_area.add_controller(rotate_gesture)
 
         else:
@@ -578,6 +581,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_surface = None
         self.terrain_dirty = True
 
+        # Ridge color gradient, by that row's own loudness (see
+        # render_terrain_surface) - replaces the plain single Color
+        # setting the other kinds use, since a height/loudness-colored
+        # terrain (classic elevation-map style) reads far better than
+        # one flat hue across every ridge regardless of how loud it
+        # was.
+        self.terrain_color_lo = Gdk.RGBA()
+        self.terrain_color_lo.parse("#0a1a4d")
+        self.terrain_color_hi = Gdk.RGBA()
+        self.terrain_color_hi.parse("#ff9933")
+
         # Pipes - pipes_occupied tracks every grid cell any pipe has
         # ever passed through since the last reset (collision check
         # for new moves); pipes_segments is every laid segment, drawn
@@ -616,6 +630,30 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.pipes_fade_seconds = 1.5
         self.pipes_fading_segments = []
         self.pipes_fade_start_time = 0.0
+
+        # Slow ambient auto-rotation, paused while a manual rotate
+        # drag is in progress (pipes_dragging) so the two don't fight
+        # - resumes seamlessly from wherever the drag left the camera,
+        # since it just keeps incrementing pipes_azimuth from its
+        # current value rather than resetting anything.
+        self.pipes_auto_rotate = True
+        self.pipes_rotate_speed = 6.0
+        self.pipes_dragging = False
+
+        # Beat-triggered pipe burst - a rolling-average energy-jump
+        # detector, the same idea as DVD Bounce's own beat_pulse
+        # (dvd_tick), kept separate/self-contained here rather than
+        # shared, same reasoning as that one: no existing path
+        # forwards a single detection to more than one consumer.
+        self.pipes_beats_enabled = True
+        self.pipes_beat_sensitivity = 1.4
+        self.pipes_beat_cooldown = 0.0
+        self.pipes_energy_history = deque(maxlen=60)
+
+        # Each pipe's tube width pulses with its own band's live level
+        # (draw_pipes) when this is on - a second, more continuous
+        # reinforcement of the per-band reactivity on top of speed.
+        self.pipes_pulse_width = True
 
         # Oscilloscope-only rolling buffers (see push_audio/
         # draw_oscilloscope) - unlike self.left/self.right (replaced
@@ -679,7 +717,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         box.set_margin_bottom(10)
 
         if self.kind in (
-            "xy", "spectrum", "vu", "oscilloscope", "vectorscope", "terrain"
+            "xy", "spectrum", "vu", "oscilloscope", "vectorscope"
         ):
 
             color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -913,7 +951,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             box.append(dot_size_row)
 
         if self.kind in (
-            "spectrum", "spectrogram", "vu", "peak", "oscilloscope", "vectorscope"
+            "spectrum", "spectrogram", "vu", "peak", "oscilloscope", "vectorscope",
+            "xy"
         ):
 
             labels_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -982,6 +1021,80 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             vertical_row.append(vertical_switch)
             box.append(vertical_row)
+
+            lo_color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            lo_color_label = Gtk.Label(label="Low Color", xalign=0, hexpand=True)
+            lo_color_row.append(lo_color_label)
+
+            lo_color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+            lo_color_button.set_rgba(self.spectrogram_color_lo)
+
+            lo_color_button.connect(
+                "notify::rgba",
+                self.on_spectrogram_color_lo_changed
+            )
+
+            lo_color_row.append(lo_color_button)
+            box.append(lo_color_row)
+
+            hi_color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            hi_color_label = Gtk.Label(label="High Color", xalign=0, hexpand=True)
+            hi_color_row.append(hi_color_label)
+
+            hi_color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+            hi_color_button.set_rgba(self.spectrogram_color_hi)
+
+            hi_color_button.connect(
+                "notify::rgba",
+                self.on_spectrogram_color_hi_changed
+            )
+
+            hi_color_row.append(hi_color_button)
+            box.append(hi_color_row)
+
+        if self.kind == "terrain":
+
+            terrain_lo_color_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            terrain_lo_color_label = Gtk.Label(
+                label="Low Color", xalign=0, hexpand=True
+            )
+            terrain_lo_color_row.append(terrain_lo_color_label)
+
+            terrain_lo_color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+            terrain_lo_color_button.set_rgba(self.terrain_color_lo)
+
+            terrain_lo_color_button.connect(
+                "notify::rgba",
+                self.on_terrain_color_lo_changed
+            )
+
+            terrain_lo_color_row.append(terrain_lo_color_button)
+            box.append(terrain_lo_color_row)
+
+            terrain_hi_color_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            terrain_hi_color_label = Gtk.Label(
+                label="High Color", xalign=0, hexpand=True
+            )
+            terrain_hi_color_row.append(terrain_hi_color_label)
+
+            terrain_hi_color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+            terrain_hi_color_button.set_rgba(self.terrain_color_hi)
+
+            terrain_hi_color_button.connect(
+                "notify::rgba",
+                self.on_terrain_color_hi_changed
+            )
+
+            terrain_hi_color_row.append(terrain_hi_color_button)
+            box.append(terrain_hi_color_row)
 
         if self.kind == "dvd":
 
@@ -1267,6 +1380,91 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             pipes_fade_time_row.append(pipes_fade_time_scale)
             box.append(pipes_fade_time_row)
 
+            pipes_auto_rotate_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_auto_rotate_label = Gtk.Label(
+                label="Auto-Rotate", xalign=0, hexpand=True
+            )
+            pipes_auto_rotate_row.append(pipes_auto_rotate_label)
+
+            pipes_auto_rotate_switch = Gtk.Switch()
+            pipes_auto_rotate_switch.set_active(self.pipes_auto_rotate)
+            pipes_auto_rotate_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_auto_rotate_switch.connect(
+                "notify::active",
+                self.on_pipes_auto_rotate_changed
+            )
+
+            pipes_auto_rotate_row.append(pipes_auto_rotate_switch)
+            box.append(pipes_auto_rotate_row)
+
+            pipes_rotate_speed_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_rotate_speed_label = Gtk.Label(
+                label="Rotation Speed", xalign=0, hexpand=True
+            )
+            pipes_rotate_speed_row.append(pipes_rotate_speed_label)
+
+            pipes_rotate_speed_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.0, 30.0, 1.0
+            )
+            pipes_rotate_speed_scale.set_value(self.pipes_rotate_speed)
+            pipes_rotate_speed_scale.set_size_request(120, -1)
+            pipes_rotate_speed_scale.set_draw_value(False)
+
+            pipes_rotate_speed_scale.connect(
+                "value-changed",
+                self.on_pipes_rotate_speed_changed
+            )
+
+            pipes_rotate_speed_row.append(pipes_rotate_speed_scale)
+            box.append(pipes_rotate_speed_row)
+
+            pipes_beats_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            pipes_beats_label = Gtk.Label(
+                label="React to Beats", xalign=0, hexpand=True
+            )
+            pipes_beats_row.append(pipes_beats_label)
+
+            pipes_beats_switch = Gtk.Switch()
+            pipes_beats_switch.set_active(self.pipes_beats_enabled)
+            pipes_beats_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_beats_switch.connect(
+                "notify::active",
+                self.on_pipes_beats_enabled_changed
+            )
+
+            pipes_beats_row.append(pipes_beats_switch)
+            box.append(pipes_beats_row)
+
+            pipes_pulse_width_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_pulse_width_label = Gtk.Label(
+                label="Pulse Tube Width", xalign=0, hexpand=True
+            )
+            pipes_pulse_width_row.append(pipes_pulse_width_label)
+
+            pipes_pulse_width_switch = Gtk.Switch()
+            pipes_pulse_width_switch.set_active(self.pipes_pulse_width)
+            pipes_pulse_width_switch.set_valign(Gtk.Align.CENTER)
+
+            pipes_pulse_width_switch.connect(
+                "notify::active",
+                self.on_pipes_pulse_width_changed
+            )
+
+            pipes_pulse_width_row.append(pipes_pulse_width_switch)
+            box.append(pipes_pulse_width_row)
+
         popover = Gtk.Popover()
         popover.set_child(box)
 
@@ -1379,9 +1577,29 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.pipes_fade_seconds = scale.get_value()
 
+    def on_pipes_auto_rotate_changed(self, switch, param):
+
+        self.pipes_auto_rotate = switch.get_active()
+
+    def on_pipes_rotate_speed_changed(self, scale):
+
+        self.pipes_rotate_speed = scale.get_value()
+
+    def on_pipes_beats_enabled_changed(self, switch, param):
+
+        self.pipes_beats_enabled = switch.get_active()
+
+        if not self.pipes_beats_enabled:
+            self.pipes_energy_history.clear()
+
+    def on_pipes_pulse_width_changed(self, switch, param):
+
+        self.pipes_pulse_width = switch.get_active()
+
     def on_pipes_drag_begin(self, gesture, start_x, start_y):
 
         self.pipes_rotate_start = (self.pipes_azimuth, self.pipes_elevation)
+        self.pipes_dragging = True
 
     def on_pipes_drag_update(self, gesture, offset_x, offset_y):
 
@@ -1397,6 +1615,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         )
 
         self.drawing_area.queue_draw()
+
+    def on_pipes_drag_end(self, gesture, offset_x, offset_y):
+
+        # Auto-rotate (pipes_tick) resumes on the very next tick,
+        # continuing from wherever this drag left pipes_azimuth - nothing
+        # else to reset here.
+        self.pipes_dragging = False
 
     def on_vu_style_changed(self, dropdown, param):
 
@@ -1426,6 +1651,28 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_spectrogram_vertical_changed(self, switch, param):
 
         self.spectrogram_vertical = switch.get_active()
+        self.drawing_area.queue_draw()
+
+    def on_spectrogram_color_lo_changed(self, button, param):
+
+        self.spectrogram_color_lo = button.get_rgba()
+        self.drawing_area.queue_draw()
+
+    def on_spectrogram_color_hi_changed(self, button, param):
+
+        self.spectrogram_color_hi = button.get_rgba()
+        self.drawing_area.queue_draw()
+
+    def on_terrain_color_lo_changed(self, button, param):
+
+        self.terrain_color_lo = button.get_rgba()
+        self.terrain_dirty = True
+        self.drawing_area.queue_draw()
+
+    def on_terrain_color_hi_changed(self, button, param):
+
+        self.terrain_color_hi = button.get_rgba()
+        self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
     def on_drag_begin(self, gesture, start_x, start_y):
@@ -1927,14 +2174,31 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         cr.set_source_rgb(0.05, 0.05, 0.05)
         cr.paint()
 
+        cx = width / 2
+        cy = height / 2
+        scale = min(width, height) / 2 - 8
+
+        if self.show_labels:
+
+            cr.set_source_rgba(1, 1, 1, 0.15)
+            cr.set_line_width(1.0)
+            cr.move_to(cx, 0)
+            cr.line_to(cx, height)
+            cr.stroke()
+            cr.move_to(0, cy)
+            cr.line_to(width, cy)
+            cr.stroke()
+
+            # L is the horizontal axis, R the vertical - same
+            # convention self.left[i]/self.right[i] are actually
+            # plotted with below (x from left, y from right).
+            self.draw_text_label(cr, width - 16, cy + 4, "L")
+            self.draw_text_label(cr, cx - 4, 14, "R")
+
         count = min(len(self.left), len(self.right))
 
         if count == 0:
             return
-
-        cx = width / 2
-        cy = height / 2
-        scale = min(width, height) / 2 - 8
 
         cr.set_source_rgba(
             self.color.red, self.color.green, self.color.blue, 0.85
@@ -2218,11 +2482,25 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         speed = self.dvd_speed_scale * (1.0 + level * 1.5 * self.dvd_reactivity)
 
-        self.dvd_size = self.dvd_base_size * (
+        new_size = self.dvd_base_size * (
             1.0
             + level * 0.35 * self.dvd_reactivity
             + self.dvd_beat_pulse * 0.6 * self.dvd_reactivity
         )
+
+        # dvd_x/dvd_y are the bounding box's top-left corner (that's
+        # what the wall-collision checks below, and every draw
+        # function, treat them as) - growing/shrinking dvd_size alone
+        # would visibly expand the icon from that corner instead of
+        # its center. Shifting the corner by half of whatever the size
+        # just changed by keeps the box's center fixed across the
+        # resize, which is what actually reads as "the icon pulses
+        # from its center" - a purely cosmetic correction, doesn't
+        # change anything about how the box moves or bounces.
+        size_delta = new_size - self.dvd_size
+        self.dvd_x -= size_delta / 2
+        self.dvd_y -= size_delta / 2
+        self.dvd_size = new_size
 
         self.dvd_x += self.dvd_vx * dt * speed
         self.dvd_y += self.dvd_vy * dt * speed
@@ -2703,7 +2981,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             for row_index, level in enumerate(levels):
 
-                r, g, b = heatmap_color(level)
+                r, g, b = gradient_color(
+                    level, self.spectrogram_color_lo, self.spectrogram_color_hi
+                )
                 cr.set_source_rgb(r, g, b)
 
                 if self.spectrogram_vertical:
@@ -2827,7 +3107,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     self.terrain_azimuth, self.terrain_elevation
                 ))
 
-            projected_rows.append((points[0][2], points, base_points))
+            # This row's own average loudness, mapped through the
+            # Low/High gradient (gradient_color) - a genuine elevation-
+            # style color map (quiet moments read one color, loud ones
+            # another) rather than one flat hue across every ridge
+            # regardless of how loud it was.
+            avg_level = sum(levels) / len(levels) if levels else 0.0
+            row_color = gradient_color(
+                avg_level, self.terrain_color_lo, self.terrain_color_hi
+            )
+
+            projected_rows.append((points[0][2], points, base_points, row_color))
 
         # Painter's algorithm: farthest rows (smallest depth) drawn
         # first, nearest (largest depth) drawn last, on top - correct
@@ -2835,7 +3125,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # without needing true hidden-surface removal.
         projected_rows.sort(key=lambda entry: entry[0])
 
-        for depth, points, base_points in projected_rows:
+        for depth, points, base_points, row_color in projected_rows:
 
             # Filled silhouette under the ridge line, back down to a
             # flat baseline - an opaque body (not just a wireframe
@@ -2843,7 +3133,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             # farther one, the same technique classic ridgeline/
             # "joy division style" plots use, just projected through a
             # rotatable camera here instead of stacked flat in 2D.
-            cr.move_to(*points[0])
+            cr.move_to(points[0][0], points[0][1])
 
             for px, py, _ in points[1:]:
                 cr.line_to(px, py)
@@ -2855,19 +3145,23 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             # High, mostly-opaque alpha - painter's-algorithm occlusion
             # only actually works if a nearer row's fill is opaque
-            # enough to hide what's behind it. Lightened slightly
-            # toward the front (larger depth) as a cheap depth cue on
-            # top of that, since there's no real lighting model here.
-            brightness = 0.06 + 0.05 * min(1.0, max(0.0, (depth + 1.0) / 2.0))
-            cr.set_source_rgba(brightness, brightness, brightness + 0.02, 0.92)
+            # enough to hide what's behind it. Darker toward the back
+            # and brighter toward the front as a cheap depth cue on top
+            # of the row's own gradient color, since there's no real
+            # lighting model here.
+            shade = 0.35 + 0.55 * min(1.0, max(0.0, (depth + 1.0) / 2.0))
+            cr.set_source_rgba(
+                row_color[0] * shade,
+                row_color[1] * shade,
+                row_color[2] * shade,
+                0.92
+            )
             cr.fill_preserve()
 
-            cr.set_source_rgba(
-                self.color.red, self.color.green, self.color.blue, 0.9
-            )
+            cr.set_source_rgba(row_color[0], row_color[1], row_color[2], 0.9)
             cr.set_line_width(1.3)
             cr.new_path()
-            cr.move_to(*points[0])
+            cr.move_to(points[0][0], points[0][1])
 
             for px, py, _ in points[1:]:
                 cr.line_to(px, py)
@@ -3035,7 +3329,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             if in_bounds and next_pos not in self.pipes_occupied:
 
-                self.pipes_segments.append((pipe["pos"], next_pos, pipe["color"]))
+                self.pipes_segments.append(
+                    (pipe["pos"], next_pos, pipe["color"], pipe["band"])
+                )
                 self.pipes_occupied.add(next_pos)
                 pipe["pos"] = next_pos
                 pipe["dir"] = direction
@@ -3049,6 +3345,49 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         dt = PIPES_TICK_INTERVAL_MS / 1000.0
 
         self.update_pipes_band_levels()
+
+        # Slow ambient auto-rotation - paused while a manual rotate
+        # drag is in progress (on_pipes_drag_begin/end) so the two
+        # don't fight over pipes_azimuth; wrapped to stay bounded
+        # rather than growing without limit over a long-running
+        # window (math.cos/sin handle any magnitude fine either way,
+        # this is purely so the value itself doesn't grow forever).
+        if self.pipes_auto_rotate and not self.pipes_dragging:
+
+            self.pipes_azimuth = (
+                self.pipes_azimuth + math.radians(self.pipes_rotate_speed) * dt
+            ) % (2 * math.pi)
+
+        # Beat-triggered burst: a sudden jump in overall level above
+        # its own recent rolling average (same rolling-average-
+        # comparison idea as DVD Bounce's own beat detector, kept
+        # self-contained here rather than shared) spawns one bonus
+        # pipe beyond pipes_max_pipes, rather than waiting for the
+        # normal top-up-to-max logic to ever trigger one - a burst of
+        # extra activity right on the hit, which then fades back to
+        # the normal count as it eventually dies out on its own.
+        if self.pipes_beats_enabled:
+
+            raw_level = max(rms(self.left), rms(self.right)) * VU_GAIN
+            self.pipes_energy_history.append(raw_level)
+
+            average = (
+                sum(self.pipes_energy_history) / len(self.pipes_energy_history)
+                if self.pipes_energy_history else 0.0
+            )
+
+            self.pipes_beat_cooldown = max(0.0, self.pipes_beat_cooldown - dt)
+
+            if (
+                self.pipes_beat_cooldown <= 0.0
+                and raw_level > 0.08
+                and raw_level > average * self.pipes_beat_sensitivity
+            ):
+                self.pipes_beat_cooldown = 0.25
+                burst = self.spawn_pipe()
+
+                if burst is not None:
+                    self.pipes_active.append(burst)
 
         # Each pipe advances on its own accumulator now, driven by its
         # own assigned band's level (see spawn_pipe/
@@ -3134,7 +3473,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         projected = []
 
-        for cell_a, cell_b, color in self.pipes_segments:
+        for cell_a, cell_b, color, band in self.pipes_segments:
 
             sx1, sy1, d1 = self.project_3d_point(
                 to_unit(cell_a[0]), to_unit(cell_a[1]), to_unit(cell_a[2]),
@@ -3145,11 +3484,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 cx, cy, scale, self.pipes_azimuth, self.pipes_elevation
             )
 
-            projected.append(((d1 + d2) / 2, sx1, sy1, sx2, sy2, color, 1.0))
+            projected.append(((d1 + d2) / 2, sx1, sy1, sx2, sy2, color, 1.0, band))
 
         if fade_alpha > 0.0:
 
-            for cell_a, cell_b, color in self.pipes_fading_segments:
+            for cell_a, cell_b, color, band in self.pipes_fading_segments:
 
                 sx1, sy1, d1 = self.project_3d_point(
                     to_unit(cell_a[0]), to_unit(cell_a[1]), to_unit(cell_a[2]),
@@ -3161,7 +3500,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 )
 
                 projected.append(
-                    ((d1 + d2) / 2, sx1, sy1, sx2, sy2, color, fade_alpha)
+                    ((d1 + d2) / 2, sx1, sy1, sx2, sy2, color, fade_alpha, band)
                 )
 
         # Painter's algorithm again (see render_terrain_surface) - not
@@ -3172,9 +3511,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         projected.sort(key=lambda entry: entry[0])
 
         cr.set_line_cap(cairo.LINE_CAP_ROUND)
-        cr.set_line_width(6)
 
-        for depth, sx1, sy1, sx2, sy2, color, alpha in projected:
+        base_width = 6
+
+        for depth, sx1, sy1, sx2, sy2, color, alpha, band in projected:
+
+            # Tube thickness pulses with that segment's own band's
+            # live level, when enabled - a second, more continuous
+            # reinforcement of the per-band reactivity on top of speed
+            # (pipes_tick), rather than the only visible cue being how
+            # fast a pipe moves.
+            if self.pipes_pulse_width and self.pipes_band_levels:
+                band_level = self.pipes_band_levels[band % len(self.pipes_band_levels)]
+                cr.set_line_width(base_width * (1.0 + band_level * 0.8))
+            else:
+                cr.set_line_width(base_width)
 
             cr.set_source_rgba(color.red, color.green, color.blue, 0.95 * alpha)
             cr.move_to(sx1, sy1)
