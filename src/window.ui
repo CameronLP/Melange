@@ -189,6 +189,11 @@
         </item>
 
         <item>
+          <attribute name="label" translatable="yes">Vector Scope</attribute>
+          <attribute name="action">win.show-vectorscope</attribute>
+        </item>
+
+        <item>
           <attribute name="label" translatable="yes">Spectrum</attribute>
           <attribute name="action">win.show-spectrum</attribute>
         </item>

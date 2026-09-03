@@ -36,6 +36,7 @@ AUX_WINDOW_TITLES = {
     "vu": "VU Meter",
     "xy": "X-Y Scope",
     "oscilloscope": "Oscilloscope",
+    "vectorscope": "Vector Scope",
     "spectrum": "Spectrum",
     "spectrogram": "Spectrogram",
     "peak": "Peak Meter",
@@ -482,6 +483,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.scope_time_base = SCOPE_DEFAULT_TIME_BASE
         self.scope_trigger = True
 
+        # Vector Scope (goniometer) - vector_surface is an offscreen
+        # Cairo ImageSurface accumulating a fading trail across frames
+        # (see draw_vector_scope), not something GTK's own draw_func
+        # gives for free (each on_draw call gets a fresh render target
+        # with no memory of the previous frame's pixels) - recreated
+        # lazily whenever the drawing area's own size changes.
+        # vector_persistence is how much of the previous frame's trail
+        # survives each new one (same "higher = slower decay" meaning
+        # as the Decay setting elsewhere in this file).
+        self.vector_surface = None
+        self.vector_persistence = 0.90
+
         motion = Gtk.EventControllerMotion()
         motion.connect("motion", self.mouse_move)
         self.add_controller(motion)
@@ -506,7 +519,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         box.set_margin_top(10)
         box.set_margin_bottom(10)
 
-        if self.kind in ("xy", "spectrum", "vu", "oscilloscope"):
+        if self.kind in ("xy", "spectrum", "vu", "oscilloscope", "vectorscope"):
 
             color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -675,7 +688,33 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             trigger_row.append(trigger_switch)
             box.append(trigger_row)
 
-        if self.kind in ("spectrum", "spectrogram", "vu", "peak", "oscilloscope"):
+        if self.kind == "vectorscope":
+
+            persistence_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            persistence_label = Gtk.Label(
+                label="Persistence", xalign=0, hexpand=True
+            )
+            persistence_row.append(persistence_label)
+
+            persistence_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.5, 0.98, 0.01
+            )
+            persistence_scale.set_value(self.vector_persistence)
+            persistence_scale.set_size_request(120, -1)
+            persistence_scale.set_draw_value(False)
+
+            persistence_scale.connect(
+                "value-changed",
+                self.on_vector_persistence_changed
+            )
+
+            persistence_row.append(persistence_scale)
+            box.append(persistence_row)
+
+        if self.kind in (
+            "spectrum", "spectrogram", "vu", "peak", "oscilloscope", "vectorscope"
+        ):
 
             labels_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -905,6 +944,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.scope_trigger = switch.get_active()
 
+    def on_vector_persistence_changed(self, scale):
+
+        self.vector_persistence = scale.get_value()
+
     def on_icon_changed(self, dropdown, param):
 
         index = dropdown.get_selected()
@@ -1084,6 +1127,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.draw_dvd_bounce(cr, width, height)
         elif self.kind == "oscilloscope":
             self.draw_oscilloscope(cr, width, height)
+        elif self.kind == "vectorscope":
+            self.draw_vector_scope(cr, width, height)
         else:
             self.draw_xy_scope(cr, width, height)
 
@@ -1548,6 +1593,116 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             cr, margin, margin * 2 + cell_height, width - margin * 2, cell_height,
             right_samples, 0.6, "R"
         )
+
+    def stereo_correlation(self):
+
+        # Pearson correlation of L and R over the current chunk: +1.0
+        # is mono (identical channels), 0.0 is wide/uncorrelated
+        # stereo, -1.0 is fully out of phase (a real mono-compatibility
+        # problem if sustained - summing to mono would cancel toward
+        # silence) - the standard reading a hardware/software
+        # correlation meter shows next to a goniometer.
+        count = min(len(self.left), len(self.right))
+
+        if count == 0:
+            return 0.0
+
+        sum_lr = sum(self.left[i] * self.right[i] for i in range(count))
+        sum_ll = sum(v * v for v in self.left[:count])
+        sum_rr = sum(v * v for v in self.right[:count])
+
+        denominator = math.sqrt(sum_ll * sum_rr)
+
+        if denominator < 1e-9:
+            return 0.0
+
+        return max(-1.0, min(1.0, sum_lr / denominator))
+
+    def draw_vector_scope(self, cr, width, height):
+
+        bg = (0.03, 0.03, 0.04)
+
+        if (
+            self.vector_surface is None
+            or self.vector_surface.get_width() != width
+            or self.vector_surface.get_height() != height
+        ):
+            self.vector_surface = cairo.ImageSurface(
+                cairo.FORMAT_ARGB32, max(1, width), max(1, height)
+            )
+            fresh = cairo.Context(self.vector_surface)
+            fresh.set_source_rgb(*bg)
+            fresh.paint()
+
+        trail_cr = cairo.Context(self.vector_surface)
+
+        # Phosphor-persistence trick: instead of clearing to the
+        # background every frame (which would make this just a
+        # differently-rotated X-Y Scope), partially overpaint the
+        # existing trail with the background color at a low alpha -
+        # old points fade out exponentially over several frames rather
+        # than vanishing instantly, which is what makes a goniometer's
+        # display read as a "cloud" with density/shape instead of a
+        # single instantaneous dot.
+        trail_cr.set_operator(cairo.OPERATOR_OVER)
+        trail_cr.set_source_rgba(*bg, 1.0 - self.vector_persistence)
+        trail_cr.rectangle(0, 0, width, height)
+        trail_cr.fill()
+
+        cx, cy = width / 2, height / 2
+        scale = min(width, height) / 2 - 12
+
+        # Rotated 45° from a plain L/R plot - Mid ((L+R)/sqrt(2)) on
+        # the vertical axis, Side ((L-R)/sqrt(2)) on the horizontal -
+        # the standard goniometer convention: mono material (L == R)
+        # draws a vertical line since Side is always 0, and fully out-
+        # of-phase material (L == -R) draws a horizontal line since Mid
+        # is always 0. A plain, unrotated L-vs-R plot (the existing X-Y
+        # Scope) doesn't carry this same "read stereo width/phase at a
+        # glance" meaning.
+        trail_cr.set_source_rgba(
+            self.color.red, self.color.green, self.color.blue, 0.85
+        )
+
+        count = min(len(self.left), len(self.right))
+
+        for i in range(count):
+
+            mid = (self.left[i] + self.right[i]) * 0.70710678
+            side = (self.left[i] - self.right[i]) * 0.70710678
+
+            px = cx + side * scale
+            py = cy - mid * scale
+
+            trail_cr.rectangle(px - 0.6, py - 0.6, 1.2, 1.2)
+
+        trail_cr.fill()
+
+        cr.set_source_surface(self.vector_surface, 0, 0)
+        cr.paint()
+
+        # Axis lines and labels are drawn fresh onto the visible
+        # context every frame, not into vector_surface - they're fixed
+        # reference marks, not part of the fading signal trail.
+        cr.set_source_rgba(1, 1, 1, 0.18)
+        cr.set_line_width(1.0)
+        cr.move_to(cx, 0)
+        cr.line_to(cx, height)
+        cr.stroke()
+        cr.move_to(0, cy)
+        cr.line_to(width, cy)
+        cr.stroke()
+
+        if self.show_labels:
+
+            self.draw_text_label(cr, cx - 4, 14, "M")
+            self.draw_text_label(cr, width - 16, cy + 4, "S")
+
+            correlation = self.stereo_correlation()
+
+            self.draw_text_label(
+                cr, cx - 24, height - 6, f"Corr {correlation:+.2f}"
+            )
 
     def dvd_tick(self):
 

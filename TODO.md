@@ -378,13 +378,13 @@
          (amplitude vs time, both channels), distinct from the
          existing X-Y Scope (which plots L against R, not either
          channel against time).
-      3. Vector Scope - a proper phase-correlation "goniometer" style
-         display (traditionally rotated 45° from a plain L/R X-Y
-         plot, so mono material draws a vertical line and out-of-phase
-         material spreads horizontally), with intensity/persistence
-         trails, L/R/M/S axis labels, and a phase correlation reading -
-         a more information-dense relative of the existing X-Y Scope,
-         not a duplicate of it.
+      3. Vector Scope - built, see below. A proper phase-correlation
+         "goniometer" style display (traditionally rotated 45° from a
+         plain L/R X-Y plot, so mono material draws a vertical line
+         and out-of-phase material spreads horizontally), with
+         intensity/persistence trails, M/S axis labels, and a phase
+         correlation reading - a more information-dense relative of
+         the existing X-Y Scope, not a duplicate of it.
       4. 3D Terrain Map Spectrogram - the existing Spectrogram's
          waterfall data (magnitude per frequency bin per time column)
          rendered as an oblique/isometric pseudo-3D ridge-line terrain
@@ -463,6 +463,35 @@
       the Color setting) rather than overlaid in one plot, matching
       how the VU Meter/Peak Meter already lay out two channels side by
       side.
+
+      Vector Scope built third: draws in rotated Mid/Side space
+      (mid = (L+R)/sqrt(2) on the vertical axis, side = (L-R)/sqrt(2)
+      on the horizontal) rather than plain L/R like the existing X-Y
+      Scope - mono material collapses to a vertical line (side is
+      always 0), fully out-of-phase material to a horizontal one (mid
+      is always 0), the standard goniometer reading. Real
+      phosphor-style persistence, not just a differently-rotated X-Y
+      Scope: an offscreen `cairo.ImageSurface` (vector_surface,
+      recreated whenever the drawing area's size changes) accumulates
+      across frames - GTK's own draw_func gives a fresh render target
+      every call with no memory of the last frame's pixels, so this is
+      managed by hand. Each frame, instead of clearing to the
+      background, the existing trail is partially overpainted with the
+      background color at a low alpha (1 - Persistence, a settings
+      slider using the same "higher = slower decay" convention as
+      Decay elsewhere in this file) before the new sample points are
+      drawn on top - old points fade out over several frames rather
+      than vanishing instantly, giving the display density/shape
+      instead of a single flickering dot. Drawn as a scatter of small
+      dots (not connected line segments the way the X-Y Scope's
+      Lissajous trace is) - a goniometer's cloud shape is the
+      information, not a path through it. Axis lines/labels and a
+      numeric phase-correlation reading (stereo_correlation - Pearson
+      correlation of L and R, +1 mono, 0 wide stereo, -1 out of phase
+      and a real mono-compatibility risk if sustained) are drawn fresh
+      onto the visible frame every time rather than baked into the
+      fading trail surface, since they're fixed reference marks, not
+      part of the signal being displayed.
 - [ ] **BUG**: some of the aux visualizer windows above (VU Meter/X-Y
       Scope/Spectrum/Spectrogram) reportedly don't react to audio in
       some cases - not yet reproduced or root-caused in this
