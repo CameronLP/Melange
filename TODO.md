@@ -139,6 +139,13 @@
       this one would need a different transport (e.g. a local
       WebSocket from Python to a JS-side listener) to actually avoid,
       which is a bigger change than fits alongside the other two.
+- [ ] Add a "+" (add to playlist) button per row, matching the existing
+      favorite-star/add-to-queue buttons - currently the only way to
+      get a preset into a specific saved playlist is to build/reorder
+      the queue first and then "Save Current Queue as Playlist…" from
+      the Playlists dialog; there's no direct per-row way to add a
+      preset straight into an existing playlist the way the star adds
+      it straight to favorites.
 - [ ] A larger preset browser window - the dialog itself is still a
       fixed 560x560 even now that it holds three tabs (Presets/
       Favorites/Queue, see Done) rather than just one list; worth
