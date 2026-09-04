@@ -181,22 +181,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         webview_overlay.add_overlay(self.favorite_button)
 
-        # Same corner as the favorite button, immediately to its left.
-        # Disabled for now (see TODO.md - slide-in Queue/Playlist
-        # sidebar) rather than wired to the add-to-queue-or-playlist
-        # popover.
-        self.playlist_queue_button = Gtk.Button(icon_name="list-add-symbolic")
-        self.playlist_queue_button.add_css_class("nav-arrow-button")
-        self.playlist_queue_button.set_size_request(48, 48)
-        self.playlist_queue_button.set_halign(Gtk.Align.END)
-        self.playlist_queue_button.set_valign(Gtk.Align.END)
-        self.playlist_queue_button.set_margin_end(68)
-        self.playlist_queue_button.set_margin_bottom(12)
-        self.playlist_queue_button.set_tooltip_text("Add to Queue or Playlist…")
-        self.playlist_queue_button.set_sensitive(False)
-
-        webview_overlay.add_overlay(self.playlist_queue_button)
-
         # Now Playing (now_playing.py) - hidden until a track is
         # actually reported (see on_now_playing_changed), so there's
         # never an empty/placeholder card shown when nothing's playing
@@ -289,6 +273,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.browser_view_stack = None
         self.favorites = self.load_favorites()
         self.favorites_list_store = None
+        # Session-scoped only, unlike favorites - a loaded preset's
+        # actual content only ever lives in the webview's own runtime
+        # state (JS's resolvedPresets Map), never written to disk, so
+        # persisting just the *name* here across restarts would list
+        # entries that fail to resolve/load the moment they're picked.
+        self.user_loaded_presets = []
+        self.user_preset_list_store = None
+        self.pending_loaded_preset_name = None
         self.preset_queue = []
         self.queue_list_store = None
         self.playlists = self.load_playlists()
@@ -711,6 +703,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         if text.startswith("LOAD_PRESET_ERROR:"):
             reason = text[len("LOAD_PRESET_ERROR:"):]
             self.show_toast(f"Couldn't load preset: {reason}")
+            self.pending_loaded_preset_name = None
             return
 
         # The actual preset names only exist in JS (from
@@ -718,7 +711,33 @@ class MelangeWindow(Adw.ApplicationWindow):
         # win.load-preset) - this is Python's copy, used to build the
         # native preset browser list. Sent whenever the list changes.
         if text.startswith("PRESET_LIST:"):
-            self.preset_names = json.loads(text[len("PRESET_LIST:"):])
+            new_names = json.loads(text[len("PRESET_LIST:"):])
+
+            # Confirms the load Python just asked for actually landed
+            # in JS's own list, rather than trusting on_preset_file_
+            # chosen's dispatch alone - that call site has no way to
+            # know yet whether the parse/conversion on the other side
+            # is going to succeed. A name only ever reaches here (a
+            # PRESET_LIST: re-announcement) via that one success path
+            # in loadPresetFile, so genuinely new + previously pending
+            # is enough to confirm it rather than guess.
+            if (
+                self.pending_loaded_preset_name
+                and self.pending_loaded_preset_name not in self.preset_names
+                and self.pending_loaded_preset_name in new_names
+                and self.pending_loaded_preset_name not in self.user_loaded_presets
+            ):
+                self.user_loaded_presets.append(self.pending_loaded_preset_name)
+
+                if self.user_preset_list_store is not None:
+                    self.user_preset_list_store.splice(
+                        0,
+                        self.user_preset_list_store.get_n_items(),
+                        self.user_loaded_presets
+                    )
+
+            self.pending_loaded_preset_name = None
+            self.preset_names = new_names
 
             if self.preset_list_store is not None:
                 self.preset_list_store.splice(
@@ -1335,8 +1354,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         buttons = (
             self.prev_arrow_button,
             self.next_arrow_button,
-            self.favorite_button,
-            self.playlist_queue_button
+            self.favorite_button
         )
 
         for button in buttons:
@@ -2554,6 +2572,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         view_stack.add_titled_with_icon(
+            self.build_loaded_presets_tab(),
+            "loaded", "Loaded", "document-open-symbolic"
+        )
+
+        view_stack.add_titled_with_icon(
             self.build_queue_tab(),
             "queue", "Queue", "view-continuous-symbolic"
         )
@@ -2640,6 +2663,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.favorites_list_store = Gtk.StringList.new(self.favorites)
 
         return self.build_preset_search_list(self.favorites_list_store)
+
+    # Only presets loaded via win.load-preset (the file picker), not
+    # the bundled packs - session-scoped, see the comment on
+    # self.user_loaded_presets in __init__ for why this deliberately
+    # isn't persisted to disk the way Favorites is.
+    def build_loaded_presets_tab(self):
+
+        self.user_preset_list_store = Gtk.StringList.new(self.user_loaded_presets)
+
+        return self.build_preset_search_list(self.user_preset_list_store)
 
     def preset_row_setup(self, factory, list_item):
 
@@ -3510,6 +3543,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         # to embed directly in a JS string literal.
         encoded = base64.b64encode(contents).decode("ascii")
         name = gfile.get_basename()
+
+        # Confirmed successful (or not) in on_webview_debug_message's
+        # own PRESET_LIST:/LOAD_PRESET_ERROR: handling - this call
+        # site only knows the load was *dispatched*, not that it
+        # actually parsed/converted successfully on the JS side.
+        self.pending_loaded_preset_name = name
 
         self.run_js(
             f"loadPresetFile({json.dumps(encoded)}, {json.dumps(name)});"

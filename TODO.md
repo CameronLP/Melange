@@ -105,6 +105,40 @@
 
 ## In progress / not started
 
+- [x] Load Preset - asked ("Does load preset work???"). Verified end
+      to end in the sandbox by driving the real loadPresetFile() path
+      directly (bypassing only the native GtkFileDialog itself, which
+      is standard GTK plumbing) with a real Butterchurn/.json preset
+      and a real MilkDrop/.milk preset: both loaded, played
+      immediately (window title updated to the loaded preset's name),
+      and were appended to the preset list with no JS errors. Works
+      correctly for both preset formats.
+- [x] "Section for user loaded presets" - requested, built. New
+      "Loaded" tab in the preset browser dialog (alongside Presets/
+      Favorites/Queue), showing only presets added via win.load-preset
+      this session - self.user_loaded_presets, confirmed (not just
+      dispatched) via the same PRESET_LIST: re-announcement Load
+      Preset already triggers on success: a name is only added once
+      it's seen to have gone from absent to present in that list,
+      rather than trusting the moment Python asked JS to load it (which
+      doesn't yet know if the parse/conversion actually succeeded).
+      Deliberately session-scoped only, unlike Favorites (which
+      persists to disk) - a loaded preset's actual content only ever
+      lives in the webview's JS runtime state, never written anywhere,
+      so persisting just the name across restarts would list entries
+      that fail to resolve the moment they're picked. A real cross-
+      session version would need to persist the original file (or its
+      full content), not just its name - not attempted here.
+      Verified in the sandbox: starts empty, a confirmed real load
+      appears immediately, re-loading the same name doesn't create a
+      duplicate entry.
+- [x] Removed the disabled "+" (Add to Queue or Playlist) overlay
+      button - requested ("disable the plus overlay button. Queues and
+      playlists should go through the menu"). It was already
+      set_sensitive(False) (never wired up), so this is full removal of
+      the dead/inert widget, not a new disabled state. Queue and
+      Playlists are already reachable via the hamburger menu (Presets
+      submenu > Queue…/Playlists…, see window.ui), unaffected by this.
 - [ ] Toolbar Hide Delay - requested ("add setting to control how
       soon top bar hides") - built. New Preferences > Appearance >
       Toolbar > Hide Delay slider (0-10s, 0 = "Never" i.e. stays
@@ -304,16 +338,30 @@
       top/bottom margins now match, the font family lands in the
       title label's Pango attributes, and the widened slider range
       actually applies up to 72px.
-      Still unresolved: the same report also named "miniviz graphics"
-      (the aux visualizer windows) as shifted down the same way, not
-      just the Now Playing overlay - checked aux_window.py and
-      mirror_window.py and both already use the identical pattern
-      (extend_content_to_top_edge + a floating/fading header, no
-      hardcoded top-margin like Now Playing's had) with nothing found
-      in the actual Cairo drawing code that reserves header space -
-      unlike Now Playing's case, no concrete cause was found by
-      reading the code. Asked the user for more detail/a screenshot
-      rather than guess at a change with no diagnosed cause.
+      Follow-up: the same report also named "miniviz graphics" (the
+      aux visualizer windows) as shifted down the same way - user
+      supplied 3 screenshots (VU Meter, 3D Terrain Spectrogram with
+      the header visible, same Terrain window with it faded). Directly
+      measured a real AuxVisualizerWindow's widget allocations in the
+      sandbox to settle this rather than guess further from the
+      screenshots alone: win.drawing_area.get_allocation() reports
+      (0, 0, full_width, full_height) - i.e. the actual canvas already
+      starts at y=0 and covers the entire window, identically whether
+      reveal_top_bars is True or False. So extend_content_to_top_edge
+      genuinely works correctly here (confirming the earlier read of
+      the code) - there is no GTK layout bug reserving header space.
+      The blank gap the screenshots show is coming from inside each
+      visualization's own Cairo rendering instead: e.g. VU Meter's
+      needle-style gauge (draw_vu_needle) is a compact semicircular
+      dial that only occupies roughly the bottom half of its allotted
+      cell - normal geometry for that gauge style (an analog meter's
+      dial housing is wider than it is tall), not a bug, but it does
+      visually read as "space reserved at the top" at a glance. Not
+      yet changed - this is a rendering/proportions question for each
+      affected visualization individually (which one(s) should use
+      more of the available vertical space, and how), not a single
+      fix. Deferred pending the user's input on which specific
+      visualizations should be adjusted and how.
 - [ ] Per-widget FPS setting for the aux visualizer windows - each
       window kind (VU Meter, Peak Meter, X-Y Scope, Spectrum,
       Spectrogram, Terrain, Waterfall, DVD Bounce, Pipes) should be
