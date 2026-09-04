@@ -423,6 +423,26 @@
       strong explanatory mechanism for both symptoms, but doesn't rule
       out a second contributing cause if the user still sees a
       problem after this.
+      Second follow-up, a real bug report ("exit button doesn't show
+      under cursor, instead at top left of the window"): confirmed via
+      direct sandbox introspection that `Gdk.Rectangle(x=..., y=...,
+      width=..., height=...)` silently ignores every constructor
+      keyword - a PyGObject boxed-type limitation, not something
+      specific to this codebase (it even emits a "Passing arguments to
+      gi.types.Boxed.__init__() is deprecated. All arguments passed
+      will be ignored." warning if you go looking for it) - so
+      on_content_right_click's popover was always being pointed at
+      (0, 0, 0, 0), i.e. content_box's own top-left corner, regardless
+      of the real click position. Fixed by constructing a bare
+      Gdk.Rectangle() and setting .x/.y/.width/.height individually
+      after construction instead of via kwargs - confirmed this
+      pattern actually sets the fields correctly, unlike the kwargs
+      form. Verified two ways: directly re-deriving the correct
+      rectangle fields, and (more rigorously) driving the real,
+      unmodified on_content_right_click through a fully presented
+      window and reading back the actual popover's own
+      get_pointing_to() - confirmed it now reports the exact click
+      coordinates passed in, not (0, 0).
 - [ ] Now Playing overlay - requested ("optional music title and
       artwork show in bottom, placement configurable in settings") -
       built. Melange only ever captures raw system audio (GStreamer) -
@@ -847,6 +867,14 @@
       touching opacity, and re-enabling then picks up whatever was
       last stored - covering the original bug report plus every
       adjacent case that fix could have broken.
+      Follow-up, requested ("default opacity mode when enabled should
+      be 50%"): changed the Opacity Level default from 0.0 ("Fully
+      Invisible") to 0.5, both self.transparency_opacity's initial
+      value and the slider's own starting position - enabling
+      Transparency Mode for the first time now fades to 50% instead of
+      fully invisible. Verified in the sandbox that the stored default,
+      the slider's starting value, and the actual applied opacity on
+      first enable are all 0.5.
 - [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
       given its own independent Beat Rotation switch (previously
       bundled under the same "React to Beats" toggle as the pipe-spawn

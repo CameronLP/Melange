@@ -92,7 +92,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.last_scroll_time = 0.0
         self.transparency_mode_enabled = False
         self.immersive_mode_enabled = False
-        self.transparency_opacity = 0.0
+        self.transparency_opacity = 0.5
         self.transparency_fade_ms = 0.0
         self.opacity_fade_timer = None
         self.now_playing_enabled = False
@@ -996,7 +996,21 @@ class MelangeWindow(Adw.ApplicationWindow):
         popover = Gtk.PopoverMenu.new_from_model(menu)
         popover.set_parent(self.content_box)
         popover.set_has_arrow(False)
-        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+
+        # Gdk.Rectangle(x=..., y=..., ...) silently ignores every
+        # constructor keyword (a PyGObject boxed-type limitation - it
+        # even warns "arguments passed will be ignored" if you look for
+        # it), so that always built a (0, 0, 0, 0) rectangle regardless
+        # of the real click position - the popover was always pointed
+        # at content_box's own top-left corner instead of the cursor.
+        # Fields have to be set individually after construction instead.
+        point = Gdk.Rectangle()
+        point.x = int(x)
+        point.y = int(y)
+        point.width = 1
+        point.height = 1
+
+        popover.set_pointing_to(point)
         popover.popup()
 
     OPACITY_FADE_TICK_MS = 16
@@ -1943,7 +1957,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.build_slider_row(
             "Opacity Level",
-            0.0, 1.0, 0.05, 0.0,
+            0.0, 1.0, 0.05, 0.5,
             format_transparency_opacity,
             transparency_opacity_changed,
             store_as="transparency_opacity_scale"
