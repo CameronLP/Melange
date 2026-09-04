@@ -105,6 +105,26 @@
 
 ## In progress / not started
 
+- [ ] While fullscreen, disable Transparency Mode if it's on, and
+      re-enable it on exiting fullscreen - requested (TODO-only, not
+      implemented). Would need to distinguish "off because fullscreen
+      forced it off" from "the user explicitly turned it off while
+      fullscreen" (so exiting fullscreen doesn't turn it back on if
+      they didn't want it in the first place) - probably a separate
+      remembered "was enabled before fullscreen" flag rather than
+      reusing self.transparency_mode_enabled directly for both jobs.
+      Hooks into notify::fullscreened, same signal mirror_window.py's
+      own fullscreen-icon-sync already uses.
+- [ ] Transparency for the mini visualizer windows - requested (TODO-
+      only, not implemented). Would follow the same pattern as the
+      primary window (fade a content widget, add a CSS class for the
+      window's own background - aux_window.py's windows already share
+      the extend_content_to_top_edge/floating-header structure) and
+      probably the same "keep it simple, no sliders" shape Mirror
+      Windows got (a settings-popover toggle rather than the primary's
+      full Opacity Level/Fade Speed pair - aux windows do have a real
+      settings popover already, unlike mirrors, so sliders are more
+      feasible here if wanted).
 - [ ] Visualizer creator - requested to be recorded, not designed or
       scoped at all yet. Unclear what this actually means without
       more input: a UI for building a new mini-visualizer kind (aux_
@@ -731,6 +751,44 @@
       Bold Italic" produces a font-desc attribute containing all three
       words, and the Text Size slider still overrides whatever size
       the font dialog itself last had.
+      Third follow-up, two independent display-behavior requests:
+      (1) "only appear when there is a change or pause/play. Display
+      then fade out after some time" - new Auto-Hide toggle + Auto-
+      Hide Delay slider (1-20s, default 5s). on_now_playing_changed
+      tracks a (title, artist, status) key and only treats it as a
+      real "change" worth reacting to when that key actually differs
+      from last time (so e.g. a Position-only update, if this ever
+      gets fed more granular info later, wouldn't spuriously re-trigger
+      it) - snaps straight to fully visible on a genuine change (a
+      track changing is exactly the moment you want to see it, not
+      fade into view) and restarts a countdown to fade back out over a
+      fixed 500ms. (2) "option to have the title periodically fade in
+      and out" - new Periodic Fade toggle + Fade Interval slider
+      (1-15s, default 4s), independent of Auto-Hide - a continuous
+      sine-wave opacity cycle (one formula covers the whole fade-out-
+      then-back-in cycle, no discrete show/hold/hide state machine
+      needed) rather than an event-triggered fade. The two can be
+      turned on together, which produces overlapping/unspecified-
+      looking behavior since both drive now_playing_box's opacity -
+      not guarded against, the user can just not combine them.
+      Verified in the sandbox: periodic fade's timer starts/stops
+      correctly and genuinely animates opacity through real
+      intermediate values (not just toggling state); auto-hide shows
+      the card immediately and starts a timer on a real change,
+      re-feeding *identical* info does nothing (correctly not treated
+      as a new change), the card actually fades below 0.5 opacity once
+      the configured delay elapses with no further changes, and a
+      subsequent play/pause change immediately re-shows it.
+      Also added, requested ("add keyboard shortcuts to more things
+      that make sense"): Ctrl+T (win.transparency-mode), Ctrl+I
+      (win.immersive-mode - also a second way out of Immersive Mode
+      besides the right-click menu, since the header/hamburger menu
+      that would otherwise reach this action is gone once it's on),
+      and Ctrl+Shift+F (win.show-favorites, following the same "Shift
+      adds a related secondary action" pattern Ctrl+Shift+M/Ctrl+M
+      already established for Close All Mirrors/New Mirror Window).
+      Verified all three resolve via Gtk.Application.get_accels_for_
+      action() against the real built app.
 - [x] Fixed the Appearance page's tab icon - real bug, not just a
       request: it used "preferences-desktop-theme-symbolic", which
       does not exist in this runtime's icon theme (confirmed via

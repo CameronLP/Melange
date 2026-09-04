@@ -107,6 +107,21 @@ class MelangeApplication(Adw.Application):
         self.set_accels_for_action("win.close-all-mirrors", ["<Primary><Shift>m"])
         self.set_accels_for_action("win.toggle-favorite", ["f"])
 
+        # Filled in later, once these existed but had no shortcut yet -
+        # "add keyboard shortcuts to more things that make sense".
+        # Ctrl+T/Ctrl+I are mnemonic (Transparency/Immersive) and don't
+        # collide with anything above; Immersive Mode's is worth having
+        # specifically because it's a second way out of it besides the
+        # right-click context menu (on_content_right_click) - the
+        # header bar/hamburger menu that would otherwise reach this
+        # action disappears the moment it turns on. Ctrl+Shift+F
+        # follows the same "Shift adds a related-but-secondary action"
+        # pattern Ctrl+Shift+M (Close All Mirrors) already set next to
+        # Ctrl+M (New Mirror Window).
+        self.set_accels_for_action("win.transparency-mode", ["<Primary>t"])
+        self.set_accels_for_action("win.immersive-mode", ["<Primary>i"])
+        self.set_accels_for_action("win.show-favorites", ["<Primary><Shift>f"])
+
 
     def do_activate(self):
 

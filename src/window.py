@@ -24,6 +24,7 @@ import threading
 import base64
 import time
 import array
+import math
 from pathlib import Path
 
 gi.require_version("Gst", "1.0")
@@ -112,6 +113,21 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
+        # Off by default - only appears on a genuine change (title/
+        # artist/play-pause), then fades back out, rather than staying
+        # up the whole time Now Playing's enabled.
+        self.now_playing_auto_hide = False
+        self.now_playing_auto_hide_seconds = 5.0
+        self.now_playing_auto_hide_timer = None
+        self.now_playing_last_change_key = None
+        # Independent of auto-hide - a continuous ambient breathing
+        # effect (sine-wave opacity) rather than an event-triggered
+        # one, so the two can be combined even though that's a fairly
+        # unusual choice.
+        self.now_playing_periodic_fade = False
+        self.now_playing_periodic_fade_seconds = 4.0
+        self.now_playing_periodic_timer = None
+        self.now_playing_fade_timer = None
         self.toolbar_hide_delay = 3
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
@@ -1112,6 +1128,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.load_now_playing_art(info["art_url"])
         self.restart_now_playing_position_timer()
 
+        if self.now_playing_auto_hide:
+
+            change_key = (info["title"], info["artist"], info["status"])
+
+            if change_key != self.now_playing_last_change_key:
+                self.now_playing_last_change_key = change_key
+                self.show_now_playing_transient()
+
     # {bus_name: display name} for every currently known MPRIS player -
     # feeds the Source Adw.ComboRow (built once the dialog opens, kept
     # in sync afterwards by rebuilding its model here on every change)
@@ -1213,6 +1237,134 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_time_label
         ):
             label.set_max_width_chars(self.now_playing_width)
+
+    NOW_PLAYING_FADE_TICK_MS = 16
+
+    # Shared by both auto-hide (fading now_playing_box out after a
+    # delay) and, indirectly, periodic fade - a single opacity-
+    # animation helper for this widget, same shape as window.py's own
+    # animate_opacity (which targets toast_overlay for Transparency
+    # Mode, a different widget/purpose entirely).
+    def animate_now_playing_box_opacity(self, target, duration_ms):
+
+        if self.now_playing_fade_timer:
+            GLib.source_remove(self.now_playing_fade_timer)
+            self.now_playing_fade_timer = None
+
+        if duration_ms <= 0:
+            self.now_playing_box.set_opacity(target)
+            return
+
+        start = self.now_playing_box.get_opacity()
+        start_time = time.monotonic()
+
+        def step():
+
+            elapsed_ms = (time.monotonic() - start_time) * 1000
+            t = min(1.0, elapsed_ms / duration_ms)
+
+            self.now_playing_box.set_opacity(start + (target - start) * t)
+
+            if t >= 1.0:
+                self.now_playing_fade_timer = None
+                return False
+
+            return True
+
+        self.now_playing_fade_timer = GLib.timeout_add(
+            self.NOW_PLAYING_FADE_TICK_MS, step
+        )
+
+    # Called whenever on_now_playing_changed sees a genuine change
+    # (title/artist/play-pause) while Auto-Hide is on - snaps back to
+    # fully visible immediately (a track changing is exactly the
+    # moment you want to see it, not fade into view) and (re)starts
+    # the countdown to fade back out.
+    def show_now_playing_transient(self):
+
+        if self.now_playing_auto_hide_timer:
+            GLib.source_remove(self.now_playing_auto_hide_timer)
+            self.now_playing_auto_hide_timer = None
+
+        self.animate_now_playing_box_opacity(1.0, 0)
+
+        if self.now_playing_auto_hide_seconds > 0:
+            self.now_playing_auto_hide_timer = GLib.timeout_add(
+                int(self.now_playing_auto_hide_seconds * 1000),
+                self.hide_now_playing_transient
+            )
+
+    def hide_now_playing_transient(self):
+
+        self.now_playing_auto_hide_timer = None
+        self.animate_now_playing_box_opacity(0.0, 500)
+
+        return False
+
+    def now_playing_auto_hide_changed(self, enabled):
+
+        self.now_playing_auto_hide = enabled
+
+        if enabled:
+            # Treat whatever's already showing (if anything) as a
+            # fresh change, so turning this on doesn't require an
+            # actual track change before it does anything.
+            self.now_playing_last_change_key = None
+            if self.now_playing_info is not None:
+                self.show_now_playing_transient()
+        else:
+            if self.now_playing_auto_hide_timer:
+                GLib.source_remove(self.now_playing_auto_hide_timer)
+                self.now_playing_auto_hide_timer = None
+            self.animate_now_playing_box_opacity(1.0, 0)
+
+    def now_playing_auto_hide_seconds_changed(self, value):
+
+        self.now_playing_auto_hide_seconds = value
+
+    NOW_PLAYING_PERIODIC_TICK_MS = 33
+
+    # A continuous sine-wave opacity cycle rather than a discrete
+    # show/hold/hide state machine - one formula covers the whole
+    # "periodically fades in and out" cycle with no extra state to
+    # track, and reads as a smooth breathing effect rather than a
+    # sudden blink.
+    def restart_now_playing_periodic_fade(self):
+
+        if self.now_playing_periodic_timer:
+            GLib.source_remove(self.now_playing_periodic_timer)
+            self.now_playing_periodic_timer = None
+
+        if not self.now_playing_periodic_fade:
+            self.now_playing_box.set_opacity(1.0)
+            return
+
+        start_time = time.monotonic()
+
+        def tick():
+
+            elapsed = time.monotonic() - start_time
+            period = max(0.5, self.now_playing_periodic_fade_seconds)
+            phase = (elapsed % period) / period
+
+            opacity = 0.5 - 0.5 * math.cos(2 * math.pi * phase)
+
+            self.now_playing_box.set_opacity(opacity)
+
+            return True
+
+        self.now_playing_periodic_timer = GLib.timeout_add(
+            self.NOW_PLAYING_PERIODIC_TICK_MS, tick
+        )
+
+    def now_playing_periodic_fade_changed(self, enabled):
+
+        self.now_playing_periodic_fade = enabled
+        self.restart_now_playing_periodic_fade()
+
+    def now_playing_periodic_fade_seconds_changed(self, value):
+
+        self.now_playing_periodic_fade_seconds = value
 
     # Title/artist/time all share one size+color+font (family, plus
     # bold/italic - see build_now_playing_font_control's FACE level)
@@ -2076,6 +2228,44 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Show Background", True, self.now_playing_show_background_changed
         )
 
+    def build_now_playing_auto_hide_control(self):
+
+        return self.build_toggle_row(
+            "Auto-Hide", False, self.now_playing_auto_hide_changed
+        )
+
+    def build_now_playing_auto_hide_seconds_control(self):
+
+        def format_auto_hide_seconds(value):
+            return f"{value:.1f}s"
+
+        return self.build_slider_row(
+            "Auto-Hide Delay",
+            1.0, 20.0, 0.5, 5.0,
+            format_auto_hide_seconds,
+            self.now_playing_auto_hide_seconds_changed,
+            store_as="now_playing_auto_hide_seconds_scale"
+        )
+
+    def build_now_playing_periodic_fade_control(self):
+
+        return self.build_toggle_row(
+            "Periodic Fade", False, self.now_playing_periodic_fade_changed
+        )
+
+    def build_now_playing_periodic_fade_seconds_control(self):
+
+        def format_periodic_fade_seconds(value):
+            return f"{value:.1f}s"
+
+        return self.build_slider_row(
+            "Fade Interval",
+            1.0, 15.0, 0.5, 4.0,
+            format_periodic_fade_seconds,
+            self.now_playing_periodic_fade_seconds_changed,
+            store_as="now_playing_periodic_fade_seconds_scale"
+        )
+
     def build_now_playing_text_size_control(self):
 
         def format_text_size(value):
@@ -2424,6 +2614,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_show_artwork_control())
         now_playing_group.add(self.build_now_playing_show_time_control())
         now_playing_group.add(self.build_now_playing_show_background_control())
+        now_playing_group.add(self.build_now_playing_auto_hide_control())
+        now_playing_group.add(self.build_now_playing_auto_hide_seconds_control())
+        now_playing_group.add(self.build_now_playing_periodic_fade_control())
+        now_playing_group.add(self.build_now_playing_periodic_fade_seconds_control())
         now_playing_group.add(self.build_now_playing_font_control())
         now_playing_group.add(self.build_now_playing_width_control())
         now_playing_group.add(self.build_now_playing_text_size_control())
