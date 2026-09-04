@@ -180,13 +180,19 @@
       playlist references presets this install doesn't have (bundled
       pack differences, or a preset that was only ever a locally-
       loaded file elsewhere) - not attempted here.
-- [ ] Spectrogram efficiency - requested ("make spectrogram more
-      efficient, it causes lag"), not yet investigated. Likely
-      candidates given how every aux window's audio path works: its
-      own independent FFT per draw (see the "share FFT" idea already
-      logged above) and/or update_spectrogram_columns' column-history
-      bookkeeping - neither confirmed as the actual cause yet, no
-      profiling done.
+- [ ] Mini Visualizer efficiency - originally reported just about
+      Spectrogram ("make spectrogram more efficient, it causes lag"),
+      broadened on request to the mini visualizers generally ("make
+      the miniviz graphics more efficient, they cause lag"). Not yet
+      investigated for any of them - no profiling done, nothing
+      confirmed as the actual cause. Likely candidates given how every
+      aux window's audio path works: each window running its own
+      independent FFT per draw (see the "share FFT" idea already
+      logged above - real duplicated work across every currently-open
+      window, not just Spectrogram) and/or per-kind bookkeeping like
+      update_spectrogram_columns' column history. Needs picking one
+      concrete case to profile first (which window(s), what the actual
+      per-frame cost is) rather than guessing at a fix blind.
 - [x] Peak Hold Color - requested ("customize peak hold color too").
       New shared setting (peak_hold_color_custom/peak_hold_color,
       alongside the existing shared peak_hold_seconds/
