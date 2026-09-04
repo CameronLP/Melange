@@ -60,6 +60,19 @@ class MirrorWindow(Adw.ApplicationWindow):
         self.mirror_number = mirror_number
         self.hide_timer = None
 
+        # Independent per-mirror toggle, not synced with the primary
+        # window's own Transparency Mode - a mirror is often projected
+        # to a second monitor/TV for an audience, where fading it to
+        # reveal the desktop behind defeats the point most of the
+        # time, so this defaults off and is a deliberate opt-in per
+        # window rather than inherited automatically. Kept simple
+        # (a plain on/off toggle button, fixed opacity/instant
+        # transition) rather than mirroring every one of the primary
+        # window's sliders - this window has no settings popover/
+        # Preferences dialog infrastructure to put them in.
+        self.transparency_mode_enabled = False
+        self.opacity_fade_timer = None
+
         self.set_default_size(800, 600)
         self.update_title(primary.current_preset_name)
 
@@ -93,6 +106,21 @@ class MirrorWindow(Adw.ApplicationWindow):
         )
 
         self.header.pack_end(self.fullscreen_button)
+
+        # Independent per-mirror Transparency Mode toggle - see the
+        # comment on self.transparency_mode_enabled in __init__ for
+        # why this isn't synced with the primary window's own version
+        # of the same feature. A plain Gtk.ToggleButton bound via
+        # action-name (like the Loop/Shuffle Queue buttons in
+        # window.py) rather than a manual clicked handler - it stays
+        # in sync with the action's own state for free.
+        transparency_button = Gtk.ToggleButton(
+            icon_name="view-conceal-symbolic",
+            tooltip_text="Transparency Mode",
+            action_name="win.transparency-mode"
+        )
+
+        self.header.pack_end(transparency_button)
 
         # A guaranteed-reliable alternative to the double-click-to-
         # focus-primary handlers below - those depend on correctly
@@ -214,6 +242,19 @@ class MirrorWindow(Adw.ApplicationWindow):
             "notify::fullscreened",
             self.update_fullscreen_button_icon
         )
+
+        transparency_mode_action = Gio.SimpleAction.new_stateful(
+            "transparency-mode",
+            None,
+            GLib.Variant("b", False)
+        )
+
+        transparency_mode_action.connect(
+            "change-state",
+            self.transparency_mode_changed
+        )
+
+        self.add_action(transparency_mode_action)
 
         escape_controller = Gtk.EventControllerKey()
 
@@ -386,6 +427,61 @@ class MirrorWindow(Adw.ApplicationWindow):
             "view-restore-symbolic"
             if self.is_fullscreen()
             else "view-fullscreen-symbolic"
+        )
+
+    # Fixed 50% opacity and a short fixed fade rather than the primary
+    # window's own configurable Opacity Level/Fade Speed sliders - this
+    # window has no settings popover/Preferences dialog to put them
+    # in, and a plain on/off toggle is all that was asked for.
+    TRANSPARENCY_OPACITY = 0.5
+    OPACITY_FADE_MS = 300
+    OPACITY_FADE_TICK_MS = 16
+
+    def transparency_mode_changed(self, action, value):
+
+        action.set_state(value)
+
+        self.transparency_mode_enabled = value.get_boolean()
+
+        if self.transparency_mode_enabled:
+            self.add_css_class("transparency-active")
+        else:
+            self.remove_css_class("transparency-active")
+
+        self.animate_picture_opacity(
+            self.TRANSPARENCY_OPACITY if self.transparency_mode_enabled else 1.0
+        )
+
+    # Same mechanism as window.py's animate_opacity, applied to
+    # self.picture (this window's equivalent of the primary's
+    # toast_overlay - the content below the header) instead of the
+    # whole window, so the header bar - and this button, the only way
+    # to turn it back off - always stays fully visible.
+    def animate_picture_opacity(self, target):
+
+        if self.opacity_fade_timer:
+            GLib.source_remove(self.opacity_fade_timer)
+            self.opacity_fade_timer = None
+
+        start = self.picture.get_opacity()
+        start_time = GLib.get_monotonic_time()
+
+        def step():
+
+            elapsed_ms = (GLib.get_monotonic_time() - start_time) / 1000
+
+            t = min(1.0, elapsed_ms / self.OPACITY_FADE_MS)
+
+            self.picture.set_opacity(start + (target - start) * t)
+
+            if t >= 1.0:
+                self.opacity_fade_timer = None
+                return False
+
+            return True
+
+        self.opacity_fade_timer = GLib.timeout_add(
+            self.OPACITY_FADE_TICK_MS, step
         )
 
     def on_key_pressed(self, controller, keyval, keycode, state):

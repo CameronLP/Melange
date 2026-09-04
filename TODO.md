@@ -105,6 +105,38 @@
 
 ## In progress / not started
 
+- [x] Transparency Mode on Mirror Windows - asked first ("can it be
+      applied to mirrors? should it?"), answered with a recommendation
+      (technically easy - mirror_window.py already uses the identical
+      floating-header/extend_content_to_top_edge structure - but
+      probably shouldn't be synced with the primary's own setting,
+      since a mirror is often projected to a second monitor/TV for an
+      audience, where fading it to reveal the desktop defeats the
+      point most of the time; a real per-mirror opt-in toggle would
+      make sense instead), then built on "yes, build it". Each
+      MirrorWindow now has its own completely independent win.
+      transparency-mode action/state - toggling the primary's
+      Transparency Mode has no effect on any open mirror and vice
+      versa. Deliberately simpler than the primary's version: a fixed
+      50% opacity and a fixed 300ms fade (TRANSPARENCY_OPACITY/
+      OPACITY_FADE_MS constants) rather than the primary's
+      configurable Opacity Level/Fade Speed sliders, and a single
+      Gtk.ToggleButton in the mirror's own header (view-conceal-
+      symbolic, next to the existing fullscreen/find-primary buttons)
+      rather than a settings popover - this window has no Preferences-
+      dialog-style infrastructure to put sliders in, and a plain
+      on/off toggle is what was actually asked for. Reuses the exact
+      same mechanism as the primary (fade a content widget's own
+      opacity - self.picture here, the mirror's equivalent of
+      toast_overlay - plus the same .transparency-active CSS class for
+      the window's own background, already a generic class-based rule
+      in style.css so no CSS changes were needed beyond a comment).
+      Verified in the sandbox with a real primary + real mirror
+      window pair: the mirror has its own action independent of the
+      primary's (toggling one doesn't affect the other), enabling
+      fades self.picture toward 50% over the real ~300ms window (not
+      just state assertions - sampled actual mid-fade opacity), and
+      disabling fades back to fully opaque.
 - [x] Three small naming/organization requests, all done together:
       (1) "move the beat detection to an experimental section" - Beat
       Detection is now its own Preferences page ("Experimental",

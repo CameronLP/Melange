@@ -143,7 +143,9 @@ headerbar.melange-header.attention-flash {
     outline: none;
 }
 
-/* Transparency Mode (window.py transparency_mode_changed). Fading
+/* Transparency Mode (window.py transparency_mode_changed - also used
+   independently by mirror_window.py's own per-mirror version of the
+   same toggle, same class, same rule). Fading
    toast_overlay's own Gtk.Widget opacity isn't enough on its own - by
    default the window's own root CSS node paints an opaque theme
    background *underneath* every child first, so a faded child just
