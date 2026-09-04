@@ -105,6 +105,13 @@
 
 ## In progress / not started
 
+- [ ] Reference for a possible Butterchurn -> MilkDrop transition,
+      requested to be recorded ("record this as a possible exam[ple]
+      to look at"): https://silkdrop.vercel.app/ - not yet looked into
+      (what it actually is, how it renders, license, whether it's
+      still a WebGL/JS engine like Butterchurn or something closer to
+      native MilkDrop) or evaluated against this codebase. Purely a
+      pointer for later, nothing investigated or decided.
 - [x] Load Preset - asked ("Does load preset work???"). Verified end
       to end in the sandbox by driving the real loadPresetFile() path
       directly (bypassing only the native GtkFileDialog itself, which
