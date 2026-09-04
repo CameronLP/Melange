@@ -128,6 +128,16 @@
       decision on whether this becomes a variant of Auto-Hide (e.g. an
       "ignore play/pause" sub-option) or a genuinely separate third
       mode alongside it and Periodic Fade.
+      Additional detail supplied afterward: the *show* transition for
+      this new mode should itself fade in, not snap to visible - a
+      real difference from Auto-Hide's existing behavior, which
+      deliberately snaps in instantly on a change (see that feature's
+      own comment: "a track changing is exactly the moment you want to
+      see it, not fade into view") and only fades on the way *out*.
+      This new mode wants both directions to fade. Reinforces treating
+      it as a genuinely separate mode rather than an Auto-Hide
+      variant, since it disagrees with Auto-Hide's own show behavior,
+      not just its trigger condition.
 - [ ] While fullscreen, disable Transparency Mode if it's on, and
       re-enable it on exiting fullscreen - requested (TODO-only, not
       implemented). Would need to distinguish "off because fullscreen
