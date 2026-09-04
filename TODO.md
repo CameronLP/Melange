@@ -105,6 +105,17 @@
 
 ## In progress / not started
 
+- [ ] Setting to auto-scale Now Playing's text bigger in fullscreen -
+      requested (TODO-only, not implemented). Would need to react to
+      notify::fullscreened (already used elsewhere in window.py for
+      the fullscreen button's own icon sync) and apply some multiplier
+      on top of the existing Text Size setting rather than replacing
+      it - e.g. a separate "Fullscreen Scale" factor, restoring the
+      configured Text Size as-is on exiting fullscreen. Interacts with
+      the still-open Scroll Long Titles box-sizing bug above (if the
+      text gets bigger while fullscreen, whatever fixes that bug needs
+      to also handle the box's fixed size changing when the scale
+      factor itself changes, not just staying fixed within one scale).
 - [ ] Scroll Long Titles bug - reported (TODO-only, not implemented):
       "the outline box changes size each scroll movement... the box
       [should] remain fixed size during scrolling." This is the direct
