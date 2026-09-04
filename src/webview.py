@@ -108,6 +108,21 @@ def create_webview(on_message=None):
     # real desktop can show through a faded window.
     view.set_background_color(Gdk.RGBA(red=0, green=0, blue=0, alpha=0))
 
+    # WebKit otherwise shows its own native right-click menu (Back/
+    # Forward/Reload/Inspect Element - browser-tab items that make no
+    # sense on a music visualizer). Returning True from this signal
+    # tells WebKit the menu request was already handled, suppressing
+    # its default popup. Left undiscovered until it turned out to be
+    # exactly what was silently absorbing Hidden Mode's own right-
+    # click escape hatch (window.py on_content_right_click) - WebKit
+    # takes its own pointer grab to show that menu, which was
+    # intercepting the click before it ever reached the CAPTURE-phase
+    # gesture on content_box, and very likely explains the reported
+    # "can't drag either" symptom too (a still-open native context
+    # menu holding a grab blocks whatever's clicked next until it's
+    # dismissed).
+    view.connect("context-menu", lambda *args: True)
+
     settings = view.get_settings()
 
     # This is an embedded single-purpose visualizer, not a browser tab,

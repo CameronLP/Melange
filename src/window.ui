@@ -216,14 +216,14 @@
       </submenu>
 
       <!-- Checkable, not an action-only item - reflects
-           self.hidden_mode_enabled so it reads correctly if somehow
+           self.immersive_mode_enabled so it reads correctly if somehow
            toggled from elsewhere. The only way *out* once it's on is
            the right-click context menu on the content area
            (on_content_right_click) - the header bar (and this menu
            with it) disappears the moment this turns on, by design. -->
       <item>
-        <attribute name="label" translatable="yes">Hidden Mode</attribute>
-        <attribute name="action">win.hidden-mode</attribute>
+        <attribute name="label" translatable="yes">Immersive Mode</attribute>
+        <attribute name="action">win.immersive-mode</attribute>
       </item>
 
     </section>

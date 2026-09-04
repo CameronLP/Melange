@@ -346,7 +346,7 @@
       configured value, "Never" cancels a pending hide, a new value
       re-arms immediately, no timer leak on repeated toolbar_leave
       calls, and the hovering guard.
-- [x] Hidden Mode - requested, built. New win.hidden-mode stateful
+- [x] Immersive Mode - requested, built. New win.hidden-mode stateful
       action, a real hamburger menu item (not Preferences-only, unlike
       Transparency Mode) since once it's on, the header bar - and the
       hamburger menu that would otherwise reach Preferences - is gone,
@@ -355,7 +355,7 @@
       Gtk.GestureClick - SECONDARY button, CAPTURE phase, same
       content_box placement and WebKit-hit-testing reasoning as the
       existing drag-to-move gesture right next to it) shows a small
-      Gio.Menu/Gtk.PopoverMenu with one "Exit Hidden Mode" item.
+      Gio.Menu/Gtk.PopoverMenu with one "Exit Immersive Mode" item.
       Turned out to need less new code than expected: window dragging
       from anywhere in the content area already existed unconditionally
       (self.get_surface().begin_move(), the drag gesture right above
@@ -368,7 +368,7 @@
       toolbar (mouse_move, toolbar_enter, schedule_toolbar_hide) already
       funnels through either that method or a no-op-when-hidden hide
       timer, so one guard is enough to stop auto-hide's normal
-      "re-reveal on movement" behavior from fighting Hidden Mode's
+      "re-reveal on movement" behavior from fighting Immersive Mode's
       "stay hidden regardless of the mouse" one.
       Verified in the sandbox: the action/menu item exist and the menu
       item lands at the right position without disturbing Mirror
@@ -381,6 +381,48 @@
       drag gesture and the new right-click gesture are genuinely
       attached to content_box side by side on their own distinct
       buttons.
+      Follow-up, two real bug reports plus a naming request all
+      together ("the right click does not work. Additionally I cannot
+      drag the window around in 'hidden' mode. Also open to different
+      names for the mode"):
+      Renamed throughout to Immersive Mode (win.hidden-mode ->
+      win.immersive-mode, hidden_mode_enabled/_changed ->
+      immersive_mode_enabled/_changed, menu label too) - suggested as
+      more standard terminology for "hide all chrome, content fills
+      everything" (matches Android's own "immersive mode" and similar
+      framing in other media apps) and applied directly since a menu
+      label/action-name rename is trivial to redo if it's not the
+      right call, same reasoning as the earlier Mini Visualizers
+      rename.
+      Root cause found for both bugs at once: WebKit's own native
+      right-click context menu (Back/Forward/Reload/Inspect Element)
+      was never disabled anywhere in this codebase - confirmed via
+      GObject.signal_lookup that WebKit.WebView's "context-menu"
+      signal exists and was unconnected. That default menu takes its
+      own pointer grab to show itself, which was very likely
+      intercepting the click before it ever reached the CAPTURE-phase
+      gesture on content_box (explaining "right click does not work" -
+      the *wrong*, native menu was eating the event, not showing
+      anything the user would recognize as this app's own), and a
+      still-open grabbing menu left over from that would also explain
+      "can't drag either" as a knock-on effect, not a separate bug.
+      Fixed in webview.py: view.connect("context-menu", lambda *args:
+      True) - returning True tells WebKit the request was already
+      handled, suppressing its default popup. This makes sense as a
+      fix regardless of Immersive Mode specifically, since a browser-
+      tab-style context menu never made sense on a music visualizer to
+      begin with.
+      Verified in the sandbox: the renamed action/menu item resolve
+      correctly (old win.hidden-mode name confirmed gone), a handler
+      is now genuinely connected to WebView's context-menu signal, and
+      the full enable/mouse-move-no-op/disable cycle still works
+      end to end under the new names. NOT independently re-verified
+      against a real display that right-click/drag now actually work
+      as the user experiences them - this fix follows directly from a
+      real, confirmed gap (the signal genuinely was unconnected) and a
+      strong explanatory mechanism for both symptoms, but doesn't rule
+      out a second contributing cause if the user still sees a
+      problem after this.
 - [ ] Now Playing overlay - requested ("optional music title and
       artwork show in bottom, placement configurable in settings") -
       built. Melange only ever captures raw system audio (GStreamer) -
