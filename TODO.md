@@ -112,6 +112,52 @@
       still a WebGL/JS engine like Butterchurn or something closer to
       native MilkDrop) or evaluated against this codebase. Purely a
       pointer for later, nothing investigated or decided.
+- [x] Real bug found and fixed while investigating "why does it not
+      load '.../deepseek_json_20260904_de78cf.json'": that specific
+      file is syntactically valid JSON but not a real Butterchurn
+      preset - an AI-generated (DeepSeek) file with an invented schema
+      (presetName/shapes/waves/motionVectors/beatDetection/variables/
+      effects, perFrame as an array of JS-looking expression strings)
+      that only superficially resembles MilkDrop concepts. Since it's
+      valid JSON, loadPresetFile's JSON.parse succeeds and it never
+      even reaches the MilkDrop-conversion fallback or the warp/comp
+      shader-repair checks (this file has no warp/comp keys at all).
+      The actual bug: main.js's loadPresetFile called goToPreset(...)
+      without awaiting it - when visualizer.loadPreset() then threw
+      inside Butterchurn's own preset-application code (confirmed:
+      "Unexpected keyword 'return'", from trying to compile this
+      preset's made-up perFrame arrays as EEL2 equations), that became
+      an unhandled promise rejection instead of reaching loadPresetFile's
+      own try/catch - so LOAD_PRESET_ERROR: never fired, but the
+      preset was still added to names/resolvedPresets/nameSet
+      beforehand, so it silently appeared in the preset list (and
+      would have appeared in the new Loaded tab) while the visualizer
+      itself never actually switched to it (no PRESET_NAME:, window
+      title unchanged) - zero feedback either way. This is also the
+      direct answer to "when loaded can it immediately switch?" - yes,
+      goToPreset(index, 0) already uses a 0-second blend, i.e. an
+      instant cut, when a load actually succeeds; this bug is why a
+      failed one looked like nothing happened instead of erroring OR
+      switching.
+      Fixed: goToPreset(...) is now awaited inside a nested try/catch
+      that rolls back the names/nameSet/resolvedPresets additions and
+      re-throws into the existing outer catch on failure - a preset
+      that fails to actually apply no longer lingers in the list (or
+      Loaded tab) looking usable, and now correctly produces a
+      LOAD_PRESET_ERROR: toast like every other failure path already
+      did. Required `npm run build` in src/web/ before the fix took
+      effect in the Flatpak build - flatpak-builder only ever copies
+      whatever's already in src/web/dist/ (install_subdir in
+      meson.build), it never runs Vite itself; noted in memory since
+      it's an easy step to miss on any future main.js change.
+      Verified in the sandbox with the exact reported file: before the
+      fix, it silently added to the list with the title unchanged and
+      no error; after, a LOAD_PRESET_ERROR: toast fires immediately and
+      it's absent from preset_names/user_loaded_presets afterward. This
+      specific file still won't ever load correctly, since it's not
+      real preset data - MilkDrop-format .milk or actual Butterchurn
+      .json presets (the two formats this app has ever supported) are
+      needed, not an AI-invented JSON shape resembling one.
 - [x] Load Preset - asked ("Does load preset work???"). Verified end
       to end in the sandbox by driving the real loadPresetFile() path
       directly (bypassing only the native GtkFileDialog itself, which

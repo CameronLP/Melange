@@ -1555,7 +1555,32 @@ window.loadPresetFile = async function(base64Text, name) {
         names.push(name);
         nameSet.add(name);
 
-        goToPreset(names.length - 1, 0);
+        // Was previously fire-and-forget (no await) - visualizer.
+        // loadPreset() throwing on a structurally-invalid-but-still-
+        // parseable preset (e.g. valid JSON that just isn't shaped
+        // like a real Butterchurn preset - no baseVals, no warp/comp
+        // shader strings, EEL2 equations as an array of JS-looking
+        // expressions instead of a single EEL2 string - all of which
+        // this JSON-schema check has no way to catch up front) became
+        // an unhandled promise rejection instead of reaching the
+        // catch block below: the preset still got added to the list
+        // and "Loaded preset file" still logged as if it worked, but
+        // the visualizer itself silently never actually switched to
+        // it (no PRESET_NAME: announcement, window title unchanged) -
+        // exactly the reported "why does it not load" symptom, with
+        // zero error feedback anywhere.
+        try {
+            await goToPreset(names.length - 1, 0);
+        } catch (applyError) {
+            // Rolls back the additions above - a preset that failed
+            // to actually apply shouldn't linger in the preset list
+            // (or the new Loaded tab) looking like a usable one.
+            const idx = names.lastIndexOf(name);
+            if (idx !== -1) names.splice(idx, 1);
+            nameSet.delete(name);
+            resolvedPresets.delete(name);
+            throw applyError;
+        }
 
         announcePresetList();
 
