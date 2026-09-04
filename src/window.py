@@ -107,6 +107,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_show_background = True
         self.now_playing_text_size = 13.0
         self.now_playing_font_family = "Sans"
+        self.now_playing_width = 28
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
@@ -207,13 +208,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_title_label = Gtk.Label(xalign=0.0)
         self.now_playing_title_label.add_css_class("now-playing-title")
         self.now_playing_title_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.now_playing_title_label.set_max_width_chars(28)
         now_playing_text.append(self.now_playing_title_label)
 
         self.now_playing_artist_label = Gtk.Label(xalign=0.0)
         self.now_playing_artist_label.add_css_class("now-playing-artist")
         self.now_playing_artist_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.now_playing_artist_label.set_max_width_chars(28)
         now_playing_text.append(self.now_playing_artist_label)
 
         self.now_playing_time_label = Gtk.Label(xalign=0.0)
@@ -225,6 +224,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.apply_now_playing_placement()
         self.apply_now_playing_text_style()
+        self.apply_now_playing_width()
 
         webview_overlay.add_overlay(self.now_playing_box)
 
@@ -319,24 +319,24 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Same empty-in-window.ui, populated-here pattern as Audio
         # Source above, for the same reason: the list of open mirror
         # windows changes at runtime. Section 2 (not 0/1) - theme
-        # selector, then Audio Source, then this section - item 4
-        # within it (Load Preset, Presets submenu, Lock Preset,
-        # Shuffle Presets, then the Mirror Windows submenu), then
-        # section 1 *within that submenu* (New Mirror Window/Close
-        # All Mirrors are its own static section 0 - see window.ui -
-        # so rebuilding this one never touches those).
-        # NOTE: this index is positional and brittle - it broke once
-        # already when a Transparency Mode item was inserted above the
-        # Mirror Windows submenu without updating this (later removed
-        # from this menu entirely - now Preferences-only). Any future
-        # item added to this section before Mirror Windows needs this
-        # bumped again.
+        # selector, then Audio Source, then this section - item 3
+        # within it (Browse Presets, Lock Preset, Shuffle Presets, then
+        # the Mirror Windows submenu), then section 1 *within that
+        # submenu* (New Mirror Window/Close All Mirrors are its own
+        # static section 0 - see window.ui - so rebuilding this one
+        # never touches those).
+        # NOTE: this index is positional and brittle - it's broken
+        # before (twice: a Transparency Mode item, then collapsing the
+        # old Load Preset item + Presets submenu into one Browse
+        # Presets item, each shifted it) without updating this. Any
+        # future item added to this section before Mirror Windows
+        # needs this bumped again.
         section2 = self.menu_button.get_menu_model().get_item_link(
             2, Gio.MENU_LINK_SECTION
         )
 
         mirror_windows_submenu = section2.get_item_link(
-            4, Gio.MENU_LINK_SUBMENU
+            3, Gio.MENU_LINK_SUBMENU
         )
 
         self.open_mirrors_section = mirror_windows_submenu.get_item_link(
@@ -1080,6 +1080,24 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.now_playing_font_family = family
         self.apply_now_playing_text_style()
+
+    def now_playing_width_changed(self, value):
+
+        self.now_playing_width = int(value)
+        self.apply_now_playing_width()
+
+    # max-width-chars, not a literal pixel width - matches how this
+    # card was already sized (set_ellipsize + set_max_width_chars),
+    # and scales naturally with Text Size/Font rather than fighting
+    # them the way a fixed pixel width would.
+    def apply_now_playing_width(self):
+
+        for label in (
+            self.now_playing_title_label,
+            self.now_playing_artist_label,
+            self.now_playing_time_label
+        ):
+            label.set_max_width_chars(self.now_playing_width)
 
     # Title/artist/time all share one size+color+font setting rather
     # than three independent sets - set via Pango attributes directly
@@ -1968,6 +1986,19 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return row
 
+    def build_now_playing_width_control(self):
+
+        def format_width(value):
+            return f"{int(value)} chars"
+
+        return self.build_slider_row(
+            "Text Box Width",
+            10.0, 80.0, 1.0, 28.0,
+            format_width,
+            self.now_playing_width_changed,
+            store_as="now_playing_width_scale"
+        )
+
     def build_now_playing_text_color_control(self):
 
         row = Adw.ActionRow(title="Text Color")
@@ -2254,6 +2285,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_show_time_control())
         now_playing_group.add(self.build_now_playing_show_background_control())
         now_playing_group.add(self.build_now_playing_font_control())
+        now_playing_group.add(self.build_now_playing_width_control())
         now_playing_group.add(self.build_now_playing_text_size_control())
         now_playing_group.add(self.build_now_playing_text_color_control())
 
@@ -2656,7 +2688,23 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.preset_list_store = Gtk.StringList.new(self.preset_names)
 
-        return self.build_preset_search_list(self.preset_list_store)
+        box = self.build_preset_search_list(self.preset_list_store)
+
+        # Moved here from the hamburger menu on request ("Load preset
+        # should be in the preset tab") - same win.load-preset action,
+        # just reachable from inside the browser now rather than the
+        # menu. prepend() puts it above the search entry
+        # build_preset_search_list already added as that box's first
+        # child.
+        load_button = Gtk.Button(
+            label="Load Preset…",
+            action_name="win.load-preset"
+        )
+        load_button.set_halign(Gtk.Align.END)
+
+        box.prepend(load_button)
+
+        return box
 
     def build_favorites_tab(self):
 

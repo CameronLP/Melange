@@ -105,6 +105,25 @@
 
 ## In progress / not started
 
+- [x] Simplified the hamburger menu's preset entries - requested ("I
+      do not want presets submenu. Just open the presets window, and
+      stuff is divided by tabs. simpler") plus a related request
+      ("Load preset should be in the preset tab"). Collapsed the old
+      Presets submenu (Browse Presets…/Favorites…/Queue…/Playlists…)
+      down to a single "Browse Presets…" item, and moved the separate
+      top-level "Load Preset…" item into a button at the top of the
+      Presets tab itself (build_presets_tab), above the search entry.
+      win.show-favorites/-queue/-playlists still exist as actions (the
+      Queue tab's own Playlists… button still uses win.show-playlists)
+      - only their menu entries are gone, since every tab is reachable
+      from the one dialog now anyway. Fixed rebuild_mirror_windows_menu's
+      positional menu index again (5 -> 4 -> 3, this menu section keeps
+      changing shape - see the comment there, which now spells out the
+      full history). Verified in the sandbox: window construction
+      succeeds (index resolves), the menu section is exactly
+      [Browse Presets…, Lock Preset, Shuffle Presets, Mirror Windows,
+      Visualizer Windows], win.load-preset still works as an action,
+      and the Load Preset button is the Presets tab's first child.
 - [ ] Reference for a possible Butterchurn -> MilkDrop transition,
       requested to be recorded ("record this as a possible exam[ple]
       to look at"): https://silkdrop.vercel.app/ - not yet looked into
@@ -415,6 +434,14 @@
       more of the available vertical space, and how), not a single
       fix. Deferred pending the user's input on which specific
       visualizations should be adjusted and how.
+      Also added, requested ("now play text box width should be
+      adjustable"): a Text Box Width slider (10-80 "chars", default
+      28 matching the previous hardcoded value) - drives
+      set_max_width_chars on all three labels (title/artist/time).
+      Deliberately a character-count width (matching how the card was
+      already sized) rather than a literal pixel width, so it scales
+      naturally with Text Size/Font instead of fighting them. Verified
+      in the sandbox that it applies to all three labels together.
 - [ ] Per-widget FPS setting for the aux visualizer windows - each
       window kind (VU Meter, Peak Meter, X-Y Scope, Spectrum,
       Spectrogram, Terrain, Waterfall, DVD Bounce, Pipes) should be
