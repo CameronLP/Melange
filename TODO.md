@@ -133,6 +133,41 @@
       action/widget reference) and the action registers via the same
       stateful-toggle pattern already used elsewhere (Lock Preset/
       Shuffle Presets).
+      Follow-up, requested ("is there a slider for it?" -> both
+      Opacity Level and Fade Speed): added two sliders to Preferences
+      > Playback, in a new "Hover Transparency" group below Beat
+      Detection (reusing the existing build_slider_row helper, same as
+      Cycle Interval/Mesh Size/etc.) - Opacity Level (0.0-1.0, default
+      0.0 "Fully Invisible", matching the original hard-0.0 behavior)
+      sets the target opacity used on hover instead of always going
+      fully transparent; Fade Speed (0.0-2.0s, default 0.0 "Instant")
+      animates set_opacity() toward that target over a GLib.timeout_add
+      step timer (16ms tick, same repeating-timeout shape as the DVD
+      Bounce/Pipes tick timers in aux_window.py) instead of snapping,
+      with 0 staying an instant snap so the default behavior is
+      unchanged. Disabling the toggle mid-fade still forces opacity
+      back to 1.0 immediately and cancels any in-flight fade timer,
+      on purpose - it's a safety net, not something that should be
+      slowed down by the user's own fade setting.
+      This time actually verified end-to-end in the sandbox (not just
+      "builds cleanly"): registered the app's own gresource
+      (/app/share/melange/melange.gresource) and set
+      PYTHONPATH=/app/share/melange to construct a real MelangeWindow
+      via `flatpak run --command=python3`, drove both new slider
+      widgets programmatically, toggled win.hover-transparency, and
+      asserted actual self.get_opacity() values mid-fade and at
+      completion for both the enter (fade to target) and leave (fade
+      back to 1.0) paths, plus the instant-mode and disable-mid-fade
+      cases. That test run caught a real, unrelated regression from
+      when Hover Transparency's own menu item was first added: it
+      sits between Shuffle Presets and the Mirror Windows submenu in
+      window.ui, which shifted rebuild_mirror_windows_menu's hardcoded
+      `section2.get_item_link(4, MENU_LINK_SUBMENU)` off by one -
+      construction crashed with AttributeError before ever reaching
+      the transparency code. Fixed to index 5, with a comment flagging
+      that this positional lookup is brittle and will break again if
+      another item is inserted above the Mirror Windows submenu
+      without updating it.
 - [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
       given its own independent Beat Rotation switch (previously
       bundled under the same "React to Beats" toggle as the pipe-spawn

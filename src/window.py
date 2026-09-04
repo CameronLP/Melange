@@ -79,6 +79,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.mouse_over_toolbar = False
         self.last_scroll_time = 0.0
         self.hover_transparency_enabled = False
+        self.hover_transparency_opacity = 0.0
+        self.hover_transparency_fade_ms = 0.0
+        self.opacity_fade_timer = None
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
@@ -256,18 +259,23 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Same empty-in-window.ui, populated-here pattern as Audio
         # Source above, for the same reason: the list of open mirror
         # windows changes at runtime. Section 2 (not 0/1) - theme
-        # selector, then Audio Source, then this section - item 4
+        # selector, then Audio Source, then this section - item 5
         # within it (Load Preset, Presets submenu, Lock Preset,
-        # Shuffle Presets, then the Mirror Windows submenu), then
-        # section 1 *within that submenu* (New Mirror Window/Close
-        # All Mirrors are its own static section 0 - see window.ui -
-        # so rebuilding this one never touches those).
+        # Shuffle Presets, Hover Transparency, then the Mirror Windows
+        # submenu), then section 1 *within that submenu* (New Mirror
+        # Window/Close All Mirrors are its own static section 0 - see
+        # window.ui - so rebuilding this one never touches those).
+        # NOTE: this index is positional and brittle - it broke once
+        # already (was 4) when Hover Transparency was inserted above
+        # the Mirror Windows submenu without updating this. Any future
+        # item added to this section before Mirror Windows needs this
+        # bumped again.
         section2 = self.menu_button.get_menu_model().get_item_link(
             2, Gio.MENU_LINK_SECTION
         )
 
         mirror_windows_submenu = section2.get_item_link(
-            4, Gio.MENU_LINK_SUBMENU
+            5, Gio.MENU_LINK_SUBMENU
         )
 
         self.open_mirrors_section = mirror_windows_submenu.get_item_link(
@@ -791,12 +799,50 @@ class MelangeWindow(Adw.ApplicationWindow):
     def on_content_hover_enter(self, controller, x, y):
 
         if self.hover_transparency_enabled:
-            self.set_opacity(0.0)
+            self.animate_opacity(self.hover_transparency_opacity)
 
     def on_content_hover_leave(self, controller):
 
         if self.hover_transparency_enabled:
-            self.set_opacity(1.0)
+            self.animate_opacity(1.0)
+
+    OPACITY_FADE_TICK_MS = 16
+
+    # Instant by default (hover_transparency_fade_ms == 0, the same
+    # hard snap this had before the Fade Speed slider existed) - only
+    # steps through a GLib timer, same repeating-timeout shape as the
+    # DVD/Pipes tick timers, when a duration is actually set.
+    def animate_opacity(self, target):
+
+        if self.opacity_fade_timer:
+            GLib.source_remove(self.opacity_fade_timer)
+            self.opacity_fade_timer = None
+
+        duration_ms = self.hover_transparency_fade_ms
+
+        if duration_ms <= 0:
+            self.set_opacity(target)
+            return
+
+        start = self.get_opacity()
+        start_time = time.monotonic()
+
+        def step():
+
+            elapsed_ms = (time.monotonic() - start_time) * 1000
+            t = min(1.0, elapsed_ms / duration_ms)
+
+            self.set_opacity(start + (target - start) * t)
+
+            if t >= 1.0:
+                self.opacity_fade_timer = None
+                return False
+
+            return True
+
+        self.opacity_fade_timer = GLib.timeout_add(
+            self.OPACITY_FADE_TICK_MS, step
+        )
 
     def hover_transparency_changed(self, action, value):
 
@@ -808,8 +854,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         # this fires while the pointer happens to be sitting over the
         # content right now and the window is currently transparent -
         # otherwise it would stay invisible until the next real
-        # leave/enter pair happened to fire.
+        # leave/enter pair happened to fire. Bypasses any in-progress
+        # or configured fade on purpose - disabling the feature should
+        # never leave the window visibly stuck fading back in.
         if not self.hover_transparency_enabled:
+
+            if self.opacity_fade_timer:
+                GLib.source_remove(self.opacity_fade_timer)
+                self.opacity_fade_timer = None
+
             self.set_opacity(1.0)
 
         self.show_toast(
@@ -1315,6 +1368,32 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="framerate_scale"
         )
 
+    def build_hover_opacity_control(self):
+
+        def format_hover_opacity(value):
+            return "Fully Invisible" if value <= 0 else f"{int(round(value * 100))}% Opaque"
+
+        return self.build_slider_row(
+            "Opacity Level",
+            0.0, 1.0, 0.05, 0.0,
+            format_hover_opacity,
+            lambda value: setattr(self, "hover_transparency_opacity", value),
+            store_as="hover_opacity_scale"
+        )
+
+    def build_hover_fade_control(self):
+
+        def format_hover_fade(value):
+            return "Instant" if value <= 0 else f"{value:.1f}s"
+
+        return self.build_slider_row(
+            "Fade Speed",
+            0.0, 2.0, 0.1, 0.0,
+            format_hover_fade,
+            lambda value: setattr(self, "hover_transparency_fade_ms", value * 1000),
+            store_as="hover_fade_scale"
+        )
+
     def build_toggle_row(self, title, initial, on_change, store_as=None):
 
         row = Adw.SwitchRow(title=title)
@@ -1528,6 +1607,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         beat_group.add(self.build_beat_cooldown_control())
         beat_group.add(self.build_beat_silence_control())
 
+        hover_group = Adw.PreferencesGroup(
+            title="Hover Transparency",
+            description=(
+                "Only takes effect while Hover Transparency (hamburger "
+                "menu) is turned on."
+            )
+        )
+        hover_group.add(self.build_hover_opacity_control())
+        hover_group.add(self.build_hover_fade_control())
+
         playback_page = Adw.PreferencesPage(
             title="Playback",
             icon_name="media-playback-start-symbolic"
@@ -1535,6 +1624,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         playback_page.add(cycling_group)
         playback_page.add(beat_group)
+        playback_page.add(hover_group)
 
         rendering_group = Adw.PreferencesGroup()
         rendering_group.add(self.build_mesh_size_control())
