@@ -159,3 +159,26 @@ window.transparency-active,
 .transparency-active {
     background-color: transparent;
 }
+
+/* Now Playing overlay (window.py, now_playing.py) - same translucent-
+   black floating-card look as .nav-arrow-button, just a rectangle
+   instead of a circle since it holds artwork + two lines of text. */
+.now-playing-card {
+    background-color: rgba(0, 0, 0, 0.5);
+    border-radius: 12px;
+    padding: 8px;
+}
+
+.now-playing-art {
+    border-radius: 6px;
+}
+
+.now-playing-title {
+    color: #fff;
+    font-weight: bold;
+}
+
+.now-playing-artist {
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 0.9em;
+}

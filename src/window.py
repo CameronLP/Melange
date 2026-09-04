@@ -35,6 +35,13 @@ from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.webview import create_webview
 from melange.mirror_window import MirrorWindow
 from melange.aux_window import AuxVisualizerWindow
+from melange.now_playing import NowPlayingWatcher
+
+NOW_PLAYING_PLACEMENTS = {
+    "bottom-left": Gtk.Align.START,
+    "bottom-center": Gtk.Align.CENTER,
+    "bottom-right": Gtk.Align.END,
+}
 
 # kind -> the win.show-* stateful action toggling that aux window,
 # shared between the action setup in __init__ and aux_window_closed
@@ -82,6 +89,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.transparency_opacity = 0.0
         self.transparency_fade_ms = 0.0
         self.opacity_fade_timer = None
+        self.now_playing_enabled = False
+        self.now_playing_placement = "bottom-left"
+        self.now_playing_info = None
+        self.now_playing_art_token = 0
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
@@ -167,6 +178,57 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.playlist_queue_button.set_sensitive(False)
 
         webview_overlay.add_overlay(self.playlist_queue_button)
+
+        # Now Playing (now_playing.py) - hidden until a track is
+        # actually reported (see on_now_playing_changed), so there's
+        # never an empty/placeholder card shown when nothing's playing
+        # or the feature's off.
+        self.now_playing_box = Gtk.Box(
+            orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+        )
+        self.now_playing_box.add_css_class("now-playing-card")
+        self.now_playing_box.set_visible(False)
+        self.now_playing_box.set_valign(Gtk.Align.END)
+        self.now_playing_box.set_margin_bottom(12)
+
+        self.now_playing_art = Gtk.Picture()
+        self.now_playing_art.add_css_class("now-playing-art")
+        self.now_playing_art.set_size_request(48, 48)
+        self.now_playing_art.set_content_fit(Gtk.ContentFit.COVER)
+        self.now_playing_art.set_can_shrink(True)
+        self.now_playing_art.set_visible(False)
+        self.now_playing_box.append(self.now_playing_art)
+
+        now_playing_text = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL, spacing=2
+        )
+        now_playing_text.set_valign(Gtk.Align.CENTER)
+
+        self.now_playing_title_label = Gtk.Label(xalign=0.0)
+        self.now_playing_title_label.add_css_class("now-playing-title")
+        self.now_playing_title_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.now_playing_title_label.set_max_width_chars(28)
+        now_playing_text.append(self.now_playing_title_label)
+
+        self.now_playing_artist_label = Gtk.Label(xalign=0.0)
+        self.now_playing_artist_label.add_css_class("now-playing-artist")
+        self.now_playing_artist_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.now_playing_artist_label.set_max_width_chars(28)
+        now_playing_text.append(self.now_playing_artist_label)
+
+        self.now_playing_box.append(now_playing_text)
+
+        self.apply_now_playing_placement()
+
+        webview_overlay.add_overlay(self.now_playing_box)
+
+        # Always watching (event-driven, no polling loop) regardless
+        # of whether Now Playing is currently enabled - only the
+        # overlay's own visibility is gated on that (see
+        # on_now_playing_changed/update_now_playing_visibility), so
+        # toggling the setting on doesn't need to (re)establish the
+        # D-Bus subscription from scratch.
+        self.now_playing_watcher = NowPlayingWatcher(self.on_now_playing_changed)
 
         self.content_box.append(
             webview_overlay
@@ -854,6 +916,94 @@ class MelangeWindow(Adw.ApplicationWindow):
             else "Transparency Mode disabled"
         )
 
+    # Runs on every NowPlayingWatcher report, regardless of whether
+    # the feature is currently enabled - keeping self.now_playing_info
+    # up to date unconditionally means flipping Enabled back on
+    # doesn't need to wait for the next track change to show anything.
+    def on_now_playing_changed(self, info):
+
+        self.now_playing_info = info
+        self.update_now_playing_visibility()
+
+        if info is None:
+            return
+
+        self.now_playing_title_label.set_label(info["title"] or "Unknown Title")
+        self.now_playing_artist_label.set_label(info["artist"])
+        self.now_playing_artist_label.set_visible(bool(info["artist"]))
+
+        self.load_now_playing_art(info["art_url"])
+
+    def update_now_playing_visibility(self):
+
+        self.now_playing_box.set_visible(
+            self.now_playing_enabled and self.now_playing_info is not None
+        )
+
+    # Guards against a slow/late art fetch for a track that's since
+    # been skipped past clobbering whatever's already showing - each
+    # call gets a fresh token, and the async callback only applies its
+    # result if it's still the most recent one requested.
+    def load_now_playing_art(self, art_url):
+
+        self.now_playing_art_token += 1
+        token = self.now_playing_art_token
+
+        if not art_url:
+            self.now_playing_art.set_visible(False)
+            return
+
+        def on_loaded(source, result):
+
+            if token != self.now_playing_art_token:
+                return
+
+            try:
+                ok, contents, etag = source.load_contents_finish(result)
+            except GLib.Error:
+                self.now_playing_art.set_visible(False)
+                return
+
+            try:
+                texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(contents))
+            except GLib.Error:
+                self.now_playing_art.set_visible(False)
+                return
+
+            self.now_playing_art.set_paintable(texture)
+            self.now_playing_art.set_visible(True)
+
+        # Gio.File.load_contents_async transparently handles both
+        # file:// (the common case - most players cache art locally)
+        # and http(s):// (network share is already granted) through
+        # the same GVfs-backed API, so no separate download path is
+        # needed for either.
+        Gio.File.new_for_uri(art_url).load_contents_async(None, on_loaded)
+
+    def now_playing_enabled_changed(self, enabled):
+
+        self.now_playing_enabled = enabled
+        self.update_now_playing_visibility()
+
+    def apply_now_playing_placement(self):
+
+        self.now_playing_box.set_halign(
+            NOW_PLAYING_PLACEMENTS[self.now_playing_placement]
+        )
+
+        self.now_playing_box.set_margin_start(
+            12 if self.now_playing_placement == "bottom-left" else 0
+        )
+
+        self.now_playing_box.set_margin_end(
+            12 if self.now_playing_placement == "bottom-right" else 0
+        )
+
+    def now_playing_placement_changed(self, placement_key):
+
+        self.now_playing_placement = placement_key
+        self.apply_now_playing_placement()
+
     # GTK4 dropped the old X11-style "urgency hint" entirely (Wayland
     # deliberately restricts apps from grabbing attention that way -
     # no OS-level window shake/flash API exists to call into here). A
@@ -1377,6 +1527,44 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="transparency_fade_scale"
         )
 
+    def build_now_playing_enabled_control(self):
+
+        return self.build_toggle_row(
+            "Enabled",
+            False,
+            self.now_playing_enabled_changed,
+            store_as="now_playing_enabled_row"
+        )
+
+    NOW_PLAYING_PLACEMENT_LABELS = [
+        ("bottom-left", "Bottom Left"),
+        ("bottom-center", "Bottom Center"),
+        ("bottom-right", "Bottom Right"),
+    ]
+
+    def build_now_playing_placement_control(self):
+
+        keys = [key for key, label in self.NOW_PLAYING_PLACEMENT_LABELS]
+        labels = [label for key, label in self.NOW_PLAYING_PLACEMENT_LABELS]
+
+        row = Adw.ComboRow(
+            title="Placement",
+            model=Gtk.StringList.new(labels)
+        )
+
+        row.set_selected(keys.index(self.now_playing_placement))
+
+        row.connect(
+            "notify::selected",
+            lambda r, param: self.now_playing_placement_changed(
+                keys[r.get_selected()]
+            )
+        )
+
+        self.now_playing_placement_row = row
+
+        return row
+
     def build_toggle_row(self, title, initial, on_change, store_as=None):
 
         row = Adw.SwitchRow(title=title)
@@ -1610,6 +1798,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         transparency_group.add(self.build_transparency_opacity_control())
         transparency_group.add(self.build_transparency_fade_control())
 
+        now_playing_group = Adw.PreferencesGroup(title="Now Playing")
+        now_playing_group.add(self.build_now_playing_enabled_control())
+        now_playing_group.add(self.build_now_playing_placement_control())
+
         playback_page = Adw.PreferencesPage(
             title="Playback",
             icon_name="media-playback-start-symbolic"
@@ -1617,7 +1809,14 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         playback_page.add(cycling_group)
         playback_page.add(beat_group)
-        playback_page.add(transparency_group)
+
+        appearance_page = Adw.PreferencesPage(
+            title="Appearance",
+            icon_name="preferences-desktop-theme-symbolic"
+        )
+
+        appearance_page.add(transparency_group)
+        appearance_page.add(now_playing_group)
 
         rendering_group = Adw.PreferencesGroup()
         rendering_group.add(self.build_mesh_size_control())
@@ -1641,6 +1840,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         dialog = Adw.PreferencesDialog()
         dialog.add(audio_page)
         dialog.add(playback_page)
+        dialog.add(appearance_page)
         dialog.add(rendering_page)
         dialog.add(profiles_page)
 

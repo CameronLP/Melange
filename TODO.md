@@ -139,50 +139,74 @@
       concern that's bitten other content-area gestures in this file).
 - [ ] Now Playing overlay - requested ("optional music title and
       artwork show in bottom, placement configurable in settings") -
-      in progress this session. Melange only ever captures raw system
-      audio (GStreamer) - it has no idea what's playing or who's
-      playing it, so the only realistic source for title/artist/
-      artwork is MPRIS (org.mpris.MediaPlayer2.* on the session D-Bus),
-      the standard Linux desktop "now playing" interface every major
-      player (Spotify, browsers, VLC, Rhythmbox, etc.) implements.
-      Design: a new now_playing.py module (NowPlayingWatcher) opens
-      the session bus, discovers existing org.mpris.MediaPlayer2.*
-      names plus watches NameOwnerChanged for new ones, and for each
-      creates a Gio.DBusProxy scoped to the org.mpris.MediaPlayer2.
-      Player interface specifically (so GDBusProxy's own automatic
-      property-caching + g-properties-changed signal does the metadata
+      built. Melange only ever captures raw system audio (GStreamer) -
+      it has no idea what's playing or who's playing it, so the only
+      realistic source for title/artist/artwork is MPRIS
+      (org.mpris.MediaPlayer2.* on the session D-Bus), the standard
+      Linux desktop "now playing" interface every major player
+      (Spotify, browsers, VLC, Rhythmbox, etc.) implements.
+      New now_playing.py module (NowPlayingWatcher): opens the session
+      bus, discovers existing org.mpris.MediaPlayer2.* names plus
+      watches NameOwnerChanged for new ones, and for each creates a
+      Gio.DBusProxy scoped to the org.mpris.MediaPlayer2.Player
+      interface specifically (so GDBusProxy's own automatic property-
+      caching + g-properties-changed signal does the metadata
       tracking, no manual PropertiesChanged plumbing needed). Whichever
       known player currently reports PlaybackStatus=="Playing" (most
-      recently changed, if more than one) is "the" active one - if
-      none are playing, nothing is shown, rather than showing stale
-      paused/wrong-app info. Artwork (mpris:artUrl, file:// or http(s)
-      often both seen in the wild) loaded via Gio.File.load_contents_
-      async (handles both URI schemes through GIO's own VFS, no
-      separate download path needed) into a Gdk.Texture, with a
-      generation token guarding against a slow late art fetch
-      clobbering a newer track's already-applied art.
+      recently *transitioned into* Playing, if more than one) is "the"
+      active one - if none are playing, nothing is shown, rather than
+      showing stale paused/wrong-app info. That "most recently
+      transitioned into Playing" wording is deliberate, not "most
+      recently changed any property" - the latter was the first
+      implementation and is wrong: it lets a player's routine,
+      unrelated property churn keep perpetually outranking a genuinely
+      newly-started one. Artwork (mpris:artUrl, file:// or http(s),
+      both seen in the wild against real players) loaded via
+      Gio.File.load_contents_async (handles both URI schemes through
+      GIO's own VFS, no separate download path needed) into a
+      Gdk.Texture, with a generation token guarding against a slow
+      late art fetch clobbering a newer track's already-applied art.
       UI: a small translucent card (Gtk.Picture + title/artist
       Gtk.Labels, same visual language as the existing nav-arrow-
       button/playlist_queue_button overlays) added to webview_overlay,
       hidden whenever the feature is off or nothing is playing.
       Settings: new Preferences > Appearance page (also where
-      Transparency Mode's group moves to, per "wondering if there
+      Transparency Mode's group moved to, per "wondering if there
       should be a separate settings tab for appearance" - previously
       lived under Playback) - an Enabled switch plus a Placement
       Adw.ComboRow (Bottom Left/Bottom Center/Bottom Right), no
-      hamburger menu entry at all, matching the just-established
-      Transparency Mode precedent of settings-only for this kind of
-      toggle.
-      Sandbox permission needed: --talk-name=org.mpris.MediaPlayer2.*
-      added to com.cameronlp.Melange.json's finish-args - the app has
-      no D-Bus access to other apps' MPRIS interfaces without it.
-      Verification caveat: this dev/sandbox environment has no real
-      MPRIS player running, so the "nothing playing" path is exercised
-      for free, but the actual metadata/artwork pipeline needs a
-      synthetic mock MPRIS service (a second Gio.DBusConnection owning
-      a test org.mpris.MediaPlayer2.* name and exporting a minimal
-      Player interface) built into the verification script to exercise
-      end to end without a real media player.
+      hamburger menu entry at all, matching the Transparency Mode
+      precedent of settings-only for this kind of toggle.
+      Sandbox permission added: --talk-name=org.mpris.MediaPlayer2.*
+      in com.cameronlp.Melange.json's finish-args - narrow, read-only-
+      in-effect (lets the app query/watch other apps' MPRIS interfaces,
+      nothing else).
+      Deliberately NOT granted: broad home-directory filesystem access
+      (--filesystem=home), which would be needed to load artwork that
+      a player caches as a local file:// path (confirmed against a
+      real running Firefox instance - its MPRIS art is a
+      ~/.mozilla/.../firefox-mpris/*.png path, invisible to the
+      sandbox without it). User's explicit choice, weighing "some
+      players' local art won't display" against "read access to the
+      whole home directory" - title/artist always show regardless, and
+      http(s)://-served artwork (confirmed present on at least one
+      other real player on this machine, Feishin) is unaffected since
+      that only needs the network share already granted. The art
+      widget fails closed in this case (stays hidden, no broken-image
+      icon, no crash) rather than erroring.
+      Verified against real, live, currently-running MPRIS players on
+      this machine (not just synthetic fixtures) - detection, title/
+      artist extraction, and the file:// art graceful-failure path all
+      confirmed end to end this way. One thing that could NOT be
+      verified in-sandbox: the multi-simultaneous-"Playing"-player
+      tie-break logic specifically, since a same-sandbox mock player
+      can't own an org.mpris.MediaPlayer2.* bus name without a
+      separate --own-name grant (only --talk-name was requested,
+      deliberately, since the real app never needs to impersonate a
+      media player) - confirmed this is the sandbox correctly doing
+      its job (the mock's owned name never reached
+      NowPlayingWatcher.players) rather than a bug, but it does mean
+      that one code path is unverified beyond static review.
 - [ ] Per-widget FPS setting for the aux visualizer windows - each
       window kind (VU Meter, Peak Meter, X-Y Scope, Spectrum,
       Spectrogram, Terrain, Waterfall, DVD Bounce, Pipes) should be
