@@ -2269,9 +2269,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         beat_group = Adw.PreferencesGroup(
             title="Beat Detection",
             description=(
-                "Experimental - tuned against synthetic test signals, "
-                "not yet validated against a wide range of real music. "
-                "See docs/beat-detection.md."
+                "Tuned against synthetic test signals, not yet "
+                "validated against a wide range of real music. See "
+                "docs/beat-detection.md."
             )
         )
         beat_group.add(self.build_beat_cycle_control())
@@ -2329,7 +2329,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         playback_page.add(cycling_group)
-        playback_page.add(beat_group)
+
+        # Its own page rather than a group folded into Playback -
+        # requested ("move the beat detection to an experimental
+        # section") - a dedicated Experimental page also gives a real
+        # home for any other feature that needs the same "works, but
+        # not validated/finished" framing later, rather than each one
+        # bolting an "Experimental" description onto whatever page it
+        # happens to fit into otherwise.
+        experimental_page = Adw.PreferencesPage(
+            title="Experimental",
+            icon_name="applications-science-symbolic"
+        )
+
+        experimental_page.add(beat_group)
 
         appearance_page = Adw.PreferencesPage(
             title="Appearance",
@@ -2364,6 +2377,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         dialog.add(playback_page)
         dialog.add(appearance_page)
         dialog.add(rendering_page)
+        dialog.add(experimental_page)
         dialog.add(profiles_page)
 
         self.preferences_dialog = dialog

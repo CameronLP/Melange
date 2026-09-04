@@ -105,6 +105,33 @@
 
 ## In progress / not started
 
+- [x] Three small naming/organization requests, all done together:
+      (1) "move the beat detection to an experimental section" - Beat
+      Detection is now its own Preferences page ("Experimental",
+      applications-science-symbolic - confirmed present in the icon
+      theme before using it, unlike the earlier Appearance-icon bug)
+      instead of a group folded into Playback, dropping the
+      description's own "Experimental -" prefix since the page itself
+      now says that. Also gives a real home for any future feature
+      that needs the same framing, rather than each one bolting its
+      own "Experimental" description onto whatever page it happens to
+      land in. (2) "is there a better name for 'visualizer windows'?"
+      - asked as a genuine question, not a command; picked "Mini
+      Visualizers" (matches how these have been described in
+      conversation and TODO history all session - "miniviz", "the
+      miniature widgets" - and reads as clearly distinct from "Mirror
+      Windows", the other windows-related menu entry) and applied it,
+      rather than just answering without acting, since renaming a menu
+      label is trivial to redo if it's not the right call. (3) "rename
+      'browser presets' to presets" - the "_Browse Presets…" menu item
+      is now "_Presets…"; also renamed the header bar's magnifying-
+      glass button tooltip from "Browse Presets" to "Presets" for
+      consistency, since it opens the same dialog via the same
+      win.browse-presets action (not explicitly requested, but the
+      same rename left half-applied would have been inconsistent).
+      Verified in the sandbox: the Experimental page's icon exists in
+      the real icon theme, and the hamburger menu's actual labels are
+      "_Presets…" and "Mini Visualizers".
 - [ ] Export Settings for backup - requested, not yet designed.
       Settings Profiles (build_profiles_page/profile_fields/
       save_profiles) already save named snapshots of every slider/

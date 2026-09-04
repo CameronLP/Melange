@@ -22,7 +22,7 @@
             <child type="start">
               <object class="GtkButton" id="browse_presets_button">
                 <property name="icon-name">system-search-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Browse Presets</property>
+                <property name="tooltip-text" translatable="yes">Presets</property>
                 <property name="action-name">win.browse-presets</property>
               </object>
             </child>
@@ -100,7 +100,7 @@
            (the Queue tab's own Playlists… button still uses
            win.show-playlists) - only their menu entries are gone. -->
       <item>
-        <attribute name="label" translatable="yes">_Browse Presets…</attribute>
+        <attribute name="label" translatable="yes">_Presets…</attribute>
         <attribute name="action">win.browse-presets</attribute>
       </item>
 
@@ -146,7 +146,7 @@
            New Window action, since only one of each makes sense open
            at a time. -->
       <submenu id="aux_windows_submenu">
-        <attribute name="label" translatable="yes">Visualizer Windows</attribute>
+        <attribute name="label" translatable="yes">Mini Visualizers</attribute>
 
         <item>
           <attribute name="label" translatable="yes">VU Meter</attribute>
