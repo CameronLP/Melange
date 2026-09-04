@@ -286,10 +286,34 @@
       out of bounds).
       Also added: two more Placement options, Top (Left/Center/Right)
       alongside the original Bottom three - requested ("should also be
-      able to be played in top too"). Top placements get a larger top
-      margin (56px vs 12) than bottom ones do, since the header bar
-      floats over this same content area - an approximation of a
-      typical header bar height, not measured against a real display.
+      able to be played in top too"). Top placements originally got a
+      larger top margin (56px vs 12) than bottom ones, an approximation
+      of a typical header bar height meant to avoid the header - see
+      below, this was wrong and got fixed the same session.
+      Follow-up, a real bug report ("many of the apps leave space for
+      the top bar... shifted down from the top... especially since the
+      top bar fades away and will not block the view"): that 56px top
+      margin was exactly this - reserving space against a header that
+      already floats over the content and fades away on its own,
+      defeating the entire point of extend_content_to_top_edge. Fixed
+      to the same plain 12px both top and bottom now use. Also added a
+      Font control (Gtk.FontDialogButton restricted to
+      Gtk.FontLevel.FAMILY - just the typeface, since style/size are
+      already this app's own separate controls) and widened Text Size
+      from 8-24px to 8-72px, both requested. Verified in the sandbox:
+      top/bottom margins now match, the font family lands in the
+      title label's Pango attributes, and the widened slider range
+      actually applies up to 72px.
+      Still unresolved: the same report also named "miniviz graphics"
+      (the aux visualizer windows) as shifted down the same way, not
+      just the Now Playing overlay - checked aux_window.py and
+      mirror_window.py and both already use the identical pattern
+      (extend_content_to_top_edge + a floating/fading header, no
+      hardcoded top-margin like Now Playing's had) with nothing found
+      in the actual Cairo drawing code that reserves header space -
+      unlike Now Playing's case, no concrete cause was found by
+      reading the code. Asked the user for more detail/a screenshot
+      rather than guess at a change with no diagnosed cause.
 - [ ] Per-widget FPS setting for the aux visualizer windows - each
       window kind (VU Meter, Peak Meter, X-Y Scope, Spectrum,
       Spectrogram, Terrain, Waterfall, DVD Bounce, Pipes) should be

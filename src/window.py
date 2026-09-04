@@ -106,6 +106,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_show_time = False
         self.now_playing_show_background = True
         self.now_playing_text_size = 13.0
+        self.now_playing_font_family = "Sans"
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
@@ -1056,8 +1057,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_text_color = rgba
         self.apply_now_playing_text_style()
 
-    # Title/artist/time all share one size+color setting rather than
-    # three independent ones - set via Pango attributes directly
+    def now_playing_font_changed(self, family):
+
+        self.now_playing_font_family = family
+        self.apply_now_playing_text_style()
+
+    # Title/artist/time all share one size+color+font setting rather
+    # than three independent sets - set via Pango attributes directly
     # (Pango.AttrSize.new_absolute for real pixels, not points scaled
     # by the display's DPI) rather than injecting per-instance CSS,
     # since GtkLabel already exposes exactly this as a first-class,
@@ -1069,6 +1075,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         attrs.insert(Pango.attr_size_new_absolute(
             int(self.now_playing_text_size * Pango.SCALE)
         ))
+
+        attrs.insert(Pango.attr_family_new(self.now_playing_font_family))
 
         color = self.now_playing_text_color
 
@@ -1191,14 +1199,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_enabled = enabled
         self.update_now_playing_visibility()
 
-    # Top margin is bigger than the others (56px vs 12) on a "top-*"
-    # placement specifically - the header bar floats over this same
-    # content area (see toolbar_view.set_extend_content_to_top_edge),
-    # so a plain 12px top margin would sit right behind/under the
-    # hamburger menu whenever the header's actually visible. 56px is
-    # an approximation of a typical header bar height, not measured
-    # against a real display in this environment - the header still
-    # auto-hides on its own after Toolbar Hide Delay regardless.
+    # Was previously given an extra-large top margin (56px vs the
+    # normal 12) specifically to avoid sitting under the header bar -
+    # removed, since the header bar already floats over this same
+    # content area (extend_content_to_top_edge) and fades away on its
+    # own; reserving space against it defeated the point of a floating
+    # header and just left dead space at the top instead ("many of the
+    # apps leave space for the top bar... can this be fixed, since the
+    # top bar fades away and will not block the view" - reported
+    # directly about this). Top and bottom now use the same plain 12px
+    # margin, symmetric with each other.
     def apply_now_playing_placement(self):
 
         halign, valign = NOW_PLAYING_PLACEMENTS[self.now_playing_placement]
@@ -1208,7 +1218,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         is_top = valign == Gtk.Align.START
 
-        self.now_playing_box.set_margin_top(56 if is_top else 0)
+        self.now_playing_box.set_margin_top(12 if is_top else 0)
         self.now_playing_box.set_margin_bottom(0 if is_top else 12)
 
         self.now_playing_box.set_margin_start(
@@ -1904,11 +1914,41 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.build_slider_row(
             "Text Size",
-            8.0, 24.0, 1.0, 13.0,
+            8.0, 72.0, 1.0, 13.0,
             format_text_size,
             self.now_playing_text_size_changed,
             store_as="now_playing_text_size_scale"
         )
+
+    # Level=FAMILY restricts the native GTK4 font picker to just
+    # choosing a typeface - style/size are handled by this app's own
+    # Text Size slider (and the current design has no separate bold/
+    # italic control), so a full font-with-size-and-style dialog would
+    # just be a confusing second place some of those same things could
+    # be set from.
+    def build_now_playing_font_control(self):
+
+        row = Adw.ActionRow(title="Font")
+
+        button = Gtk.FontDialogButton(dialog=Gtk.FontDialog())
+        button.set_level(Gtk.FontLevel.FAMILY)
+        button.set_valign(Gtk.Align.CENTER)
+
+        font_desc = Pango.FontDescription.from_string(self.now_playing_font_family)
+        button.set_font_desc(font_desc)
+
+        button.connect(
+            "notify::font-desc",
+            lambda b, param: self.now_playing_font_changed(
+                b.get_font_desc().get_family()
+            )
+        )
+
+        row.add_suffix(button)
+
+        self.now_playing_font_button = button
+
+        return row
 
     def build_now_playing_text_color_control(self):
 
@@ -2195,6 +2235,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_show_artwork_control())
         now_playing_group.add(self.build_now_playing_show_time_control())
         now_playing_group.add(self.build_now_playing_show_background_control())
+        now_playing_group.add(self.build_now_playing_font_control())
         now_playing_group.add(self.build_now_playing_text_size_control())
         now_playing_group.add(self.build_now_playing_text_color_control())
 
