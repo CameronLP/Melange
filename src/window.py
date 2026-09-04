@@ -91,6 +91,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.mouse_over_toolbar = False
         self.last_scroll_time = 0.0
         self.transparency_mode_enabled = False
+        self.hidden_mode_enabled = False
         self.transparency_opacity = 0.0
         self.transparency_fade_ms = 0.0
         self.opacity_fade_timer = None
@@ -260,6 +261,26 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         self.content_box.add_controller(drag_gesture)
+
+        # Hidden Mode's only way back (see on_content_right_click) -
+        # same CAPTURE-phase/content_box placement as the drag gesture
+        # above and for the same reason (WebKit's own hit-testing
+        # would otherwise swallow the press before a bubble-phase
+        # gesture on an ancestor ever saw it). A distinct button
+        # (SECONDARY vs. the drag gesture's PRIMARY) on the same
+        # widget - GTK dispatches gestures by button/state independently,
+        # so these don't fight each other.
+        right_click_gesture = Gtk.GestureClick()
+
+        right_click_gesture.set_button(Gdk.BUTTON_SECONDARY)
+        right_click_gesture.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+
+        right_click_gesture.connect(
+            "pressed",
+            self.on_content_right_click
+        )
+
+        self.content_box.add_controller(right_click_gesture)
 
         self.gst_pipeline = None
         self.current_sink = None
@@ -625,6 +646,27 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(transparency_mode_action)
 
+        # Unlike Transparency Mode, this needs a real menu entry (not
+        # Preferences-only) - once it's on, the header bar (and
+        # therefore the hamburger menu that would otherwise reach
+        # Preferences) is gone, so the *only* way back has to be
+        # reachable without the header - the right-click context menu
+        # (on_content_right_click) - and the only way to turn it ON in
+        # the first place is from the still-visible header before that
+        # happens, i.e. a real menu item.
+        hidden_mode_action = Gio.SimpleAction.new_stateful(
+            "hidden-mode",
+            None,
+            GLib.Variant("b", False)
+        )
+
+        hidden_mode_action.connect(
+            "change-state",
+            self.hidden_mode_changed
+        )
+
+        self.add_action(hidden_mode_action)
+
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
             None,
@@ -874,6 +916,16 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def reveal_toolbar(self):
 
+        # Hidden Mode overrides the normal auto-hide/reveal cycle
+        # entirely - it should stay hidden regardless of mouse
+        # movement or toolbar hover, unlike ordinary auto-hide (which
+        # this same method also drives). This one guard is enough:
+        # mouse_move/toolbar_enter/toolbar_leave all funnel through
+        # here or schedule_toolbar_hide, neither of which does
+        # anything while hidden_mode_enabled is set.
+        if self.hidden_mode_enabled:
+            return
+
         self.toolbar_view.set_reveal_top_bars(True)
         self.set_nav_arrows_visible(True)
 
@@ -901,6 +953,51 @@ class MelangeWindow(Adw.ApplicationWindow):
             int(self.toolbar_hide_delay),
             self.hide_toolbar
         )
+
+    def hidden_mode_changed(self, action, value):
+
+        action.set_state(value)
+
+        self.hidden_mode_enabled = value.get_boolean()
+
+        if self.hidden_mode_enabled:
+
+            if self.hide_timer:
+                GLib.source_remove(self.hide_timer)
+                self.hide_timer = None
+
+            self.toolbar_view.set_reveal_top_bars(False)
+            self.set_nav_arrows_visible(False)
+
+        else:
+            # reveal_toolbar's own hidden_mode_enabled guard is why
+            # the flag above has to be cleared first - otherwise this
+            # would immediately no-op.
+            self.reveal_toolbar()
+
+        self.show_toast(
+            "Hidden Mode enabled - right-click to exit"
+            if self.hidden_mode_enabled
+            else "Hidden Mode disabled"
+        )
+
+    # The only way out of Hidden Mode once it's on (see hidden_mode_
+    # changed's own comment on the action registration) - does nothing
+    # while the mode is off, so this gesture has no effect on ordinary
+    # right-clicks.
+    def on_content_right_click(self, gesture, n_press, x, y):
+
+        if not self.hidden_mode_enabled:
+            return
+
+        menu = Gio.Menu()
+        menu.append("Exit Hidden Mode", "win.hidden-mode")
+
+        popover = Gtk.PopoverMenu.new_from_model(menu)
+        popover.set_parent(self.content_box)
+        popover.set_has_arrow(False)
+        popover.set_pointing_to(Gdk.Rectangle(x=int(x), y=int(y), width=1, height=1))
+        popover.popup()
 
     OPACITY_FADE_TICK_MS = 16
 

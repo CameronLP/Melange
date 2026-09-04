@@ -346,38 +346,41 @@
       configured value, "Never" cancels a pending hide, a new value
       re-arms immediately, no timer leak on repeated toolbar_leave
       calls, and the hovering guard.
-- [ ] Hidden Mode - requested, not yet implemented: hides the header
-      bar entirely (no title bar, no hamburger menu button visible)
-      while still letting the window be dragged around by its content
-      area as if grabbing the (now-invisible) title bar, with a right-
-      click context menu on the content as the way to re-enable the
-      header bar (get back to the real menu) and turn Hidden Mode back
-      off. Distinct from Transparency Mode - this hides the chrome
-      entirely rather than fading it, and needs its own escape hatch
-      since disabling Transparency Mode is reachable through
-      Preferences (still visible via the header), while Hidden Mode by
-      definition removes that path, hence "right-click for menu" as
-      the way back. Likely needs: toolbar_view.set_reveal_top_bars
-      already exists for the auto-hide-on-idle behavior (hide_toolbar/
-      reveal_toolbar) - probably reuses that same mechanism rather
-      than a new one, but auto-hide already re-reveals on mouse
-      movement/toolbar hover, which Hidden Mode explicitly should NOT
-      do (it should stay hidden regardless of mouse position, unlike
-      auto-hide) - so this needs to suppress or bypass the auto-hide
-      reveal logic while active, not just call the same hide method
-      once. A Gtk.GestureClick (right-click, button 3) on
-      webview_overlay/content_box for the escape-hatch context menu -
-      probably a small Gio.Menu (win.toggle-hidden-mode plus maybe a
-      couple of the most useful existing actions) shown via
-      Gtk.PopoverMenu.new_from_model() at the click position, similar
-      to how other context-style interactions in this codebase work.
-      For window dragging with no header bar to grab, GTK4's
-      `Gtk.WindowHandle` wrapping the content (or begin_move() called
-      from a drag gesture on content_box/webview_overlay directly, the
-      way self.set_titlebar-less dragging is usually done) is the
-      standard approach - needs picking one and confirming it doesn't
-      fight with the webview's own event handling (same CAPTURE-phase
-      concern that's bitten other content-area gestures in this file).
+- [x] Hidden Mode - requested, built. New win.hidden-mode stateful
+      action, a real hamburger menu item (not Preferences-only, unlike
+      Transparency Mode) since once it's on, the header bar - and the
+      hamburger menu that would otherwise reach Preferences - is gone,
+      so the only way back has to work without either: a right-click
+      on the content area (on_content_right_click, a new
+      Gtk.GestureClick - SECONDARY button, CAPTURE phase, same
+      content_box placement and WebKit-hit-testing reasoning as the
+      existing drag-to-move gesture right next to it) shows a small
+      Gio.Menu/Gtk.PopoverMenu with one "Exit Hidden Mode" item.
+      Turned out to need less new code than expected: window dragging
+      from anywhere in the content area already existed unconditionally
+      (self.get_surface().begin_move(), the drag gesture right above
+      the new right-click one) and needed no changes at all. The
+      hide/reveal mechanism reuses toolbar_view.set_reveal_top_bars
+      rather than adding a parallel one - hidden_mode_changed forces
+      it False and hides the nav arrows on enable; the one new piece
+      is a hidden_mode_enabled guard at the top of reveal_toolbar
+      itself, since every path that would normally re-reveal the
+      toolbar (mouse_move, toolbar_enter, schedule_toolbar_hide) already
+      funnels through either that method or a no-op-when-hidden hide
+      timer, so one guard is enough to stop auto-hide's normal
+      "re-reveal on movement" behavior from fighting Hidden Mode's
+      "stay hidden regardless of the mouse" one.
+      Verified in the sandbox: the action/menu item exist and the menu
+      item lands at the right position without disturbing Mirror
+      Windows' own positional index (again - see that comment's
+      history); enabling actually collapses toolbar_view's top bars;
+      reveal_toolbar() and mouse_move() are confirmed no-ops while
+      enabled (both left the toolbar collapsed); disabling restores it;
+      the right-click handler builds its popover without crashing when
+      enabled and does nothing when it's not; and both the pre-existing
+      drag gesture and the new right-click gesture are genuinely
+      attached to content_box side by side on their own distinct
+      buttons.
 - [ ] Now Playing overlay - requested ("optional music title and
       artwork show in bottom, placement configurable in settings") -
       built. Melange only ever captures raw system audio (GStreamer) -
