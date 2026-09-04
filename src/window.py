@@ -833,6 +833,14 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.transparency_mode_enabled = value.get_boolean()
 
+        # See .transparency-active in style.css - without this, fading
+        # toast_overlay's opacity just blends toward the window's own
+        # opaque background instead of the real desktop behind it.
+        if self.transparency_mode_enabled:
+            self.add_css_class("transparency-active")
+        else:
+            self.remove_css_class("transparency-active")
+
         self.animate_opacity(
             self.transparency_opacity
             if self.transparency_mode_enabled

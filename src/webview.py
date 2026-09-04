@@ -25,7 +25,7 @@ from pathlib import Path
 
 gi.require_version("WebKit", "6.0")
 
-from gi.repository import WebKit
+from gi.repository import WebKit, Gdk
 
 
 def permission_request(webview, request):
@@ -99,6 +99,14 @@ def create_webview(on_message=None):
         user_content_manager=content_manager,
         network_session=WebKit.NetworkSession.new_ephemeral()
     )
+
+    # WebKit otherwise paints its own opaque backing color wherever the
+    # page itself hasn't painted yet (e.g. before first frame) rather
+    # than deferring to whatever's behind the widget in the GTK render
+    # tree - matters for window.py's Transparency Mode, where the
+    # ancestor chain above this widget is made alpha-capable so the
+    # real desktop can show through a faded window.
+    view.set_background_color(Gdk.RGBA(red=0, green=0, blue=0, alpha=0))
 
     settings = view.get_settings()
 

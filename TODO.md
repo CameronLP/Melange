@@ -105,6 +105,32 @@
 
 ## In progress / not started
 
+- [ ] Per-widget FPS setting for the aux visualizer windows - each
+      window kind (VU Meter, Peak Meter, X-Y Scope, Spectrum,
+      Spectrogram, Terrain, Waterfall, DVD Bounce, Pipes) should be
+      able to set its own render/tick rate independently, rather than
+      all sharing whatever their current fixed redraw cadence is.
+      Requested, not yet designed or implemented - see also the
+      already-logged "share same FFT processing" idea above/below,
+      which is related (both are about per-window vs. shared timing)
+      but distinct (that one's about the audio analysis feeding every
+      window, this one's about each window's own draw cadence).
+- [ ] Custom fractal visualizer - requested, not yet designed. Would
+      need an actual fractal-rendering approach/library (nothing in
+      this codebase currently does fractal math) - unclear yet whether
+      that means a new aux visualizer window kind (aux_window.py,
+      Cairo-drawn like the others) or something WebGL/Butterchurn-side
+      (related to the already-logged "fractal Butterchurn preset"
+      idea elsewhere in this file, but that one's a MilkDrop preset
+      idea, not a real fractal renderer - these may or may not end up
+      being the same feature). Needs a decision on approach before any
+      implementation starts.
+- [ ] Peak Meter bug: reported "mostly red" - not yet investigated.
+      Likely the same shape of bug as the earlier Terrain "mostly
+      green"/"mostly blue" color reports (a level-to-color mapping
+      that's saturating toward one end of its scale for real music
+      input), but Peak Meter's own color logic hasn't been checked
+      against this specific report yet.
 - [ ] Hover Transparency built for the main window (win.hover-
       transparency, a hamburger menu toggle, off by default) -
       requested ("is it possible to make a main window transparency
@@ -210,6 +236,37 @@
       the configured level and back, while self.headerbar.get_opacity()
       stays 1.0 throughout, and on_content_hover_enter/leave no longer
       exist on the window at all.
+      Fourth follow-up, a real bug report ("It only fades the
+      visualizer, not the window behind it"): fading toast_overlay's
+      own Gtk.Widget opacity was necessary but not sufficient - by
+      default AdwApplicationWindow's own root CSS node paints an
+      opaque theme background *underneath* every child first, so a
+      faded child was blending toward that solid color, not toward
+      the real desktop behind the window (the window's surface itself
+      being alpha-capable, confirmed earlier, doesn't help if
+      something opaque is still painted into it). Fixed with a new
+      `.transparency-active` rule in style.css (`background-color:
+      transparent`, no type qualifier - same reasoning as
+      .nav-arrow-button, don't assume the exact CSS node name), with
+      the class added/removed on `self` in transparency_mode_changed
+      alongside the existing opacity fade, rather than left on
+      permanently, so there's no visual risk (e.g. a startup frame
+      before content_box has stretched to fill the window) for anyone
+      not using the feature. Also set the WebView's own
+      set_background_color to transparent RGBA(0,0,0,0) once at
+      creation (webview.py) as a defensive belt-and-suspenders fix -
+      WebKit paints its own opaque backing color wherever the page
+      hasn't painted yet otherwise, independent of GTK's own ancestor-
+      opacity compositing.
+      Verified in the sandbox that the CSS class is added/removed
+      correctly on enable/disable and that the webview's background
+      color is really alpha 0. Still NOT visually confirmed against a
+      real compositor/desktop - this environment has no way to
+      screenshot what's behind the window, only that the mechanism
+      (transparent window background + transparent webview backing +
+      faded content) is now the standard/correct GTK4 approach for
+      this effect, matching how transparent-window apps are normally
+      built.
 - [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
       given its own independent Beat Rotation switch (previously
       bundled under the same "React to Beats" toggle as the pipe-spawn

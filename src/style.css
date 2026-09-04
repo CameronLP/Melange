@@ -142,3 +142,20 @@ headerbar.melange-header.attention-flash {
     border: none;
     outline: none;
 }
+
+/* Transparency Mode (window.py transparency_mode_changed). Fading
+   toast_overlay's own Gtk.Widget opacity isn't enough on its own - by
+   default the window's own root CSS node paints an opaque theme
+   background *underneath* every child first, so a faded child just
+   blends toward that solid color instead of toward the real desktop
+   behind the window. Toggled on/off with the mode itself (not left
+   on permanently) so there's no visual risk - like a startup frame
+   where content_box hasn't stretched to fill the window yet - for
+   users who never touch this feature. No type qualifier, same reason
+   as .nav-arrow-button above: relying on the exact CSS node name
+   ("window") being what actually gets styled is exactly the kind of
+   assumption that broke silently for Gtk.MenuButton elsewhere. */
+window.transparency-active,
+.transparency-active {
+    background-color: transparent;
+}
