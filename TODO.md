@@ -105,6 +105,29 @@
 
 ## In progress / not started
 
+- [ ] Now Playing display follow-ups, both requested (TODO-only, not
+      implemented):
+      (1) Widen the Fade Interval (Periodic Fade) slider's range -
+      currently 1-15s - to support much longer periods, e.g. once a
+      minute or every 2 minutes. Simple range change
+      (build_now_playing_periodic_fade_seconds_control's
+      build_slider_row bounds) once actually done.
+      (2) A new "hide until a new song plays, then show for some
+      period" mode - explicitly distinct from the existing Auto-Hide
+      (built last session) in two ways worth getting right when this
+      is designed: Auto-Hide's "change" key includes play/pause status,
+      so pausing/resuming the *same* track already re-triggers a show -
+      this new mode should presumably react only to an actual track
+      change (title/artist), not play/pause. Auto-Hide also shows
+      immediately the moment any MPRIS info first arrives (e.g. on app
+      startup with something already playing) since its "last change"
+      key starts as None, which differs from anything real - this new
+      mode's framing ("hide *until* a new song plays") suggests it
+      should probably stay hidden through that first/already-playing
+      track too, only peeking on the *next* genuine change. Needs a
+      decision on whether this becomes a variant of Auto-Hide (e.g. an
+      "ignore play/pause" sub-option) or a genuinely separate third
+      mode alongside it and Periodic Fade.
 - [ ] While fullscreen, disable Transparency Mode if it's on, and
       re-enable it on exiting fullscreen - requested (TODO-only, not
       implemented). Would need to distinguish "off because fullscreen
