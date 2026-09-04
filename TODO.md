@@ -105,6 +105,44 @@
 
 ## In progress / not started
 
+- [ ] Toolbar Hide Delay bug - reported (TODO-only, not investigated):
+      setting Hide Delay to 0 ("Never") keeps the header bar/nav
+      arrows visible as intended, but the mouse *cursor* itself still
+      disappears in fullscreen regardless. Likely cause, not yet
+      confirmed: cursor-hiding in fullscreen (search for
+      Gdk.Cursor.new_from_name("none")/is_fullscreen() in window.py)
+      is probably its own separate mechanism from schedule_toolbar_
+      hide/hide_toolbar, and likely doesn't check toolbar_hide_delay
+      at all - "Never" for the toolbar wouldn't currently imply
+      "never" for the cursor unless that path is also gated on it.
+- [x] Scroll Long Titles - requested ("if text title is too long for
+      now playing, i want setting to have it scroll across"). New
+      toggle - when on and a title's length exceeds Text Box Width,
+      it scrolls as a rotating marquee instead of the normal static-
+      plus-ellipsize display; a title that already fits just shows
+      normally regardless of the setting. Implemented as a text-based
+      marquee (rotating which substring of "title + separator +
+      title" is shown, one character per 300ms tick) rather than
+      actual pixel-position animation - reuses Text Box Width's
+      existing character-count sizing directly as the visible window
+      size, avoiding any need for real Pango/pixel measurement of the
+      label's rendered width. An approximation (proportional fonts
+      mean a fixed character count isn't a perfectly constant pixel
+      width) consistent with how this card is already sized
+      everywhere else, not a new kind of imprecision.
+      Re-evaluated (started/stopped/restarted as needed, without
+      resetting an already-running scroll for the same title) on every
+      track change, on the Scroll Long Titles toggle itself, and on
+      Text Box Width changes - widening or narrowing the window can
+      push a title across the "needs to scroll" threshold either way.
+      Verified in the sandbox: a long title starts scrolling
+      immediately with the correct first window, the window genuinely
+      advances over real time (not just an incrementing counter with
+      no visible effect), re-feeding the identical title mid-scroll
+      doesn't reset its position, a short title shows in full with no
+      scrolling, and turning the setting off immediately shows
+      whatever's currently playing in full instead of a stale
+      truncated window.
 - [ ] Now Playing display follow-ups, both requested (TODO-only, not
       implemented):
       (1) Widen the Fade Interval (Periodic Fade) slider's range -

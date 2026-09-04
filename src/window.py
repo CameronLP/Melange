@@ -110,6 +110,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_text_size = 13.0
         self.now_playing_font_desc = "Sans"
         self.now_playing_width = 28
+        self.now_playing_scroll_long_titles = False
+        self.now_playing_scroll_timer = None
+        self.now_playing_scroll_offset = 0
+        self.now_playing_scroll_title = None
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
@@ -1119,9 +1123,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if info is None:
             self.stop_now_playing_position_timer()
+            self.stop_now_playing_title_scroll()
             return
 
-        self.now_playing_title_label.set_label(info["title"] or "Unknown Title")
+        self.update_now_playing_title(info["title"])
         self.now_playing_artist_label.set_label(info["artist"])
 
         self.apply_now_playing_field_visibility()
@@ -1225,6 +1230,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_width = int(value)
         self.apply_now_playing_width()
 
+        # The width change may have pushed the current title across
+        # the "too long to fit" threshold either way - re-evaluate
+        # rather than leaving a scroll running (or not running) against
+        # a now-stale window size.
+        if self.now_playing_info is not None:
+            self.update_now_playing_title(self.now_playing_info["title"])
+
     # max-width-chars, not a literal pixel width - matches how this
     # card was already sized (set_ellipsize + set_max_width_chars),
     # and scales naturally with Text Size/Font rather than fighting
@@ -1237,6 +1249,81 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_time_label
         ):
             label.set_max_width_chars(self.now_playing_width)
+
+    def now_playing_scroll_long_titles_changed(self, enabled):
+
+        self.now_playing_scroll_long_titles = enabled
+
+        if self.now_playing_info is not None:
+            self.update_now_playing_title(self.now_playing_info["title"])
+
+    # Only (re)starts the scroll if the title actually changed from
+    # whatever's currently scrolling - on_now_playing_changed can fire
+    # repeatedly for the same title (a chatty player resending
+    # unrelated property changes), and restarting the animation from
+    # scratch every time would make it visibly stutter/reset instead
+    # of scrolling smoothly.
+    def update_now_playing_title(self, title):
+
+        title = title or "Unknown Title"
+
+        if self.now_playing_scroll_long_titles and len(title) > self.now_playing_width:
+
+            if title != self.now_playing_scroll_title:
+                self.start_now_playing_title_scroll(title)
+
+        else:
+            self.stop_now_playing_title_scroll()
+            self.now_playing_title_label.set_label(title)
+
+    NOW_PLAYING_SCROLL_TICK_MS = 300
+    NOW_PLAYING_SCROLL_SEPARATOR = "   •   "
+
+    # A text-based marquee (rotating which substring is shown) rather
+    # than actually animating pixel position - reuses Text Box Width's
+    # existing character-count sizing as the visible window directly,
+    # instead of needing real Pango/pixel measurement of the label's
+    # rendered width just to know how far there is to scroll. A
+    # reasonable approximation given this card's sizing is already
+    # character-count-based everywhere else (proportional fonts mean
+    # a fixed character count isn't a perfectly constant pixel width,
+    # but close enough for a scrolling ticker).
+    def start_now_playing_title_scroll(self, title):
+
+        self.stop_now_playing_title_scroll()
+
+        self.now_playing_scroll_title = title
+        self.now_playing_scroll_offset = 0
+
+        scroll_text = title + self.NOW_PLAYING_SCROLL_SEPARATOR
+        doubled = scroll_text + scroll_text
+
+        def tick():
+
+            n = len(scroll_text)
+            offset = self.now_playing_scroll_offset % n
+
+            self.now_playing_title_label.set_label(
+                doubled[offset:offset + self.now_playing_width]
+            )
+
+            self.now_playing_scroll_offset += 1
+
+            return True
+
+        tick()
+
+        self.now_playing_scroll_timer = GLib.timeout_add(
+            self.NOW_PLAYING_SCROLL_TICK_MS, tick
+        )
+
+    def stop_now_playing_title_scroll(self):
+
+        if self.now_playing_scroll_timer:
+            GLib.source_remove(self.now_playing_scroll_timer)
+            self.now_playing_scroll_timer = None
+
+        self.now_playing_scroll_title = None
 
     NOW_PLAYING_FADE_TICK_MS = 16
 
@@ -2327,6 +2414,14 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="now_playing_width_scale"
         )
 
+    def build_now_playing_scroll_long_titles_control(self):
+
+        return self.build_toggle_row(
+            "Scroll Long Titles",
+            False,
+            self.now_playing_scroll_long_titles_changed
+        )
+
     def build_now_playing_text_color_control(self):
 
         row = Adw.ActionRow(title="Text Color")
@@ -2620,6 +2715,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_periodic_fade_seconds_control())
         now_playing_group.add(self.build_now_playing_font_control())
         now_playing_group.add(self.build_now_playing_width_control())
+        now_playing_group.add(self.build_now_playing_scroll_long_titles_control())
         now_playing_group.add(self.build_now_playing_text_size_control())
         now_playing_group.add(self.build_now_playing_text_color_control())
 
