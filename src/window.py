@@ -37,10 +37,15 @@ from melange.mirror_window import MirrorWindow
 from melange.aux_window import AuxVisualizerWindow
 from melange.now_playing import NowPlayingWatcher
 
+# key -> (halign, valign) - "top-*"/"bottom-*" pick valign, the second
+# word picks halign, same convention as the label text.
 NOW_PLAYING_PLACEMENTS = {
-    "bottom-left": Gtk.Align.START,
-    "bottom-center": Gtk.Align.CENTER,
-    "bottom-right": Gtk.Align.END,
+    "top-left": (Gtk.Align.START, Gtk.Align.START),
+    "top-center": (Gtk.Align.CENTER, Gtk.Align.START),
+    "top-right": (Gtk.Align.END, Gtk.Align.START),
+    "bottom-left": (Gtk.Align.START, Gtk.Align.END),
+    "bottom-center": (Gtk.Align.CENTER, Gtk.Align.END),
+    "bottom-right": (Gtk.Align.END, Gtk.Align.END),
 }
 
 # kind -> the win.show-* stateful action toggling that aux window,
@@ -93,6 +98,17 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_placement = "bottom-left"
         self.now_playing_info = None
         self.now_playing_art_token = 0
+        self.now_playing_source = None
+        self.now_playing_players = {}
+        self.now_playing_show_title = True
+        self.now_playing_show_artist = True
+        self.now_playing_show_artwork = True
+        self.now_playing_show_time = False
+        self.now_playing_show_background = True
+        self.now_playing_text_size = 13.0
+        self.now_playing_text_color = Gdk.RGBA()
+        self.now_playing_text_color.parse("#ffffff")
+        self.now_playing_position_timer = None
         self.toolbar_hide_delay = 3
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
@@ -189,8 +205,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
         self.now_playing_box.add_css_class("now-playing-card")
         self.now_playing_box.set_visible(False)
-        self.now_playing_box.set_valign(Gtk.Align.END)
-        self.now_playing_box.set_margin_bottom(12)
 
         self.now_playing_art = Gtk.Picture()
         self.now_playing_art.add_css_class("now-playing-art")
@@ -217,9 +231,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_artist_label.set_max_width_chars(28)
         now_playing_text.append(self.now_playing_artist_label)
 
+        self.now_playing_time_label = Gtk.Label(xalign=0.0)
+        self.now_playing_time_label.add_css_class("now-playing-artist")
+        self.now_playing_time_label.set_visible(False)
+        now_playing_text.append(self.now_playing_time_label)
+
         self.now_playing_box.append(now_playing_text)
 
         self.apply_now_playing_placement()
+        self.apply_now_playing_text_style()
 
         webview_overlay.add_overlay(self.now_playing_box)
 
@@ -229,7 +249,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         # on_now_playing_changed/update_now_playing_visibility), so
         # toggling the setting on doesn't need to (re)establish the
         # D-Bus subscription from scratch.
-        self.now_playing_watcher = NowPlayingWatcher(self.on_now_playing_changed)
+        self.now_playing_watcher = NowPlayingWatcher(
+            self.on_now_playing_changed,
+            self.on_now_playing_players_changed
+        )
 
         self.content_box.append(
             webview_overlay
@@ -935,25 +958,190 @@ class MelangeWindow(Adw.ApplicationWindow):
     # the feature is currently enabled - keeping self.now_playing_info
     # up to date unconditionally means flipping Enabled back on
     # doesn't need to wait for the next track change to show anything.
+    # Shown for both Playing and Paused (not just Playing) - requested,
+    # since pausing to e.g. answer the door shouldn't make the overlay
+    # vanish and reappear.
     def on_now_playing_changed(self, info):
 
         self.now_playing_info = info
         self.update_now_playing_visibility()
 
         if info is None:
+            self.stop_now_playing_position_timer()
             return
 
         self.now_playing_title_label.set_label(info["title"] or "Unknown Title")
         self.now_playing_artist_label.set_label(info["artist"])
-        self.now_playing_artist_label.set_visible(bool(info["artist"]))
 
+        self.apply_now_playing_field_visibility()
         self.load_now_playing_art(info["art_url"])
+        self.restart_now_playing_position_timer()
+
+    # {bus_name: display name} for every currently known MPRIS player -
+    # feeds the Source Adw.ComboRow (built once the dialog opens, kept
+    # in sync afterwards by rebuilding its model here on every change)
+    # rather than it being a fixed snapshot from whenever Preferences
+    # happened to first be built.
+    def on_now_playing_players_changed(self, identities):
+
+        self.now_playing_players = identities
+
+        if hasattr(self, "now_playing_source_row"):
+            self.rebuild_now_playing_source_model()
 
     def update_now_playing_visibility(self):
 
         self.now_playing_box.set_visible(
             self.now_playing_enabled and self.now_playing_info is not None
         )
+
+    # One label/widget per optional field, each independently toggled
+    # by its own Preferences switch and (title/artist/art) also hidden
+    # if the current track simply doesn't have that data - "Show
+    # Artist" being on doesn't mean showing an empty line when a
+    # track has no artist tag.
+    def apply_now_playing_field_visibility(self):
+
+        info = self.now_playing_info
+
+        if info is None:
+            return
+
+        self.now_playing_title_label.set_visible(
+            self.now_playing_show_title and bool(info["title"])
+        )
+
+        self.now_playing_artist_label.set_visible(
+            self.now_playing_show_artist and bool(info["artist"])
+        )
+
+    def now_playing_show_title_changed(self, enabled):
+
+        self.now_playing_show_title = enabled
+        self.apply_now_playing_field_visibility()
+
+    def now_playing_show_artist_changed(self, enabled):
+
+        self.now_playing_show_artist = enabled
+        self.apply_now_playing_field_visibility()
+
+    def now_playing_show_artwork_changed(self, enabled):
+
+        self.now_playing_show_artwork = enabled
+
+        if self.now_playing_info is not None:
+            self.load_now_playing_art(self.now_playing_info["art_url"])
+
+    def now_playing_show_background_changed(self, enabled):
+
+        self.now_playing_show_background = enabled
+
+        if enabled:
+            self.now_playing_box.add_css_class("now-playing-card")
+        else:
+            self.now_playing_box.remove_css_class("now-playing-card")
+
+    def now_playing_show_time_changed(self, enabled):
+
+        self.now_playing_show_time = enabled
+        self.restart_now_playing_position_timer()
+
+    def now_playing_text_size_changed(self, value):
+
+        self.now_playing_text_size = value
+        self.apply_now_playing_text_style()
+
+    def now_playing_text_color_changed(self, rgba):
+
+        self.now_playing_text_color = rgba
+        self.apply_now_playing_text_style()
+
+    # Title/artist/time all share one size+color setting rather than
+    # three independent ones - set via Pango attributes directly
+    # (Pango.AttrSize.new_absolute for real pixels, not points scaled
+    # by the display's DPI) rather than injecting per-instance CSS,
+    # since GtkLabel already exposes exactly this as a first-class,
+    # simpler API for "this label, this text run, these attributes".
+    def apply_now_playing_text_style(self):
+
+        attrs = Pango.AttrList()
+
+        attrs.insert(Pango.attr_size_new_absolute(
+            int(self.now_playing_text_size * Pango.SCALE)
+        ))
+
+        color = self.now_playing_text_color
+
+        attrs.insert(Pango.attr_foreground_new(
+            int(color.red * 65535),
+            int(color.green * 65535),
+            int(color.blue * 65535)
+        ))
+
+        for label in (
+            self.now_playing_title_label,
+            self.now_playing_artist_label,
+            self.now_playing_time_label
+        ):
+            label.set_attributes(attrs)
+
+    NOW_PLAYING_POSITION_TICK_MS = 1000
+
+    def restart_now_playing_position_timer(self):
+
+        self.stop_now_playing_position_timer()
+
+        info = self.now_playing_info
+
+        if not (self.now_playing_show_time and info and info["length_us"]):
+            self.now_playing_time_label.set_visible(False)
+            return
+
+        self.update_now_playing_position()
+
+        self.now_playing_position_timer = GLib.timeout_add(
+            self.NOW_PLAYING_POSITION_TICK_MS,
+            self.update_now_playing_position
+        )
+
+    def stop_now_playing_position_timer(self):
+
+        if self.now_playing_position_timer:
+            GLib.source_remove(self.now_playing_position_timer)
+            self.now_playing_position_timer = None
+
+    # A fresh Properties.Get every tick (rather than interpolating
+    # locally between rarer fetches) - simpler, and this is a once-a-
+    # second local D-Bus round trip, cheap enough not to bother
+    # optimizing away.
+    def update_now_playing_position(self):
+
+        info = self.now_playing_info
+
+        if info is None:
+            self.now_playing_time_label.set_visible(False)
+            return False
+
+        position_us = self.now_playing_watcher.get_position_us(info["bus_name"])
+
+        if position_us is None:
+            self.now_playing_time_label.set_visible(False)
+            return False
+
+        self.now_playing_time_label.set_label(
+            f"{self.format_now_playing_time(position_us)} / "
+            f"{self.format_now_playing_time(info['length_us'])}"
+        )
+        self.now_playing_time_label.set_visible(True)
+
+        return True
+
+    def format_now_playing_time(self, microseconds):
+
+        total_seconds = max(0, int(microseconds // 1_000_000))
+        minutes, seconds = divmod(total_seconds, 60)
+
+        return f"{minutes}:{seconds:02d}"
 
     # Guards against a slow/late art fetch for a track that's since
     # been skipped past clobbering whatever's already showing - each
@@ -964,13 +1152,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_art_token += 1
         token = self.now_playing_art_token
 
-        if not art_url:
+        if not art_url or not self.now_playing_show_artwork:
             self.now_playing_art.set_visible(False)
             return
 
         def on_loaded(source, result):
 
             if token != self.now_playing_art_token:
+                return
+
+            if not self.now_playing_show_artwork:
                 return
 
             try:
@@ -1000,24 +1191,67 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_enabled = enabled
         self.update_now_playing_visibility()
 
+    # Top margin is bigger than the others (56px vs 12) on a "top-*"
+    # placement specifically - the header bar floats over this same
+    # content area (see toolbar_view.set_extend_content_to_top_edge),
+    # so a plain 12px top margin would sit right behind/under the
+    # hamburger menu whenever the header's actually visible. 56px is
+    # an approximation of a typical header bar height, not measured
+    # against a real display in this environment - the header still
+    # auto-hides on its own after Toolbar Hide Delay regardless.
     def apply_now_playing_placement(self):
 
-        self.now_playing_box.set_halign(
-            NOW_PLAYING_PLACEMENTS[self.now_playing_placement]
-        )
+        halign, valign = NOW_PLAYING_PLACEMENTS[self.now_playing_placement]
+
+        self.now_playing_box.set_halign(halign)
+        self.now_playing_box.set_valign(valign)
+
+        is_top = valign == Gtk.Align.START
+
+        self.now_playing_box.set_margin_top(56 if is_top else 0)
+        self.now_playing_box.set_margin_bottom(0 if is_top else 12)
 
         self.now_playing_box.set_margin_start(
-            12 if self.now_playing_placement == "bottom-left" else 0
+            12 if halign == Gtk.Align.START else 0
         )
 
         self.now_playing_box.set_margin_end(
-            12 if self.now_playing_placement == "bottom-right" else 0
+            12 if halign == Gtk.Align.END else 0
         )
 
     def now_playing_placement_changed(self, placement_key):
 
         self.now_playing_placement = placement_key
         self.apply_now_playing_placement()
+
+    # "Auto" (index 0) maps to None (the watcher's own best-guess
+    # heuristic); every other row is a specific bus name. Rebuilt
+    # (rather than just appended to) whenever the known-player set
+    # changes, since a player disappearing needs its row gone too -
+    # see rebuild_now_playing_source_model.
+    def now_playing_source_changed(self, bus_name):
+
+        self.now_playing_source = bus_name
+        self.now_playing_watcher.set_preferred_source(bus_name)
+
+    def rebuild_now_playing_source_model(self):
+
+        row = self.now_playing_source_row
+
+        bus_names = list(self.now_playing_players.keys())
+        labels = ["Auto"] + [self.now_playing_players[n] for n in bus_names]
+
+        row.set_model(Gtk.StringList.new(labels))
+
+        if self.now_playing_source in bus_names:
+            row.set_selected(1 + bus_names.index(self.now_playing_source))
+        else:
+            # The previously-selected source is gone - falls back to
+            # Auto both here and in the watcher itself (NowPlayingWatcher.
+            # _remove_player already does the latter), so the row and
+            # the actual active behavior never disagree with each other.
+            self.now_playing_source = None
+            row.set_selected(0)
 
     # GTK4 dropped the old X11-style "urgency hint" entirely (Wayland
     # deliberately restricts apps from grabbing attention that way -
@@ -1521,11 +1755,32 @@ class MelangeWindow(Adw.ApplicationWindow):
         def format_transparency_opacity(value):
             return "Fully Invisible" if value <= 0 else f"{int(round(value * 100))}% Opaque"
 
+        # Bug: previously only stored the value, never re-applied it -
+        # so dragging this while Transparency Mode was already on did
+        # nothing until the mode was toggled off and back on (the only
+        # other place that ever read self.transparency_opacity into an
+        # actual opacity change). Now applies it live, bypassing (and
+        # cancelling) any in-progress fade so a manual drag always
+        # wins over a stale animate_opacity() timer still chasing
+        # whatever target was in effect when the mode was last toggled.
+        def transparency_opacity_changed(value):
+
+            self.transparency_opacity = value
+
+            if not self.transparency_mode_enabled:
+                return
+
+            if self.opacity_fade_timer:
+                GLib.source_remove(self.opacity_fade_timer)
+                self.opacity_fade_timer = None
+
+            self.toast_overlay.set_opacity(value)
+
         return self.build_slider_row(
             "Opacity Level",
             0.0, 1.0, 0.05, 0.0,
             format_transparency_opacity,
-            lambda value: setattr(self, "transparency_opacity", value),
+            transparency_opacity_changed,
             store_as="transparency_opacity_scale"
         )
 
@@ -1552,6 +1807,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
     NOW_PLAYING_PLACEMENT_LABELS = [
+        ("top-left", "Top Left"),
+        ("top-center", "Top Center"),
+        ("top-right", "Top Right"),
         ("bottom-left", "Bottom Left"),
         ("bottom-center", "Bottom Center"),
         ("bottom-right", "Bottom Right"),
@@ -1577,6 +1835,97 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         self.now_playing_placement_row = row
+
+        return row
+
+    # Starts as just ["Auto"] - rebuild_now_playing_source_model fills
+    # in real players as NowPlayingWatcher discovers them (which may
+    # well be before this row even exists, if one's already running
+    # when Preferences is first opened - on_now_playing_players_changed
+    # checks hasattr(self, "now_playing_source_row") for exactly that
+    # ordering, and this calls the same rebuild once more here so a
+    # dialog opened after that point isn't stuck showing just "Auto").
+    def build_now_playing_source_control(self):
+
+        row = Adw.ComboRow(
+            title="Source",
+            subtitle="Which app to show, when more than one is playing",
+            model=Gtk.StringList.new(["Auto"])
+        )
+
+        self.now_playing_source_row = row
+
+        self.rebuild_now_playing_source_model()
+
+        row.connect(
+            "notify::selected",
+            lambda r, param: self.now_playing_source_changed(
+                None if r.get_selected() == 0
+                else list(self.now_playing_players.keys())[r.get_selected() - 1]
+            )
+        )
+
+        return row
+
+    def build_now_playing_show_title_control(self):
+
+        return self.build_toggle_row(
+            "Show Title", True, self.now_playing_show_title_changed
+        )
+
+    def build_now_playing_show_artist_control(self):
+
+        return self.build_toggle_row(
+            "Show Artist", True, self.now_playing_show_artist_changed
+        )
+
+    def build_now_playing_show_artwork_control(self):
+
+        return self.build_toggle_row(
+            "Show Artwork", True, self.now_playing_show_artwork_changed
+        )
+
+    def build_now_playing_show_time_control(self):
+
+        return self.build_toggle_row(
+            "Show Playback Time", False, self.now_playing_show_time_changed
+        )
+
+    def build_now_playing_show_background_control(self):
+
+        return self.build_toggle_row(
+            "Show Background", True, self.now_playing_show_background_changed
+        )
+
+    def build_now_playing_text_size_control(self):
+
+        def format_text_size(value):
+            return f"{int(value)}px"
+
+        return self.build_slider_row(
+            "Text Size",
+            8.0, 24.0, 1.0, 13.0,
+            format_text_size,
+            self.now_playing_text_size_changed,
+            store_as="now_playing_text_size_scale"
+        )
+
+    def build_now_playing_text_color_control(self):
+
+        row = Adw.ActionRow(title="Text Color")
+
+        button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_rgba(self.now_playing_text_color)
+
+        button.connect(
+            "notify::rgba",
+            lambda b, param: self.now_playing_text_color_changed(b.get_rgba())
+        )
+
+        row.add_suffix(button)
+
+        self.now_playing_text_color_button = button
 
         return row
 
@@ -1839,7 +2188,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         now_playing_group = Adw.PreferencesGroup(title="Now Playing")
         now_playing_group.add(self.build_now_playing_enabled_control())
+        now_playing_group.add(self.build_now_playing_source_control())
         now_playing_group.add(self.build_now_playing_placement_control())
+        now_playing_group.add(self.build_now_playing_show_title_control())
+        now_playing_group.add(self.build_now_playing_show_artist_control())
+        now_playing_group.add(self.build_now_playing_show_artwork_control())
+        now_playing_group.add(self.build_now_playing_show_time_control())
+        now_playing_group.add(self.build_now_playing_show_background_control())
+        now_playing_group.add(self.build_now_playing_text_size_control())
+        now_playing_group.add(self.build_now_playing_text_color_control())
 
         toolbar_group = Adw.PreferencesGroup(
             title="Toolbar",

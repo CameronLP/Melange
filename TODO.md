@@ -229,6 +229,67 @@
       its job (the mock's owned name never reached
       NowPlayingWatcher.players) rather than a bug, but it does mean
       that one code path is unverified beyond static review.
+      Follow-up, all requested in one message ("show when paused?
+      selector of the app? text size and color? background toggle?
+      both artist and title? cover art? audio time?"):
+      - Shows for Paused now too, not just Playing (was hiding on
+        pause, which "answer the door" or similar briefly pausing
+        made look like the feature just stopped working) - Playing
+        still outranks Paused when choosing among several active
+        players, same "most recently transitioned into this tier"
+        logic as before, now with two tiers instead of one.
+      - Source selector: new Adw.ComboRow ("Auto" + one row per
+        currently-known player, by its real MPRIS Identity - e.g.
+        "Firefox" - not the raw bus name) lets a specific app be
+        pinned instead of the automatic Playing-over-Paused/most-
+        recent heuristic. Falls back to Auto on its own (both the
+        watcher's internal state and the row's own selection) if the
+        pinned player disappears, rather than silently showing
+        nothing or erroring. The row's model is rebuilt live as
+        players come and go (NowPlayingWatcher gained a second
+        on_players_changed callback for this) rather than being a
+        snapshot from whenever Preferences happened to first open.
+      - Show Title / Show Artist / Show Artwork / Show Playback Time /
+        Show Background: five independent toggles - each hides its
+        own widget outright, and title/artist/artwork additionally
+        stay hidden if the current track just doesn't have that data
+        even when the toggle is on (an empty artist line, or a broken-
+        image icon for a track with no art, would be worse than
+        nothing).
+      - Text Size (8-24px) and Text Color (Gtk.ColorDialogButton, GTK
+        4.10+'s native color picker) apply to title/artist/time
+        together via Pango attributes set directly on each Gtk.Label
+        (Pango.attr_size_new_absolute + attr_foreground_new) rather
+        than injected CSS - simpler API for "these text runs, these
+        attributes" than standing up a CssProvider for it.
+      - Playback Time ("1:23 / 3:45"): MPRIS's Position property is
+        explicitly NOT meant to be tracked via PropertiesChanged per
+        the spec (players only signal on a real seek, not
+        continuously as it advances), so this is a plain synchronous
+        Properties.Get once a second (NowPlayingWatcher.
+        get_position_us) rather than interpolated locally - simpler,
+        and a once-a-second local D-Bus round trip is cheap enough not
+        to bother optimizing away. Off by default (Show Playback Time
+        unchecked) since not every player/track supports it and it's
+        the one field most likely to just silently not appear.
+      Verified against the same real, live Firefox MPRIS session as
+      before: source model built from the real player's actual
+      Identity, pinning/un-pinning it, all five field toggles, text
+      size+color actually landing in the label's Pango attributes, and
+      the playback-time mechanism running without crashing (its
+      *visibility* depends on whether Position/length are actually
+      available, which varies by track/player, so only "ran cleanly"
+      was asserted there, not "always shows"). Paused-state ranking
+      itself still isn't independently verified beyond static review
+      (same sandbox --own-name limitation as before - and pausing the
+      user's own real, live playback to test it directly was correctly
+      out of bounds).
+      Also added: two more Placement options, Top (Left/Center/Right)
+      alongside the original Bottom three - requested ("should also be
+      able to be played in top too"). Top placements get a larger top
+      margin (56px vs 12) than bottom ones do, since the header bar
+      floats over this same content area - an approximation of a
+      typical header bar height, not measured against a real display.
 - [ ] Per-widget FPS setting for the aux visualizer windows - each
       window kind (VU Meter, Peak Meter, X-Y Scope, Spectrum,
       Spectrogram, Terrain, Waterfall, DVD Bounce, Pipes) should be
@@ -404,6 +465,30 @@
       (the index resolves), the menu's section item labels no longer
       include "Transparency" anywhere, and the action/Preferences
       switch path still works end to end with the menu item gone.
+      Sixth follow-up, a real bug report ("when transparency is first
+      turned on in settings, complete transparent and opacity slider
+      does not help. Toggling it on/off again fixes"): the Opacity
+      Level slider's callback only ever did `setattr(self,
+      "transparency_opacity", value)` - it never re-applied that value
+      to the actual widget while the mode was already on. The *only*
+      code path that ever pushed self.transparency_opacity into a real
+      opacity change was transparency_mode_changed (toggling the mode
+      itself), which is exactly why toggling off/on "fixed" it - that
+      was never a fix, it was the only way the value was ever actually
+      used. Fixed by having the slider's callback apply the change
+      live (self.toast_overlay.set_opacity(value)) whenever the mode
+      is currently enabled, also cancelling any in-progress
+      animate_opacity() fade first - without that, a fade still
+      chasing the *old* target (captured as a local variable when the
+      mode was last toggled on) would keep overwriting the manual
+      drag on its next tick. Verified in the sandbox: enabling at the
+      default (0.0) is still fully invisible as before, but now
+      dragging the slider while already enabled changes the real
+      opacity immediately (previously a no-op), repeated drags all
+      apply, dragging while disabled only stores the value without
+      touching opacity, and re-enabling then picks up whatever was
+      last stored - covering the original bug report plus every
+      adjacent case that fix could have broken.
 - [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
       given its own independent Beat Rotation switch (previously
       bundled under the same "React to Beats" toggle as the pipe-spawn
