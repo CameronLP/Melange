@@ -93,6 +93,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_placement = "bottom-left"
         self.now_playing_info = None
         self.now_playing_art_token = 0
+        self.toolbar_hide_delay = 3
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
@@ -792,10 +793,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.mouse_over_toolbar = False
 
-        self.hide_timer = GLib.timeout_add_seconds(
-            3,
-            self.hide_toolbar
-        )
+        self.schedule_toolbar_hide()
 
 
     # WebKit re-synthesizes a "motion" event at the cursor's last
@@ -832,11 +830,28 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.toolbar_view.set_reveal_top_bars(True)
         self.set_nav_arrows_visible(True)
 
+        self.schedule_toolbar_hide()
+
+    # Shared by reveal_toolbar and toolbar_leave - also fixes a latent
+    # bug toolbar_leave used to have on its own (assigned a new
+    # hide_timer without cancelling whatever it was already holding,
+    # e.g. if the mouse briefly re-entered and left the toolbar before
+    # the first timer fired - now always cancelled first, same as
+    # everywhere else in this file that reschedules a GLib timer).
+    # toolbar_hide_delay <= 0 ("Never") means don't schedule at all -
+    # reveal_toolbar's own set_reveal_top_bars(True) above is then the
+    # only thing keeping it visible, which is exactly "stays visible".
+    def schedule_toolbar_hide(self):
+
         if self.hide_timer:
             GLib.source_remove(self.hide_timer)
+            self.hide_timer = None
+
+        if self.toolbar_hide_delay <= 0:
+            return
 
         self.hide_timer = GLib.timeout_add_seconds(
-            3,
+            int(self.toolbar_hide_delay),
             self.hide_toolbar
         )
 
@@ -1565,6 +1580,30 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return row
 
+    def build_toolbar_hide_delay_control(self):
+
+        def format_toolbar_hide_delay(value):
+            return "Never" if value <= 0 else f"{int(value)}s"
+
+        def toolbar_hide_delay_changed(value):
+            self.toolbar_hide_delay = value
+            # Re-arms immediately against the new delay rather than
+            # waiting for the next mouse move/toolbar leave - changing
+            # the setting while the toolbar happens to already be
+            # hidden-and-waiting (or newly set to Never while a timer
+            # is still pending) should take effect right away.
+            if self.mouse_over_toolbar:
+                return
+            self.schedule_toolbar_hide()
+
+        return self.build_slider_row(
+            "Hide Delay",
+            0.0, 10.0, 1.0, 3.0,
+            format_toolbar_hide_delay,
+            toolbar_hide_delay_changed,
+            store_as="toolbar_hide_delay_scale"
+        )
+
     def build_toggle_row(self, title, initial, on_change, store_as=None):
 
         row = Adw.SwitchRow(title=title)
@@ -1802,6 +1841,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_enabled_control())
         now_playing_group.add(self.build_now_playing_placement_control())
 
+        toolbar_group = Adw.PreferencesGroup(
+            title="Toolbar",
+            description=(
+                "How soon the header bar and nav arrows auto-hide "
+                "after the mouse stops moving."
+            )
+        )
+        toolbar_group.add(self.build_toolbar_hide_delay_control())
+
         playback_page = Adw.PreferencesPage(
             title="Playback",
             icon_name="media-playback-start-symbolic"
@@ -1815,6 +1863,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             icon_name="preferences-desktop-theme-symbolic"
         )
 
+        appearance_page.add(toolbar_group)
         appearance_page.add(transparency_group)
         appearance_page.add(now_playing_group)
 

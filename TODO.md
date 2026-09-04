@@ -105,6 +105,28 @@
 
 ## In progress / not started
 
+- [ ] Toolbar Hide Delay - requested ("add setting to control how
+      soon top bar hides") - built. New Preferences > Appearance >
+      Toolbar > Hide Delay slider (0-10s, 0 = "Never" i.e. stays
+      visible, default 3s matching the old hardcoded value) controls
+      the same delay that was previously a bare hardcoded `3` in two
+      places (toolbar_leave and reveal_toolbar's own
+      GLib.timeout_add_seconds calls) - both now go through a new
+      shared schedule_toolbar_hide() helper instead of duplicating the
+      timer logic. That consolidation incidentally fixed a latent bug
+      in toolbar_leave: it used to assign a fresh hide_timer without
+      cancelling whatever it already held, so re-entering/leaving the
+      toolbar before the first timer fired could leak a duplicate
+      pending callback - schedule_toolbar_hide always cancels first,
+      same pattern as animate_opacity elsewhere in this file.
+      Changing the slider re-arms immediately against the new delay
+      (unless the mouse is currently over the toolbar, in which case
+      it's left alone until the next real leave) rather than only
+      taking effect on the next toolbar interaction. Verified in the
+      sandbox: reveal_toolbar/toolbar_leave schedule using the
+      configured value, "Never" cancels a pending hide, a new value
+      re-arms immediately, no timer leak on repeated toolbar_leave
+      calls, and the hovering guard.
 - [ ] Hidden Mode - requested, not yet implemented: hides the header
       bar entirely (no title bar, no hamburger menu button visible)
       while still letting the window be dragged around by its content
