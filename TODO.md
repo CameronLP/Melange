@@ -132,6 +132,30 @@
       Verified in the sandbox: the Experimental page's icon exists in
       the real icon theme, and the hamburger menu's actual labels are
       "_Presets…" and "Mini Visualizers".
+      Follow-up ("do mirror windows belong in that menu?" -> "yes,
+      split it" -> "more generally, do mirror windows belong there or
+      in settings?"): split the hamburger menu's shared section in two
+      - Presets…/Lock Preset/Shuffle Presets (preset *behavior*) stay
+      together, Mirror Windows/Mini Visualizers (opening/managing
+      secondary *windows*) got their own section below a divider,
+      since they'd been sitting in one undifferentiated flat block.
+      On menu vs. Preferences: Mirror Windows belongs in the menu, not
+      Preferences - it's an action (create a window, and a live list
+      of currently-open ones that changes at runtime), not a
+      configurable preference the way Transparency Mode/Now Playing
+      are (ongoing state with sub-settings like opacity/placement,
+      which is exactly why those moved TO Preferences-only earlier
+      this session). A Preferences dialog isn't really built for
+      "create a new window" actions or a dynamically-changing open-
+      window list in the first place. Fixed rebuild_mirror_windows_menu's
+      positional section index again (now section 3, not 2, since a
+      new section was inserted before it) - this keeps happening, see
+      the comment there, now spelling out the full history (four
+      breaks so far). Verified in the sandbox via direct GMenu
+      introspection: section 2 is exactly [_Presets…, Lock Preset,
+      Shuffle Presets], section 3 is exactly [Mirror Windows, Mini
+      Visualizers], and open_mirrors_section still resolves correctly
+      through the new index.
 - [ ] Export Settings for backup - requested, not yet designed.
       Settings Profiles (build_profiles_page/profile_fields/
       save_profiles) already save named snapshots of every slider/

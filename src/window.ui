@@ -114,6 +114,16 @@
         <attribute name="action">win.shuffle-preset</attribute>
       </item>
 
+    </section>
+
+
+    <!-- Split from the preset-behavior section above (Presets…/Lock
+         Preset/Shuffle Presets) - conceptually a different kind of
+         thing (opening/managing secondary windows, not preset
+         behavior), which read as one flat undifferentiated block
+         without this. -->
+    <section>
+
       <submenu id="mirror_windows_submenu">
         <attribute name="label" translatable="yes">Mirror Windows</attribute>
 

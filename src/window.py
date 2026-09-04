@@ -318,25 +318,29 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         # Same empty-in-window.ui, populated-here pattern as Audio
         # Source above, for the same reason: the list of open mirror
-        # windows changes at runtime. Section 2 (not 0/1) - theme
-        # selector, then Audio Source, then this section - item 3
-        # within it (Browse Presets, Lock Preset, Shuffle Presets, then
-        # the Mirror Windows submenu), then section 1 *within that
+        # windows changes at runtime. Top-level section 3 (0=theme
+        # selector, 1=Audio Source, 2=Presets/Lock Preset/Shuffle
+        # Presets, 3=this one - Mirror Windows + Mini Visualizers,
+        # split into its own section from the preset-behavior one
+        # above it since they're a different kind of thing - see
+        # window.ui) - item 0 within it (Mirror Windows submenu comes
+        # before Mini Visualizers), then section 1 *within that
         # submenu* (New Mirror Window/Close All Mirrors are its own
         # static section 0 - see window.ui - so rebuilding this one
         # never touches those).
         # NOTE: this index is positional and brittle - it's broken
-        # before (twice: a Transparency Mode item, then collapsing the
-        # old Load Preset item + Presets submenu into one Browse
-        # Presets item, each shifted it) without updating this. Any
-        # future item added to this section before Mirror Windows
+        # before (three times now: a Transparency Mode item, then
+        # collapsing the old Load Preset item + Presets submenu into
+        # one Browse Presets item, then splitting this section in two)
+        # without updating this. Any future item added/removed before
+        # Mirror Windows, or a new section inserted before this one,
         # needs this bumped again.
-        section2 = self.menu_button.get_menu_model().get_item_link(
-            2, Gio.MENU_LINK_SECTION
+        section3 = self.menu_button.get_menu_model().get_item_link(
+            3, Gio.MENU_LINK_SECTION
         )
 
-        mirror_windows_submenu = section2.get_item_link(
-            3, Gio.MENU_LINK_SUBMENU
+        mirror_windows_submenu = section3.get_item_link(
+            0, Gio.MENU_LINK_SUBMENU
         )
 
         self.open_mirrors_section = mirror_windows_submenu.get_item_link(
