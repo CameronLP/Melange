@@ -105,6 +105,30 @@
 
 ## In progress / not started
 
+- [ ] Scroll Long Titles bug - reported (TODO-only, not implemented):
+      "the outline box changes size each scroll movement... the box
+      [should] remain fixed size during scrolling." This is the direct
+      flip side of the previous fix (start_now_playing_title_scroll
+      setting max-width-chars to -1/ellipsize to NONE to stop GTK from
+      clipping the already-correctly-rotating text) - removing that
+      constraint fixed the truncation bug but means the label's own
+      *natural* width now varies tick to tick with whatever substring
+      is currently shown (different characters, different pixel
+      widths), and GtkBox/the card naturally renegotiates its size to
+      that natural width, producing the reported jitter.
+      Real fix isn't "put the width limit back" (that's the bug that
+      was just fixed) - it needs the label's *visible container* to
+      have a genuinely fixed size while its *content* is allowed to be
+      wider than that and get clipped, rather than sizing the
+      container to the content. GTK4's per-widget set_overflow(Gtk.
+      Overflow.HIDDEN) (used nowhere in this codebase yet) is the
+      likely mechanism - clip a fixed-size viewport around the title
+      label instead of relying on ellipsize/max-width-chars at all
+      while scrolling. The fixed size itself would need computing once
+      when a scroll starts (e.g. measure the label at the configured
+      Text Box Width via Pango/measure(), not a live natural-size
+      read that would reintroduce the same jitter) rather than derived
+      from whatever's currently showing.
 - [ ] Toolbar Hide Delay bug - reported (TODO-only, not investigated):
       setting Hide Delay to 0 ("Never") keeps the header bar/nav
       arrows visible as intended, but the mouse *cursor* itself still
