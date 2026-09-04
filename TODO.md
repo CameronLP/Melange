@@ -143,6 +143,39 @@
       scrolling, and turning the setting off immediately shows
       whatever's currently playing in full instead of a stale
       truncated window.
+      Bug fix, reported ("scroll long titles does not work after the
+      font size or box width are changed"): confirmed by direct
+      testing that the underlying rotation (scroll offset advancing,
+      label text genuinely changing every tick) kept working correctly
+      regardless of font size or width changes - the actual bug was
+      that GTK's own ellipsize/max-width-chars on the title label
+      (meant for the *static*, non-scrolling display) was fighting the
+      manually-fed scroll text: once the character-count window's real
+      pixel width exceeded what was actually available (easy at a
+      larger font size, or after apply_now_playing_width unconditionally
+      reset max-width-chars back to a finite value on every width
+      change even while a scroll was already active), ellipsize
+      clipped the already-correctly-rotating text down to a near-
+      static truncated string - looked completely broken even though
+      the content underneath never stopped cycling. Fixed two things:
+      start_now_playing_title_scroll now sets max-width-chars to -1
+      (unlimited) and ellipsize to NONE for the duration of the
+      scroll, restored to the normal static values in stop_now_
+      playing_title_scroll; and apply_now_playing_width now skips the
+      title label specifically while it's actively scrolling, instead
+      of unconditionally resetting all three labels' width limits
+      every time (the real fix for the width-change half of the
+      report - the scroll's own visible-window size already reads
+      self.now_playing_width fresh every tick regardless, so the
+      label's own max-width-chars constraint has no job to do while
+      scrolling is active in the first place). Verified in the
+      sandbox, reproducing both exact scenarios from the report: a
+      width change during an active scroll no longer clobbers the -1/
+      NONE override (confirmed on the actual GtkLabel properties, not
+      just state variables), a font size change likewise leaves it
+      undisturbed, and in both cases the label's actual rendered
+      content is the full, untruncated (no "…") expected-length window
+      on the very next tick.
 - [ ] Now Playing display follow-ups, both requested (TODO-only, not
       implemented):
       (1) Widen the Fade Interval (Periodic Fade) slider's range -

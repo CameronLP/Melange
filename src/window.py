@@ -1244,11 +1244,25 @@ class MelangeWindow(Adw.ApplicationWindow):
     def apply_now_playing_width(self):
 
         for label in (
-            self.now_playing_title_label,
             self.now_playing_artist_label,
             self.now_playing_time_label
         ):
             label.set_max_width_chars(self.now_playing_width)
+
+        # The title label is skipped here while it's actively
+        # scrolling (part of the "scroll long titles does not work
+        # after... box width are changed" bug) - start_now_playing_
+        # title_scroll deliberately overrides it to unlimited/no-
+        # ellipsize, and unconditionally resetting it here every time
+        # the width changes clobbered that override without ever
+        # re-applying it, since update_now_playing_title only restarts
+        # the scroll for an actually-*different* title (a width change
+        # alone doesn't change what's playing). now_playing_width_
+        # changed still re-evaluates scrolling itself right after
+        # calling this, which is what actually needs to react to the
+        # new width (the visible window size is read fresh every tick).
+        if self.now_playing_scroll_title is None:
+            self.now_playing_title_label.set_max_width_chars(self.now_playing_width)
 
     def now_playing_scroll_long_titles_changed(self, enabled):
 
@@ -1295,6 +1309,23 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_scroll_title = title
         self.now_playing_scroll_offset = 0
 
+        # max-width-chars/ellipsize are for the *static* display case
+        # only - while actively scrolling, each tick already feeds the
+        # label exactly the number of characters meant to be shown, so
+        # GTK's own width-based truncation just fights that instead of
+        # helping: confirmed (bug report - "scroll long titles does
+        # not work after the font size or box width are changed") that
+        # the underlying rotation keeps advancing correctly regardless
+        # of font size, but at a large enough font the character-count
+        # window's real pixel width can exceed what's actually
+        # available, and ellipsize then clips the already-correctly-
+        # rotating text down to a near-static truncated string - looks
+        # completely broken even though the content underneath is
+        # still cycling every tick. Restored to the normal static
+        # constraints in stop_now_playing_title_scroll.
+        self.now_playing_title_label.set_max_width_chars(-1)
+        self.now_playing_title_label.set_ellipsize(Pango.EllipsizeMode.NONE)
+
         scroll_text = title + self.NOW_PLAYING_SCROLL_SEPARATOR
         doubled = scroll_text + scroll_text
 
@@ -1322,6 +1353,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         if self.now_playing_scroll_timer:
             GLib.source_remove(self.now_playing_scroll_timer)
             self.now_playing_scroll_timer = None
+
+        if self.now_playing_scroll_title is not None:
+            self.now_playing_title_label.set_max_width_chars(self.now_playing_width)
+            self.now_playing_title_label.set_ellipsize(Pango.EllipsizeMode.END)
 
         self.now_playing_scroll_title = None
 
