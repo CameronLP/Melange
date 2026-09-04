@@ -267,6 +267,19 @@
       faded content) is now the standard/correct GTK4 approach for
       this effect, matching how transparent-window apps are normally
       built.
+      Fifth follow-up, requested ("remove Transparency Mode from the
+      main drop down menu, should only be in settings"): removed the
+      win.transparency-mode item from window.ui's hamburger menu
+      entirely - Preferences > Playback > Transparency Mode's Enabled
+      switch (already bound via action-name) is now the only way to
+      turn it on/off. Fixed rebuild_mirror_windows_menu's positional
+      section2.get_item_link index back down from 5 to 4 (Load Preset,
+      Presets submenu, Lock Preset, Shuffle Presets, then Mirror
+      Windows submenu again - Transparency Mode no longer sits between
+      them). Verified in the sandbox: window construction succeeds
+      (the index resolves), the menu's section item labels no longer
+      include "Transparency" anywhere, and the action/Preferences
+      switch path still works end to end with the menu item gone.
 - [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
       given its own independent Beat Rotation switch (previously
       bundled under the same "React to Beats" toggle as the pipe-spawn

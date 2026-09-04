@@ -240,23 +240,24 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Same empty-in-window.ui, populated-here pattern as Audio
         # Source above, for the same reason: the list of open mirror
         # windows changes at runtime. Section 2 (not 0/1) - theme
-        # selector, then Audio Source, then this section - item 5
+        # selector, then Audio Source, then this section - item 4
         # within it (Load Preset, Presets submenu, Lock Preset,
-        # Shuffle Presets, Transparency Mode, then the Mirror Windows
-        # submenu), then section 1 *within that submenu* (New Mirror
-        # Window/Close All Mirrors are its own static section 0 - see
-        # window.ui - so rebuilding this one never touches those).
+        # Shuffle Presets, then the Mirror Windows submenu), then
+        # section 1 *within that submenu* (New Mirror Window/Close
+        # All Mirrors are its own static section 0 - see window.ui -
+        # so rebuilding this one never touches those).
         # NOTE: this index is positional and brittle - it broke once
-        # already (was 4) when the Transparency Mode item (then called
-        # Hover Transparency) was inserted above the Mirror Windows
-        # submenu without updating this. Any future item added to this
-        # section before Mirror Windows needs this bumped again.
+        # already when a Transparency Mode item was inserted above the
+        # Mirror Windows submenu without updating this (later removed
+        # from this menu entirely - now Preferences-only). Any future
+        # item added to this section before Mirror Windows needs this
+        # bumped again.
         section2 = self.menu_button.get_menu_model().get_item_link(
             2, Gio.MENU_LINK_SECTION
         )
 
         mirror_windows_submenu = section2.get_item_link(
-            5, Gio.MENU_LINK_SUBMENU
+            4, Gio.MENU_LINK_SUBMENU
         )
 
         self.open_mirrors_section = mirror_windows_submenu.get_item_link(

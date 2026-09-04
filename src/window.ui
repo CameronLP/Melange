@@ -134,11 +134,6 @@
         <attribute name="action">win.shuffle-preset</attribute>
       </item>
 
-      <item>
-        <attribute name="label" translatable="yes">Transparency Mode</attribute>
-        <attribute name="action">win.transparency-mode</attribute>
-      </item>
-
       <submenu id="mirror_windows_submenu">
         <attribute name="label" translatable="yes">Mirror Windows</attribute>
 
