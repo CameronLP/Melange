@@ -168,6 +168,25 @@
       that this positional lookup is brittle and will break again if
       another item is inserted above the Mirror Windows submenu
       without updating it.
+      Second follow-up, both requested: (1) inverted the trigger -
+      "the transparency should activate when mouse is moved away", so
+      on_content_hover_enter now animates back to fully opaque (1.0)
+      and on_content_hover_leave animates to hover_transparency_opacity
+      - the opposite of the original hover-to-hide direction, better
+      suited to "stay out of the way while I'm not looking at it,
+      come back when I am" than the original "peek behind it"
+      framing. (2) added an Enabled switch to the same Preferences >
+      Playback > Hover Transparency group, above the two sliders -
+      an Adw.SwitchRow with action-name="win.hover-transparency"
+      rather than a build_toggle_row callback (Adw.SwitchRow
+      implements Gtk.Actionable, same as the Loop/Shuffle Queue
+      Gtk.ToggleButtons elsewhere), so it and the hamburger menu item
+      stay in sync automatically in both directions with no extra
+      state to reconcile - verified directly (a same-shape SwitchRow
+      parented under the real window, since action-name resolution
+      needs an actual ancestor chain to the "win" group) that toggling
+      either one updates the other and self.hover_transparency_enabled
+      correctly.
 - [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
       given its own independent Beat Rotation switch (previously
       bundled under the same "React to Beats" toggle as the pipe-spawn

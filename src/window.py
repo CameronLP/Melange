@@ -796,15 +796,19 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.hide_toolbar
         )
 
+    # Fades OUT while the mouse is away from the content (so it gets
+    # out of the way when you're not looking at it) and back to fully
+    # opaque once the mouse returns to it - the opposite of this
+    # feature's original hover-to-hide behavior, changed on request.
     def on_content_hover_enter(self, controller, x, y):
 
         if self.hover_transparency_enabled:
-            self.animate_opacity(self.hover_transparency_opacity)
+            self.animate_opacity(1.0)
 
     def on_content_hover_leave(self, controller):
 
         if self.hover_transparency_enabled:
-            self.animate_opacity(1.0)
+            self.animate_opacity(self.hover_transparency_opacity)
 
     OPACITY_FADE_TICK_MS = 16
 
@@ -1607,13 +1611,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         beat_group.add(self.build_beat_cooldown_control())
         beat_group.add(self.build_beat_silence_control())
 
-        hover_group = Adw.PreferencesGroup(
-            title="Hover Transparency",
-            description=(
-                "Only takes effect while Hover Transparency (hamburger "
-                "menu) is turned on."
-            )
+        hover_group = Adw.PreferencesGroup(title="Hover Transparency")
+
+        # Bound straight to the action via action-name (Adw.SwitchRow
+        # implements Gtk.Actionable, same as the loop/shuffle queue
+        # Gtk.ToggleButtons elsewhere in this file) rather than a
+        # build_toggle_row callback - stays in sync automatically with
+        # the hamburger menu's own toggle in both directions, with no
+        # extra state to keep them agreeing.
+        hover_enable_row = Adw.SwitchRow(
+            title="Enabled",
+            action_name="win.hover-transparency"
         )
+
+        hover_group.add(hover_enable_row)
         hover_group.add(self.build_hover_opacity_control())
         hover_group.add(self.build_hover_fade_control())
 
