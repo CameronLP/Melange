@@ -432,7 +432,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # green Lissajous trace (self.color's own default, "#33cc55"),
         # not a rainbow one.
         self.color_mode = (
-            "solid" if kind in ("oscilloscope", "vectorscope", "xy") else "rainbow"
+            "solid" if kind in ("oscilloscope", "vectorscope", "xy", "spectrum")
+            else "rainbow"
         )
         self.xy_line_width = 1.0
 
@@ -717,6 +718,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # either way, just a different render function selected at
         # draw time (on_draw).
         self.spectrum_style = "bars"
+        self.spectrum_height_scale = 1.0
 
         # Peak Meter state - deliberately separate from vu_left/right
         # above rather than reusing them: a peak meter tracks the true
@@ -734,6 +736,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.peak_hold_right_time = 0.0
         self.peak_hold_seconds = 1.5
         self.peak_hold_fall_rate = 0.6
+        # Off by default - canvas_foreground_rgba(1.0) (theme-reactive
+        # near-black/near-white) is the existing default look for the
+        # hold marker on VU Meter/Peak Meter/Spectrum, unchanged unless
+        # the user opts into a fixed custom color instead.
+        self.peak_hold_color_custom = False
+        self.peak_hold_color = Gdk.RGBA()
+        self.peak_hold_color.parse("#ffffff")
 
         # Rolling mono buffer feeding the spectrum FFT - audio chunks
         # arrive at whatever size GStreamer hands over (see
@@ -1446,6 +1455,34 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             spectrum_hold_row.append(spectrum_hold_switch)
             box.append(spectrum_hold_row)
 
+            height_scale_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            height_scale_label = Gtk.Label(
+                label="Height Scale", xalign=0, hexpand=True
+            )
+            height_scale_row.append(height_scale_label)
+
+            # Goes past 1.0 on purpose (a gain-style control, not a
+            # 0-100% fit-to-canvas one) - bars/the smooth curve simply
+            # clip at the canvas edge once a level's scaled height
+            # exceeds it, same as an analog meter pinned past its dial.
+            height_scale_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.25, 2.5, 0.05
+            )
+            height_scale_scale.set_value(self.spectrum_height_scale)
+            height_scale_scale.set_size_request(120, -1)
+            height_scale_scale.set_draw_value(False)
+
+            height_scale_scale.connect(
+                "value-changed",
+                self.on_spectrum_height_scale_changed
+            )
+
+            height_scale_row.append(height_scale_scale)
+            box.append(height_scale_row)
+
         if self.kind in ("peak", "spectrum", "vu"):
 
             hold_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1467,6 +1504,40 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             hold_row.append(hold_scale)
             box.append(hold_row)
+
+            hold_color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            hold_color_label = Gtk.Label(
+                label="Peak Hold Color", xalign=0, hexpand=True
+            )
+            hold_color_row.append(hold_color_label)
+
+            hold_color_switch = Gtk.Switch()
+            hold_color_switch.set_active(self.peak_hold_color_custom)
+            hold_color_switch.set_valign(Gtk.Align.CENTER)
+            hold_color_switch.set_tooltip_text(
+                "Off follows the theme (near-black/near-white), same "
+                "as this window's other structural marks."
+            )
+
+            hold_color_switch.connect(
+                "notify::active",
+                self.on_peak_hold_color_custom_changed
+            )
+
+            hold_color_row.append(hold_color_switch)
+
+            hold_color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+            hold_color_button.set_valign(Gtk.Align.CENTER)
+            hold_color_button.set_rgba(self.peak_hold_color)
+
+            hold_color_button.connect(
+                "notify::rgba",
+                self.on_peak_hold_color_changed
+            )
+
+            hold_color_row.append(hold_color_button)
+            box.append(hold_color_row)
 
         if self.kind == "oscilloscope":
 
@@ -2413,9 +2484,23 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.peak_hold_seconds = scale.get_value()
 
+    def on_peak_hold_color_custom_changed(self, switch, param):
+
+        self.peak_hold_color_custom = switch.get_active()
+        self.drawing_area.queue_draw()
+
+    def on_peak_hold_color_changed(self, button, param):
+
+        self.peak_hold_color = button.get_rgba()
+        self.drawing_area.queue_draw()
+
     def on_spectrum_peak_hold_changed(self, switch, param):
 
         self.spectrum_peak_hold = switch.get_active()
+
+    def on_spectrum_height_scale_changed(self, scale):
+
+        self.spectrum_height_scale = scale.get_value()
 
     def on_spectrum_style_changed(self, dropdown, param):
 
@@ -2931,6 +3016,26 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         return (0, 0, 0, alpha)
 
+    # The peak-hold marker line's own color - VU Meter/Peak Meter/
+    # Spectrum all share this (peak_hold_color_custom/peak_hold_color,
+    # see __init__) rather than each having its own, matching how they
+    # already share peak_hold_seconds/peak_hold_fall_rate. Falls back
+    # to the same theme-reactive canvas_foreground_rgba every other
+    # structural mark uses until the user explicitly opts into a fixed
+    # color instead.
+    def peak_hold_draw_color(self, fallback_alpha=1.0):
+
+        if self.peak_hold_color_custom:
+
+            return (
+                self.peak_hold_color.red,
+                self.peak_hold_color.green,
+                self.peak_hold_color.blue,
+                self.peak_hold_color.alpha
+            )
+
+        return self.canvas_foreground_rgba(fallback_alpha)
+
     def set_overlay_controls_visible(self, visible):
 
         buttons = (self.settings_button,)
@@ -3178,7 +3283,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             hold_y = y + bar_height * (1.0 - min(hold_level, 1.0))
 
-            cr.set_source_rgba(*self.canvas_foreground_rgba(1.0))
+            cr.set_source_rgba(*self.peak_hold_draw_color())
             cr.rectangle(x, hold_y - 2, bar_width, 2)
             cr.fill()
 
@@ -3354,7 +3459,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         hold_y = y + h * (1.0 - min(hold_frac, 1.0))
 
-        cr.set_source_rgba(*self.canvas_foreground_rgba(1.0))
+        cr.set_source_rgba(*self.peak_hold_draw_color())
         cr.rectangle(x, hold_y - 1, w, 2)
         cr.fill()
 
@@ -4252,7 +4357,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         for i, level in enumerate(self.bar_levels):
 
             x = margin + i * (bar_width + gap)
-            filled = bar_height * min(level, 1.0)
+            filled = bar_height * min(level, 1.0) * self.spectrum_height_scale
 
             if rainbow:
                 # By position across the frequency axis (a fixed hue
@@ -4267,10 +4372,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             if self.spectrum_peak_hold and i < len(self.spectrum_bar_holds):
 
-                hold_height = bar_height * min(self.spectrum_bar_holds[i], 1.0)
+                hold_height = (
+                    bar_height * min(self.spectrum_bar_holds[i], 1.0)
+                    * self.spectrum_height_scale
+                )
                 hold_y = margin + (bar_height - hold_height)
 
-                cr.set_source_rgba(*self.canvas_foreground_rgba(1.0))
+                cr.set_source_rgba(*self.peak_hold_draw_color())
                 cr.rectangle(x, hold_y - 2, bar_width, 2)
                 cr.fill()
 
@@ -4301,7 +4409,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         for i, level in enumerate(self.bar_levels):
 
             x = margin + inner_width * (i / (bar_count - 1))
-            y = margin + bar_height * (1.0 - min(level, 1.0))
+            y = baseline_y - bar_height * min(level, 1.0) * self.spectrum_height_scale
             points.append((x, y))
 
         cr.move_to(points[0][0], points[0][1])
@@ -4363,9 +4471,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     break
 
                 x = margin + inner_width * (i / (bar_count - 1))
-                y = margin + bar_height * (1.0 - min(hold, 1.0))
+                y = baseline_y - bar_height * min(hold, 1.0) * self.spectrum_height_scale
 
-                cr.set_source_rgba(*self.canvas_foreground_rgba(0.8))
+                cr.set_source_rgba(*self.peak_hold_draw_color(0.8))
                 cr.rectangle(x - 3, y - 1, 6, 2)
                 cr.fill()
 

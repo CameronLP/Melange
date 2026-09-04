@@ -106,7 +106,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_show_time = False
         self.now_playing_show_background = True
         self.now_playing_text_size = 13.0
-        self.now_playing_font_family = "Sans"
+        self.now_playing_font_desc = "Sans"
         self.now_playing_width = 28
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
@@ -1076,9 +1076,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_text_color = rgba
         self.apply_now_playing_text_style()
 
-    def now_playing_font_changed(self, family):
+    def now_playing_font_changed(self, font_desc_string):
 
-        self.now_playing_font_family = family
+        self.now_playing_font_desc = font_desc_string
         self.apply_now_playing_text_style()
 
     def now_playing_width_changed(self, value):
@@ -1099,21 +1099,26 @@ class MelangeWindow(Adw.ApplicationWindow):
         ):
             label.set_max_width_chars(self.now_playing_width)
 
-    # Title/artist/time all share one size+color+font setting rather
-    # than three independent sets - set via Pango attributes directly
-    # (Pango.AttrSize.new_absolute for real pixels, not points scaled
-    # by the display's DPI) rather than injecting per-instance CSS,
+    # Title/artist/time all share one size+color+font (family, plus
+    # bold/italic - see build_now_playing_font_control's FACE level)
+    # setting rather than three independent sets - set via Pango
+    # attributes directly rather than injecting per-instance CSS,
     # since GtkLabel already exposes exactly this as a first-class,
     # simpler API for "this label, this text run, these attributes".
+    # font_desc (family + weight/style, no size - Text Size is this
+    # app's own separate control) and the pixel size are combined into
+    # one Pango.FontDescription/AttrFontDesc rather than kept as
+    # separate Family/Size attributes, since that's the only way to
+    # also carry bold/italic (there's no standalone "AttrBold"/
+    # "AttrItalic" the way there is for size/family/foreground).
     def apply_now_playing_text_style(self):
 
         attrs = Pango.AttrList()
 
-        attrs.insert(Pango.attr_size_new_absolute(
-            int(self.now_playing_text_size * Pango.SCALE)
-        ))
+        font_desc = Pango.FontDescription.from_string(self.now_playing_font_desc)
+        font_desc.set_size(int(self.now_playing_text_size * Pango.SCALE))
 
-        attrs.insert(Pango.attr_family_new(self.now_playing_font_family))
+        attrs.insert(Pango.attr_font_desc_new(font_desc))
 
         color = self.now_playing_text_color
 
@@ -1258,13 +1263,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_box.set_margin_top(12 if is_top else 0)
         self.now_playing_box.set_margin_bottom(0 if is_top else 12)
 
-        self.now_playing_box.set_margin_start(
-            12 if halign == Gtk.Align.START else 0
-        )
-
-        self.now_playing_box.set_margin_end(
-            12 if halign == Gtk.Align.END else 0
-        )
+        # Always both, regardless of halign - requested ("when it
+        # reaches the right side, there should be the same gap as
+        # there is on the left"): a wide enough title (especially with
+        # Text Box Width turned up) can make the card's natural size
+        # reach the window's edge on whichever side it's aligned away
+        # from, and that edge had no margin reserved for it at all
+        # before this.
+        self.now_playing_box.set_margin_start(12)
+        self.now_playing_box.set_margin_end(12)
 
     def now_playing_placement_changed(self, placement_key):
 
@@ -1637,6 +1644,17 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.preset_locked = value.get_boolean()
 
+        # Cycling/auto-advance already refused to fire while locked
+        # (next_preset() itself checks preset_locked, and every
+        # auto-cycle/beat/drop trigger routes through it - see
+        # on_webview_debug_message's NAV_NEXT handling) - this just
+        # makes that visible on the controls themselves too, rather
+        # than leaving them interactive while silently having no
+        # effect. Blend Time is included even though it's not
+        # cycling-specific by itself, since it's only ever relevant to
+        # a preset *change* actually happening.
+        self.cycling_group.set_sensitive(not self.preset_locked)
+
         self.show_toast(
             "Preset locked" if self.preset_locked else "Preset unlocked"
         )
@@ -1956,29 +1974,34 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="now_playing_text_size_scale"
         )
 
-    # Level=FAMILY restricts the native GTK4 font picker to just
-    # choosing a typeface - style/size are handled by this app's own
-    # Text Size slider (and the current design has no separate bold/
-    # italic control), so a full font-with-size-and-style dialog would
-    # just be a confusing second place some of those same things could
-    # be set from.
+    # Level=FACE restricts the native GTK4 font picker to choosing a
+    # typeface plus its style (Regular/Bold/Italic/Bold Italic, per
+    # request) but not a point size - that's this app's own separate
+    # Text Size slider, so a full font-with-size dialog would just be
+    # a confusing second place to set the same thing from. The size
+    # FontDialogButton reports is stripped before storing (unset_
+    # fields(Pango.FontMask.SIZE)) so apply_now_playing_text_style's
+    # own size always wins regardless of whatever this dialog's own
+    # default/leftover size field happens to be.
     def build_now_playing_font_control(self):
 
         row = Adw.ActionRow(title="Font")
 
         button = Gtk.FontDialogButton(dialog=Gtk.FontDialog())
-        button.set_level(Gtk.FontLevel.FAMILY)
+        button.set_level(Gtk.FontLevel.FACE)
         button.set_valign(Gtk.Align.CENTER)
 
-        font_desc = Pango.FontDescription.from_string(self.now_playing_font_family)
-        button.set_font_desc(font_desc)
-
-        button.connect(
-            "notify::font-desc",
-            lambda b, param: self.now_playing_font_changed(
-                b.get_font_desc().get_family()
-            )
+        button.set_font_desc(
+            Pango.FontDescription.from_string(self.now_playing_font_desc)
         )
+
+        def on_font_changed(b, param):
+
+            desc = b.get_font_desc()
+            desc.unset_fields(Pango.FontMask.SIZE)
+            self.now_playing_font_changed(desc.to_string())
+
+        button.connect("notify::font-desc", on_font_changed)
 
         row.add_suffix(button)
 
@@ -1993,7 +2016,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.build_slider_row(
             "Text Box Width",
-            10.0, 80.0, 1.0, 28.0,
+            10.0, 200.0, 2.0, 28.0,
             format_width,
             self.now_playing_width_changed,
             store_as="now_playing_width_scale"
@@ -2241,6 +2264,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         cycling_group.add(self.build_cycle_jitter_control())
         cycling_group.add(self.build_blend_time_control())
 
+        self.cycling_group = cycling_group
+
         beat_group = Adw.PreferencesGroup(
             title="Beat Detection",
             description=(
@@ -2308,7 +2333,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         appearance_page = Adw.PreferencesPage(
             title="Appearance",
-            icon_name="preferences-desktop-theme-symbolic"
+            icon_name="preferences-desktop-appearance-symbolic"
         )
 
         appearance_page.add(toolbar_group)
@@ -2693,16 +2718,17 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Moved here from the hamburger menu on request ("Load preset
         # should be in the preset tab") - same win.load-preset action,
         # just reachable from inside the browser now rather than the
-        # menu. prepend() puts it above the search entry
-        # build_preset_search_list already added as that box's first
-        # child.
+        # menu. At the bottom (append, not prepend) rather than above
+        # the search entry - requested as a "better spot", out of the
+        # way of the tab's main job (browsing/searching the existing
+        # list) rather than competing with it for top-of-tab attention.
         load_button = Gtk.Button(
             label="Load Preset…",
             action_name="win.load-preset"
         )
         load_button.set_halign(Gtk.Align.END)
 
-        box.prepend(load_button)
+        box.append(load_button)
 
         return box
 

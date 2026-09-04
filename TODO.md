@@ -105,6 +105,39 @@
 
 ## In progress / not started
 
+- [ ] Spectrogram efficiency - requested ("make spectrogram more
+      efficient, it causes lag"), not yet investigated. Likely
+      candidates given how every aux window's audio path works: its
+      own independent FFT per draw (see the "share FFT" idea already
+      logged above) and/or update_spectrogram_columns' column-history
+      bookkeeping - neither confirmed as the actual cause yet, no
+      profiling done.
+- [x] Peak Hold Color - requested ("customize peak hold color too").
+      New shared setting (peak_hold_color_custom/peak_hold_color,
+      alongside the existing shared peak_hold_seconds/
+      peak_hold_fall_rate) for VU Meter/Peak Meter/Spectrum's hold
+      marker line, off by default (follows the theme-reactive
+      canvas_foreground_rgba, unchanged from before) with a switch +
+      Gtk.ColorDialogButton in the settings popover to opt into a
+      fixed color instead. Verified by actually rendering a Spectrum
+      surface to a real Cairo ImageSurface with a custom color set and
+      scanning the pixel buffer for it - the picked color genuinely
+      appears in the output, not just stored in state.
+- [x] Spectrum defaults to Solid color - requested ("spectrum miniviz
+      should be solid color default"). Added "spectrum" to the same
+      kind-list that already defaulted Oscilloscope/Vector Scope/X-Y
+      Scope to solid instead of rainbow.
+- [x] Spectrum Height Scale - requested ("also height scaling for
+      spectrum"). New settings-popover slider (0.25-2.5x, default
+      1.0) multiplying the effective bar/curve height in both
+      render_spectrum_bars and render_spectrum_smooth (and their
+      peak-hold markers, so a hold cap stays visually attached to the
+      bar it's capping) - a gain-style control, not a 0-100%-of-canvas
+      one, so values above 1.0 let bars/the curve clip at the canvas
+      edge rather than being capped at "fits the available height".
+      Verified by rendering to a real Cairo surface at three different
+      scales and confirming the drawn-pixel count actually changes
+      (not just that the state variable changed).
 - [x] Simplified the hamburger menu's preset entries - requested ("I
       do not want presets submenu. Just open the presets window, and
       stuff is divided by tabs. simpler") plus a related request
@@ -124,6 +157,11 @@
       [Browse Presets…, Lock Preset, Shuffle Presets, Mirror Windows,
       Visualizer Windows], win.load-preset still works as an action,
       and the Load Preset button is the Presets tab's first child.
+      Follow-up, requested ("move the load preset button to a better
+      spot? maybe the bottom?"): moved from above the search entry
+      (prepend) to below the list (append) - out of the way of the
+      tab's main job (browsing/searching) instead of competing with it
+      for top-of-tab attention.
 - [ ] Reference for a possible Butterchurn -> MilkDrop transition,
       requested to be recorded ("record this as a possible exam[ple]
       to look at"): https://silkdrop.vercel.app/ - not yet looked into
@@ -442,6 +480,54 @@
       already sized) rather than a literal pixel width, so it scales
       naturally with Text Size/Font instead of fighting them. Verified
       in the sandbox that it applies to all three labels together.
+      Follow-up, both requested: widened the range further (10-80 ->
+      10-200); and gave the card equal 12px margins on both left and
+      right regardless of placement/halign ("when it reaches the right
+      side, there should be the same gap as there is on the left") -
+      previously only the side it was aligned *away* from had zero
+      margin reserved, which was fine until a wide enough title (Text
+      Box Width turned up, or just a long song title) made the card's
+      natural size reach that edge with nothing to stop it.
+      Second follow-up, requested ("change font/bold/italic in the
+      overlay text"): the Font control's Gtk.FontDialogButton now uses
+      Gtk.FontLevel.FACE instead of FAMILY - adds style (Regular/
+      Bold/Italic/Bold Italic) selection alongside the typeface, still
+      without a size field (Text Size remains the one place that's
+      set). self.now_playing_font_family (a bare family string)
+      became self.now_playing_font_desc (a full Pango font description
+      string sans size, e.g. "Sans Bold Italic") - apply_now_playing_
+      text_style now builds one combined Pango.AttrFontDesc (family +
+      weight/style + this app's own pixel size, merged) instead of
+      separate AttrFamily/AttrSize attributes, since there's no
+      standalone "AttrBold"/"AttrItalic" attribute type - bold/italic
+      only exist as part of a full FontDescription. Verified in the
+      sandbox: the font button reports FontLevel.FACE, picking "Serif
+      Bold Italic" produces a font-desc attribute containing all three
+      words, and the Text Size slider still overrides whatever size
+      the font dialog itself last had.
+- [x] Fixed the Appearance page's tab icon - real bug, not just a
+      request: it used "preferences-desktop-theme-symbolic", which
+      does not exist in this runtime's icon theme (confirmed via
+      Gtk.IconTheme.get_icon_names() - only the non-symbolic
+      "preferences-desktop-theme" does), so it was silently falling
+      back to some generic/inconsistent icon instead of a real
+      symbolic one. Changed to "preferences-desktop-appearance-
+      symbolic", which does exist and fits the page's actual name
+      better besides. Verified the correct icon name is really present
+      in the icon theme in the sandbox.
+- [x] Lock Preset now visibly disables the Cycling preferences group
+      (Cycle Interval/Cycle Interval Jitter/Transition Blend Time) -
+      requested ("if locked preset then disable the cycle intervals
+      and transition, they should not be active if preset is
+      locked"). Auto-cycling already refused to actually advance while
+      locked (next_preset() itself checks preset_locked, and every
+      auto-cycle/beat/drop trigger already routed through it via the
+      NAV_NEXT debug message) - this was a pure UI-affordance gap, not
+      a functional one: the sliders stayed interactive while silently
+      having no effect. lock_preset_changed now also sets
+      self.cycling_group.set_sensitive(not self.preset_locked).
+      Verified in the sandbox: locking/unlocking toggles the group's
+      sensitivity both ways.
 - [ ] Per-widget FPS setting for the aux visualizer windows - each
       window kind (VU Meter, Peak Meter, X-Y Scope, Spectrum,
       Spectrogram, Terrain, Waterfall, DVD Bounce, Pipes) should be
