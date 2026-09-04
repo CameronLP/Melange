@@ -105,6 +105,30 @@
 
 ## In progress / not started
 
+- [ ] Export Settings for backup - requested, not yet designed.
+      Settings Profiles (build_profiles_page/profile_fields/
+      save_profiles) already save named snapshots of every slider/
+      toggle covered by profile_fields, but only to this app's own
+      internal profiles file (load_profiles/save_profiles) - there's
+      no way to get a profile (or the current live settings) out to a
+      user-chosen file the way Load Preset uses a real Gtk.FileDialog.
+      A real "export" would likely reuse profile_fields' existing
+      (key, getter, setter) list to serialize to JSON and a
+      Gtk.FileDialog.save() to pick a destination, with an "import"/
+      Load Settings counterpart handling the reverse - neither
+      attempted here.
+- [ ] Export Playlist for loading later - requested, not yet designed.
+      Same shape of gap as Export Settings: Playlists already save/
+      load internally (save_playlists, build_playlists_dialog,
+      save_playlist_clicked) but only to this app's own internal
+      playlists file, with no way to get one out to a portable file a
+      user could back up, move to another machine, or share. Would
+      need a real Gtk.FileDialog.save()/open() pair (same pattern
+      Load Preset already uses) serializing one playlist's preset-name
+      list to JSON, plus a decision on what happens if an imported
+      playlist references presets this install doesn't have (bundled
+      pack differences, or a preset that was only ever a locally-
+      loaded file elsewhere) - not attempted here.
 - [ ] Spectrogram efficiency - requested ("make spectrogram more
       efficient, it causes lag"), not yet investigated. Likely
       candidates given how every aux window's audio path works: its
