@@ -105,6 +105,20 @@
 
 ## In progress / not started
 
+- [ ] Now Playing text transparency - requested (TODO-only, not
+      implemented). Real gap found while noting this down: the
+      existing Text Color Gtk.ColorDialogButton already lets picking
+      a color with less than full alpha (GTK4's color dialog has an
+      alpha slider by default), but apply_now_playing_text_style
+      currently only reads color.red/green/blue into Pango.
+      attr_foreground_new(r, g, b) - alpha is silently dropped
+      entirely, so picking a translucent color from that dialog today
+      already has zero visible effect. The real fix is probably just
+      also inserting Pango.attr_foreground_alpha_new(int(color.alpha *
+      65535)) alongside the existing foreground attribute - Pango
+      keeps foreground color and its alpha as two separate attribute
+      types, confirmed to exist via introspection earlier this
+      session, not something requiring a new UI control at all.
 - [ ] Setting to auto-scale Now Playing's text bigger in fullscreen -
       requested (TODO-only, not implemented). Would need to react to
       notify::fullscreened (already used elsewhere in window.py for
