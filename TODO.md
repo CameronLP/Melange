@@ -121,19 +121,32 @@
       clear pipes_energy_history, which would have reset Beat
       Rotation/Beat Zoom's own detection state too since they now
       share it.
-- [ ] Settings popover click-outside-to-close, reported not working a
-      second time even after the earlier CAPTURE-phase click-gesture
-      fix - added a second, different safeguard rather than repeat the
-      same approach: closes on the window itself losing active/focus
-      state (notify::is-active), which specifically covers a case the
-      click-gesture fix structurally can't - clicking over on a
-      *different* window (typically the main Melange window) while an
-      aux window's popover is open, since GTK's own popover-autohide
-      grab isn't guaranteed to dismiss across top-level surface
-      boundaries the same way under Wayland's more restrictive input
-      model. Not yet confirmed fixed - this environment still has no
-      way to click a real running popover to verify either safeguard
-      actually resolves the report.
+- [ ] **REVERTED**: the notify::is-active-based popover-dismiss
+      safeguard (see below - was meant to close the settings popover
+      when the window loses focus, e.g. clicking over on a different
+      window) made things *worse*, reported immediately: the settings
+      gear stopped opening the popover at all. Root cause: opening a
+      popover can itself cause a transient is-active=False
+      notification on its own parent window under GTK4/Wayland (a
+      known rough edge, not unique to this code), which meant the
+      handler was popping the popover back down the instant it opened
+      - before it was ever visibly seen, reading as "doesn't open."
+      Backed out entirely (both the notify::is-active connection and
+      its handler) rather than attempt a patched version (e.g. a
+      grace-period delay) in the same breath - a second guess risked
+      shipping a second unverified regression on top of the first,
+      with no way to click-test either one in this environment. The
+      CAPTURE-phase click-gesture fix from before that attempt is
+      still in place and presumably still the only safeguard active;
+      whether it alone is sufficient, or the original "click a
+      different window" report needs a *correctly-implemented*
+      version of the focus-loss idea, is still open.
+- [ ] X-Y Scope's Color Mode now also defaults to Solid rather than
+      Rainbow (matching Oscilloscope and Vector Scope, previously the
+      only two exceptions) - requested; its classic look is understood
+      to be the plain green Lissajous trace (self.color's own default,
+      "#33cc55"), not a rainbow one.
+- [ ] Vector Scope's Color Mode now defaults to Solid rather than
 - [ ] Vector Scope's Color Mode now defaults to Solid rather than
       Rainbow (Oscilloscope was already the one other exception, for a
       different reason - see its own note) - requested; its

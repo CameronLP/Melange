@@ -424,12 +424,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # already flagged as the likely cause of the flat Spectrogram's
         # own reported lag - defaulting Oscilloscope to Solid instead
         # avoids reintroducing that exact class of problem; Rainbow is
-        # still there to opt into. Vector Scope also defaults to Solid,
-        # on request - its persistence-trail cloud reads more clearly
-        # as one coherent shape in a single color than with each dot's
-        # color cycling independently.
+        # still there to opt into. Vector Scope and X-Y Scope also
+        # default to Solid, on request - Vector Scope's persistence-
+        # trail cloud reads more clearly as one coherent shape in a
+        # single color than with each dot's color cycling
+        # independently, and X-Y Scope's classic look is the plain
+        # green Lissajous trace (self.color's own default, "#33cc55"),
+        # not a rainbow one.
         self.color_mode = (
-            "solid" if kind in ("oscilloscope", "vectorscope") else "rainbow"
+            "solid" if kind in ("oscilloscope", "vectorscope", "xy") else "rainbow"
         )
         self.xy_line_width = 1.0
 
@@ -950,19 +953,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.header.add_controller(header_motion)
 
         self.connect("close-request", self.on_close_request)
-
-        # A second, different safeguard for the settings popover on
-        # top of the CAPTURE-phase click gesture above - that one only
-        # ever sees clicks landing *within this same window*, so it
-        # can't catch the case reported as still not working: clicking
-        # over on a *different* window (typically the main Melange
-        # window) while this one's settings popover is open. GTK's own
-        # popover autohide grab is not guaranteed to dismiss across
-        # top-level surface boundaries the same way under Wayland's
-        # more restrictive input model as it might under X11 - closing
-        # explicitly on this window losing active/focus state covers
-        # that case directly instead of relying on it.
-        self.connect("notify::is-active", self.on_window_active_changed)
 
         if self.kind == "dvd":
             self.dvd_timer = GLib.timeout_add(
@@ -2811,11 +2801,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_window_pressed(self, gesture, n_press, x, y):
 
         if self.settings_popover.get_visible():
-            self.settings_popover.popdown()
-
-    def on_window_active_changed(self, window, param):
-
-        if not self.is_active() and self.settings_popover.get_visible():
             self.settings_popover.popdown()
 
     def on_terrain_drag_begin(self, gesture, start_x, start_y):
