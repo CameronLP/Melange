@@ -105,6 +105,54 @@
 
 ## In progress / not started
 
+- [ ] Visualizer creator - requested to be recorded, not designed or
+      scoped at all yet. Unclear what this actually means without
+      more input: a UI for building a new mini-visualizer kind (aux_
+      window.py-style, Cairo-drawn) without hand-writing Python? A
+      MilkDrop/Butterchurn preset editor (equations/shaders) for the
+      main visualizer? Something else entirely? Needs real scoping
+      before any design work starts.
+- [x] Two menu reorganizations, both requested together ("I think
+      there should be a transparency toggle on the main window too,
+      in the hamburger. Transparency should be in the hambrrger on the
+      mirrors too", following on from "should some of the mirror
+      window top bar icons be moved into hamburger menus?"):
+      (1) Transparency Mode is back in the main window's hamburger
+      menu (window-management section, after Immersive Mode) -
+      reverses the earlier "should only be in settings" decision on
+      request. Preferences > Appearance > Transparency Mode still
+      exists too, for the Opacity Level/Fade Speed sliders a menu
+      checkbox can't hold - this is just a quick on/off alongside it.
+      (2) Mirror windows get a real hamburger menu for the first time
+      (previously just direct header buttons, no menu at all) - Match
+      Main Window Size and Find Main Window moved into it (one-off/
+      infrequent actions, following the recommendation given when
+      asked), and Transparency Mode moved into it too rather than
+      staying the direct toggle button it was built as a message ago
+      (explicit request this time, overriding that earlier
+      recommendation to keep it direct). Fullscreen stays a direct
+      header button - the one thing left that's genuinely toggle-
+      style/quick-access, matching the primary window's own header
+      keeping Fullscreen after everything else moved into its menu.
+      Needed two new real Gio.SimpleActions (win.match-primary-size,
+      win.find-main-window) on MirrorWindow, since menu items can only
+      invoke actions, not the arbitrary clicked-signal callbacks the
+      old direct buttons used - match_primary_size_clicked's signature
+      changed from (self, button) to (self, action, param) accordingly
+      (its body never used that first argument either way). Also
+      stored the new menu button as self.menu_button (previously a
+      bare local variable) to match the primary window's own
+      convention and make it reachable for inspection/testing.
+      Verified in the sandbox with a real primary + real mirror
+      window: the primary's menu section is exactly [Mirror Windows,
+      Mini Visualizers, Immersive Mode, Transparency Mode] with Mirror
+      Windows' own positional index still resolving correctly
+      (appending, not inserting, avoided yet another index bump - see
+      that comment's ongoing history); the mirror's own menu is
+      exactly [Match Main Window Size, Find Main Window, Transparency
+      Mode]; Fullscreen remains a direct action-bound button; and all
+      three mirror menu actions actually run when activated (Find Main
+      Window confirmed to genuinely call primary.bring_to_attention()).
 - [x] Transparency Mode on Mirror Windows - asked first ("can it be
       applied to mirrors? should it?"), answered with a recommendation
       (technically easy - mirror_window.py already uses the identical

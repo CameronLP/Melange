@@ -226,6 +226,19 @@
         <attribute name="action">win.immersive-mode</attribute>
       </item>
 
+      <!-- Back in the hamburger menu on request, after previously
+           being made settings-only ("should only be in settings") -
+           Preferences > Appearance > Transparency Mode still exists
+           for the Opacity Level/Fade Speed sliders, this is just a
+           quick on/off toggle alongside the other window-appearance
+           items in this section. Checkable the same way Immersive
+           Mode above is (a plain item pointing at a stateful boolean
+           action). -->
+      <item>
+        <attribute name="label" translatable="yes">Transparency Mode</attribute>
+        <attribute name="action">win.transparency-mode</attribute>
+      </item>
+
     </section>
 
 

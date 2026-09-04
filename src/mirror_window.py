@@ -83,22 +83,15 @@ class MirrorWindow(Adw.ApplicationWindow):
         self.header.add_css_class("melange-header")
         self.header.set_show_title(True)
 
-        resize_button = Gtk.Button(
-            icon_name="zoom-fit-best-symbolic",
-            tooltip_text="Match Main Window Size"
-        )
-
-        resize_button.connect(
-            "clicked",
-            self.match_primary_size_clicked
-        )
-
-        self.header.pack_end(resize_button)
-
         # Same style/behavior as the primary window's own header
         # fullscreen button - reuses this window's existing
         # win.toggle-fullscreen action (see __init__ below), and its
         # icon is kept in sync the same way, via notify::fullscreened.
+        # Kept as its own direct button (unlike Match Size/Find Main
+        # Window below) - a toggle-style, quick-access control worth
+        # seeing/reaching in one click, same reasoning as the primary
+        # window's own header keeping Fullscreen even after moving
+        # everything else into its menu.
         self.fullscreen_button = Gtk.Button(
             icon_name="view-fullscreen-symbolic",
             tooltip_text="Toggle Fullscreen",
@@ -107,40 +100,30 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         self.header.pack_end(self.fullscreen_button)
 
-        # Independent per-mirror Transparency Mode toggle - see the
-        # comment on self.transparency_mode_enabled in __init__ for
-        # why this isn't synced with the primary window's own version
-        # of the same feature. A plain Gtk.ToggleButton bound via
-        # action-name (like the Loop/Shuffle Queue buttons in
-        # window.py) rather than a manual clicked handler - it stays
-        # in sync with the action's own state for free.
-        transparency_button = Gtk.ToggleButton(
-            icon_name="view-conceal-symbolic",
-            tooltip_text="Transparency Mode",
-            action_name="win.transparency-mode"
+        # Match Main Window Size and Find Main Window are one-off,
+        # infrequent actions - moved into this menu (from their own
+        # direct header buttons) on request, once a 4th button
+        # (Transparency) made the header noticeably crowded. Both need
+        # real Gio.SimpleActions now (menu items can only invoke
+        # actions, not arbitrary callbacks) - see their registration
+        # below. Transparency Mode itself went the other way, into
+        # this same menu rather than staying a direct button, matching
+        # the primary window's own Transparency Mode being reachable
+        # from its hamburger menu too - a plain checkable item here
+        # since win.transparency-mode is already a stateful boolean
+        # action.
+        mirror_menu = Gio.Menu()
+        mirror_menu.append("Match Main Window Size", "win.match-primary-size")
+        mirror_menu.append("Find Main Window", "win.find-main-window")
+        mirror_menu.append("Transparency Mode", "win.transparency-mode")
+
+        self.menu_button = Gtk.MenuButton(
+            icon_name="open-menu-symbolic",
+            tooltip_text="Menu",
+            menu_model=mirror_menu
         )
 
-        self.header.pack_end(transparency_button)
-
-        # A guaranteed-reliable alternative to the double-click-to-
-        # focus-primary handlers below - those depend on correctly
-        # disambiguating a double-click from a drag via GTK gesture
-        # arbitration, which has been reported as still not working
-        # even after fixing one real bug in it (see
-        # on_picture_drag_begin/on_picture_pressed), and can't be
-        # tested directly in the environment this was built in. A
-        # plain button click has none of that ambiguity.
-        find_primary_button = Gtk.Button(
-            icon_name="focus-windows-symbolic",
-            tooltip_text="Find Main Window"
-        )
-
-        find_primary_button.connect(
-            "clicked",
-            lambda button: self.primary.bring_to_attention()
-        )
-
-        self.header.pack_end(find_primary_button)
+        self.header.pack_end(self.menu_button)
 
         self.toolbar_view.add_top_bar(self.header)
 
@@ -255,6 +238,24 @@ class MirrorWindow(Adw.ApplicationWindow):
         )
 
         self.add_action(transparency_mode_action)
+
+        match_primary_size_action = Gio.SimpleAction.new("match-primary-size", None)
+
+        match_primary_size_action.connect(
+            "activate",
+            self.match_primary_size_clicked
+        )
+
+        self.add_action(match_primary_size_action)
+
+        find_main_window_action = Gio.SimpleAction.new("find-main-window", None)
+
+        find_main_window_action.connect(
+            "activate",
+            lambda action, param: self.primary.bring_to_attention()
+        )
+
+        self.add_action(find_main_window_action)
 
         escape_controller = Gtk.EventControllerKey()
 
@@ -407,7 +408,7 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         self.set_title(title)
 
-    def match_primary_size_clicked(self, button):
+    def match_primary_size_clicked(self, action, param):
 
         self.set_default_size(
             self.primary.get_width(),
