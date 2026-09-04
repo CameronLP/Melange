@@ -552,6 +552,71 @@
 
 ### Bigger feature ideas
 
+- [ ] Reconsider the aux visualizer windows' architectural strategy,
+      requested - specifically: should they split out into a separate
+      project, and independent of that, being able to run them
+      *without the main Butterchurn visualizer running at all*. Not a
+      small ask - real coupling exists today between
+      AuxVisualizerWindow (aux_window.py) and MelangeWindow
+      (window.py) that any answer here has to reckon with:
+      - `AuxVisualizerWindow.__init__(self, primary, kind, **kwargs)`
+        takes the main window as `primary` and constructs itself with
+        `application=primary.get_application()` - it needs a live
+        Adw.Application (currently always MelangeWindow's own) to
+        exist at all, and `on_close_request` calls back into
+        `primary.aux_window_closed(...)` to keep the main window's
+        own tracking dict in sync.
+      - Aux windows have **no audio capture of their own** - they're
+        purely passive `push_audio(left, right)` receivers. The one
+        real GStreamer capture pipeline (`start_system_audio`/
+        `on_audio_sample` in window.py) lives entirely inside
+        MelangeWindow and feeds both the main webview
+        (`send_audio_to_webview`) and every open aux window
+        (`forward_audio_to_aux_windows`) from the same chunks - there
+        is no path today where audio capture runs without the main
+        window (and its webview/Butterchurn) existing first.
+      - Every aux window is opened via a `win.show-<kind>`
+        `Gio.SimpleAction` registered *on MelangeWindow itself*
+        (`AUX_WINDOW_ACTIONS`), tracked in MelangeWindow's own
+        `self.aux_windows` dict, and MelangeWindow's own
+        `on_close_request` cascades to close every open aux (and
+        mirror) window - closing the main window currently means
+        closing everything, by design.
+      - `main.py`'s `do_activate()` unconditionally creates a
+        MelangeWindow (which builds the full WebKit webview and starts
+        audio capture as part of its own construction) - there's no
+        alternate entry point or flag that skips the webview/Butterchurn
+        and starts, say, just audio capture plus an aux-window shell.
+
+      A few candidate directions, roughly in order of how much they'd
+      actually change today's structure:
+      1. Extract the audio-capture pipeline out of MelangeWindow into
+         its own reusable component (an `audio_source.py`-style
+         module/class) - this is close to a prerequisite for either of
+         the two directions below, since the capture logic is
+         currently baked directly into MelangeWindow's own methods
+         with no seam to reuse it independently.
+      2. Stay one app/repo, but make the main Butterchurn webview
+         *optional* at startup - a launch flag or a first-run choice
+         between "full visualizer" and "widgets only," where widgets-
+         only skips webview.py's WebView entirely, starts just the
+         (now-extracted) audio capture, and shows an aux-window
+         coordinator shell instead of the main canvas. Directly answers
+         "run them without Butterchurn running" while keeping
+         everything in one codebase - probably pairs well with the
+         separately-logged "coordinator window" idea above, which
+         already assumed one shared app.
+      3. A genuinely separate project/Flatpak for the aux windows -
+         cleanest separation architecturally, but means the audio-
+         capture logic and any shared visual/settings-popover
+         infrastructure would need to be duplicated or factored into a
+         shared library rather than just living in one repo - real
+         ongoing maintenance cost (two release cycles, two Flatpak
+         manifests) for a cleaner boundary. Worth weighing against #2
+         actually solving the stated need (run without Butterchurn)
+         without that cost.
+      No direction chosen yet - this is a planning note, not a
+      decision.
 - [ ] A fractal Butterchurn preset - requested, not yet built. A
       native Butterchurn (`.json`) preset (Butterchurn presets are
       HLSL/GLSL-ish shader expressions under the hood, per-pixel/per-
