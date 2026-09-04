@@ -105,6 +105,34 @@
 
 ## In progress / not started
 
+- [ ] Hover Transparency built for the main window (win.hover-
+      transparency, a hamburger menu toggle, off by default) -
+      requested ("is it possible to make a main window transparency
+      mode - full transparency when mouse hovers over"). Confirmed
+      feasible with no prior groundwork needed: GTK4 toplevels are
+      already alpha-capable under a compositing Wayland/X11 setup with
+      no RGBA-visual setup required (unlike GTK3), so `self.
+      set_opacity(0.0)`/`(1.0)` on enter/leave is enough - no CSS or
+      WebKit background changes needed for a straight 0/1 toggle
+      (would matter for a partial/dimmed value, since the webview's
+      own `background:black` CSS - index.html - would still show
+      through a semi-transparent window; not relevant at full 0/1).
+      Deliberately scoped to just the content area (a new
+      Gtk.EventControllerMotion, CAPTURE phase for the same WebKit-
+      hit-testing reason the existing toolbar-auto-hide motion
+      controller already needs it, added to webview_overlay) rather
+      than the whole window the way that existing motion controller
+      is - the header bar (and its hamburger menu, the only way to
+      turn this back off) needs to stay reachable on its own terms;
+      including it would mean moving the mouse toward the menu to
+      disable the mode triggers the same transparency, forcing a
+      blind click. Not yet confirmed against a real display - this
+      environment has no way to visually verify hover-triggered window
+      transparency, only that it builds cleanly (flatpak-builder's own
+      window.ui template compilation, which fails loudly on a bad
+      action/widget reference) and the action registers via the same
+      stateful-toggle pattern already used elsewhere (Lock Preset/
+      Shuffle Presets).
 - [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
       given its own independent Beat Rotation switch (previously
       bundled under the same "React to Beats" toggle as the pipe-spawn

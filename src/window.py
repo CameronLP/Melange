@@ -78,6 +78,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.last_mouse_pos = None
         self.mouse_over_toolbar = False
         self.last_scroll_time = 0.0
+        self.hover_transparency_enabled = False
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
@@ -163,6 +164,25 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.playlist_queue_button.set_sensitive(False)
 
         webview_overlay.add_overlay(self.playlist_queue_button)
+
+        # Hover Transparency (win.hover-transparency) - scoped to just
+        # the content area, not the whole window the way the toolbar
+        # auto-hide's own `motion` controller is, deliberately: the
+        # header bar (and its hamburger menu, the only way to turn
+        # this back off) needs to stay reachable/visible on its own
+        # terms even while hovering makes the visualizer content
+        # itself vanish - if the header were included, moving the
+        # mouse toward the menu to disable the mode would itself
+        # trigger the same transparency, forcing a blind click. CAPTURE
+        # phase for the same reason motion (below) needs it - WebKit's
+        # own hit-testing can otherwise swallow events before a
+        # default BUBBLE-phase controller on an ancestor ever sees
+        # them.
+        content_hover_motion = Gtk.EventControllerMotion()
+        content_hover_motion.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        content_hover_motion.connect("enter", self.on_content_hover_enter)
+        content_hover_motion.connect("leave", self.on_content_hover_leave)
+        webview_overlay.add_controller(content_hover_motion)
 
         self.content_box.append(
             webview_overlay
@@ -519,6 +539,19 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(present_mirror_action)
 
+        hover_transparency_action = Gio.SimpleAction.new_stateful(
+            "hover-transparency",
+            None,
+            GLib.Variant("b", False)
+        )
+
+        hover_transparency_action.connect(
+            "change-state",
+            self.hover_transparency_changed
+        )
+
+        self.add_action(hover_transparency_action)
+
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
             None,
@@ -753,6 +786,36 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.hide_timer = GLib.timeout_add_seconds(
             3,
             self.hide_toolbar
+        )
+
+    def on_content_hover_enter(self, controller, x, y):
+
+        if self.hover_transparency_enabled:
+            self.set_opacity(0.0)
+
+    def on_content_hover_leave(self, controller):
+
+        if self.hover_transparency_enabled:
+            self.set_opacity(1.0)
+
+    def hover_transparency_changed(self, action, value):
+
+        action.set_state(value)
+
+        self.hover_transparency_enabled = value.get_boolean()
+
+        # Force back to fully opaque immediately on disable, in case
+        # this fires while the pointer happens to be sitting over the
+        # content right now and the window is currently transparent -
+        # otherwise it would stay invisible until the next real
+        # leave/enter pair happened to fire.
+        if not self.hover_transparency_enabled:
+            self.set_opacity(1.0)
+
+        self.show_toast(
+            "Hover Transparency enabled"
+            if self.hover_transparency_enabled
+            else "Hover Transparency disabled"
         )
 
     # GTK4 dropped the old X11-style "urgency hint" entirely (Wayland
