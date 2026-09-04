@@ -135,8 +135,8 @@
       </item>
 
       <item>
-        <attribute name="label" translatable="yes">Hover Transparency</attribute>
-        <attribute name="action">win.hover-transparency</attribute>
+        <attribute name="label" translatable="yes">Transparency Mode</attribute>
+        <attribute name="action">win.transparency-mode</attribute>
       </item>
 
       <submenu id="mirror_windows_submenu">

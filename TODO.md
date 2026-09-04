@@ -187,6 +187,29 @@
       needs an actual ancestor chain to the "win" group) that toggling
       either one updates the other and self.hover_transparency_enabled
       correctly.
+      Third follow-up, requested ("change it to a general transparency
+      mode? except for the top bar. Even when the mouse is there there
+      is no fading effect"): dropped hover-triggering entirely -
+      renamed win.hover-transparency -> win.transparency-mode (menu
+      label now "Transparency Mode") and the underlying state/methods
+      to match, and removed the whole content_hover_motion
+      EventControllerMotion/on_content_hover_enter/leave machinery,
+      since nothing reacts to mouse position anymore. Enabling now
+      just fades the content straight to the configured Opacity Level
+      immediately, and disabling fades it straight back to fully
+      opaque - both via the same Fade Speed setting (no more special-
+      cased instant snap on disable; that was only needed to guard
+      against the old mouse-position edge case, which no longer
+      exists). animate_opacity now targets self.toast_overlay (the
+      ToolbarView's "content", below the header bar) instead of self
+      (the whole window/surface) - the header bar is a sibling `child
+      type="top"` in window.ui, outside toast_overlay entirely, so it
+      never changes opacity regardless of the configured level.
+      Verified directly in the sandbox: toggling win.transparency-mode
+      with zero motion events fired moves toast_overlay's opacity to
+      the configured level and back, while self.headerbar.get_opacity()
+      stays 1.0 throughout, and on_content_hover_enter/leave no longer
+      exist on the window at all.
 - [ ] Follow-up on Pipes' beat-reactive rotation, all requested:
       given its own independent Beat Rotation switch (previously
       bundled under the same "React to Beats" toggle as the pipe-spawn

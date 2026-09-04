@@ -78,9 +78,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.last_mouse_pos = None
         self.mouse_over_toolbar = False
         self.last_scroll_time = 0.0
-        self.hover_transparency_enabled = False
-        self.hover_transparency_opacity = 0.0
-        self.hover_transparency_fade_ms = 0.0
+        self.transparency_mode_enabled = False
+        self.transparency_opacity = 0.0
+        self.transparency_fade_ms = 0.0
         self.opacity_fade_timer = None
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
@@ -168,25 +168,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         webview_overlay.add_overlay(self.playlist_queue_button)
 
-        # Hover Transparency (win.hover-transparency) - scoped to just
-        # the content area, not the whole window the way the toolbar
-        # auto-hide's own `motion` controller is, deliberately: the
-        # header bar (and its hamburger menu, the only way to turn
-        # this back off) needs to stay reachable/visible on its own
-        # terms even while hovering makes the visualizer content
-        # itself vanish - if the header were included, moving the
-        # mouse toward the menu to disable the mode would itself
-        # trigger the same transparency, forcing a blind click. CAPTURE
-        # phase for the same reason motion (below) needs it - WebKit's
-        # own hit-testing can otherwise swallow events before a
-        # default BUBBLE-phase controller on an ancestor ever sees
-        # them.
-        content_hover_motion = Gtk.EventControllerMotion()
-        content_hover_motion.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        content_hover_motion.connect("enter", self.on_content_hover_enter)
-        content_hover_motion.connect("leave", self.on_content_hover_leave)
-        webview_overlay.add_controller(content_hover_motion)
-
         self.content_box.append(
             webview_overlay
         )
@@ -261,15 +242,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         # windows changes at runtime. Section 2 (not 0/1) - theme
         # selector, then Audio Source, then this section - item 5
         # within it (Load Preset, Presets submenu, Lock Preset,
-        # Shuffle Presets, Hover Transparency, then the Mirror Windows
+        # Shuffle Presets, Transparency Mode, then the Mirror Windows
         # submenu), then section 1 *within that submenu* (New Mirror
         # Window/Close All Mirrors are its own static section 0 - see
         # window.ui - so rebuilding this one never touches those).
         # NOTE: this index is positional and brittle - it broke once
-        # already (was 4) when Hover Transparency was inserted above
-        # the Mirror Windows submenu without updating this. Any future
-        # item added to this section before Mirror Windows needs this
-        # bumped again.
+        # already (was 4) when the Transparency Mode item (then called
+        # Hover Transparency) was inserted above the Mirror Windows
+        # submenu without updating this. Any future item added to this
+        # section before Mirror Windows needs this bumped again.
         section2 = self.menu_button.get_menu_model().get_item_link(
             2, Gio.MENU_LINK_SECTION
         )
@@ -547,18 +528,18 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(present_mirror_action)
 
-        hover_transparency_action = Gio.SimpleAction.new_stateful(
-            "hover-transparency",
+        transparency_mode_action = Gio.SimpleAction.new_stateful(
+            "transparency-mode",
             None,
             GLib.Variant("b", False)
         )
 
-        hover_transparency_action.connect(
+        transparency_mode_action.connect(
             "change-state",
-            self.hover_transparency_changed
+            self.transparency_mode_changed
         )
 
-        self.add_action(hover_transparency_action)
+        self.add_action(transparency_mode_action)
 
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
@@ -796,39 +777,29 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.hide_toolbar
         )
 
-    # Fades OUT while the mouse is away from the content (so it gets
-    # out of the way when you're not looking at it) and back to fully
-    # opaque once the mouse returns to it - the opposite of this
-    # feature's original hover-to-hide behavior, changed on request.
-    def on_content_hover_enter(self, controller, x, y):
-
-        if self.hover_transparency_enabled:
-            self.animate_opacity(1.0)
-
-    def on_content_hover_leave(self, controller):
-
-        if self.hover_transparency_enabled:
-            self.animate_opacity(self.hover_transparency_opacity)
-
     OPACITY_FADE_TICK_MS = 16
 
-    # Instant by default (hover_transparency_fade_ms == 0, the same
-    # hard snap this had before the Fade Speed slider existed) - only
-    # steps through a GLib timer, same repeating-timeout shape as the
-    # DVD/Pipes tick timers, when a duration is actually set.
+    # Applied to toast_overlay (the ToolbarView's "content", i.e.
+    # everything below the header bar) rather than self (the whole
+    # window) - deliberately excludes the header bar so it - and its
+    # hamburger menu, the only way to turn this back off - always
+    # stays fully visible/reachable, regardless of the configured
+    # opacity level. Instant by default (transparency_fade_ms == 0) -
+    # only steps through a GLib timer, same repeating-timeout shape as
+    # the DVD/Pipes tick timers, when a duration is actually set.
     def animate_opacity(self, target):
 
         if self.opacity_fade_timer:
             GLib.source_remove(self.opacity_fade_timer)
             self.opacity_fade_timer = None
 
-        duration_ms = self.hover_transparency_fade_ms
+        duration_ms = self.transparency_fade_ms
 
         if duration_ms <= 0:
-            self.set_opacity(target)
+            self.toast_overlay.set_opacity(target)
             return
 
-        start = self.get_opacity()
+        start = self.toast_overlay.get_opacity()
         start_time = time.monotonic()
 
         def step():
@@ -836,7 +807,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             elapsed_ms = (time.monotonic() - start_time) * 1000
             t = min(1.0, elapsed_ms / duration_ms)
 
-            self.set_opacity(start + (target - start) * t)
+            self.toast_overlay.set_opacity(start + (target - start) * t)
 
             if t >= 1.0:
                 self.opacity_fade_timer = None
@@ -848,31 +819,30 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.OPACITY_FADE_TICK_MS, step
         )
 
-    def hover_transparency_changed(self, action, value):
+    # No longer hover-triggered - a flat, always-on transparency level
+    # for the content area while the mode is on, changed on request
+    # ("general transparency mode... even when the mouse is there
+    # there is no fading effect"). Fades to the configured opacity on
+    # enable and back to fully opaque on disable, both via the same
+    # Fade Speed setting, rather than one of the two being an instant
+    # special case - there's no more mouse-position edge case to guard
+    # against now that on/off is the only transition.
+    def transparency_mode_changed(self, action, value):
 
         action.set_state(value)
 
-        self.hover_transparency_enabled = value.get_boolean()
+        self.transparency_mode_enabled = value.get_boolean()
 
-        # Force back to fully opaque immediately on disable, in case
-        # this fires while the pointer happens to be sitting over the
-        # content right now and the window is currently transparent -
-        # otherwise it would stay invisible until the next real
-        # leave/enter pair happened to fire. Bypasses any in-progress
-        # or configured fade on purpose - disabling the feature should
-        # never leave the window visibly stuck fading back in.
-        if not self.hover_transparency_enabled:
-
-            if self.opacity_fade_timer:
-                GLib.source_remove(self.opacity_fade_timer)
-                self.opacity_fade_timer = None
-
-            self.set_opacity(1.0)
+        self.animate_opacity(
+            self.transparency_opacity
+            if self.transparency_mode_enabled
+            else 1.0
+        )
 
         self.show_toast(
-            "Hover Transparency enabled"
-            if self.hover_transparency_enabled
-            else "Hover Transparency disabled"
+            "Transparency Mode enabled"
+            if self.transparency_mode_enabled
+            else "Transparency Mode disabled"
         )
 
     # GTK4 dropped the old X11-style "urgency hint" entirely (Wayland
@@ -1372,30 +1342,30 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="framerate_scale"
         )
 
-    def build_hover_opacity_control(self):
+    def build_transparency_opacity_control(self):
 
-        def format_hover_opacity(value):
+        def format_transparency_opacity(value):
             return "Fully Invisible" if value <= 0 else f"{int(round(value * 100))}% Opaque"
 
         return self.build_slider_row(
             "Opacity Level",
             0.0, 1.0, 0.05, 0.0,
-            format_hover_opacity,
-            lambda value: setattr(self, "hover_transparency_opacity", value),
-            store_as="hover_opacity_scale"
+            format_transparency_opacity,
+            lambda value: setattr(self, "transparency_opacity", value),
+            store_as="transparency_opacity_scale"
         )
 
-    def build_hover_fade_control(self):
+    def build_transparency_fade_control(self):
 
-        def format_hover_fade(value):
+        def format_transparency_fade(value):
             return "Instant" if value <= 0 else f"{value:.1f}s"
 
         return self.build_slider_row(
             "Fade Speed",
             0.0, 2.0, 0.1, 0.0,
-            format_hover_fade,
-            lambda value: setattr(self, "hover_transparency_fade_ms", value * 1000),
-            store_as="hover_fade_scale"
+            format_transparency_fade,
+            lambda value: setattr(self, "transparency_fade_ms", value * 1000),
+            store_as="transparency_fade_scale"
         )
 
     def build_toggle_row(self, title, initial, on_change, store_as=None):
@@ -1611,7 +1581,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         beat_group.add(self.build_beat_cooldown_control())
         beat_group.add(self.build_beat_silence_control())
 
-        hover_group = Adw.PreferencesGroup(title="Hover Transparency")
+        transparency_group = Adw.PreferencesGroup(
+            title="Transparency Mode",
+            description="The header bar always stays fully visible."
+        )
 
         # Bound straight to the action via action-name (Adw.SwitchRow
         # implements Gtk.Actionable, same as the loop/shuffle queue
@@ -1619,14 +1592,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         # build_toggle_row callback - stays in sync automatically with
         # the hamburger menu's own toggle in both directions, with no
         # extra state to keep them agreeing.
-        hover_enable_row = Adw.SwitchRow(
+        transparency_enable_row = Adw.SwitchRow(
             title="Enabled",
-            action_name="win.hover-transparency"
+            action_name="win.transparency-mode"
         )
 
-        hover_group.add(hover_enable_row)
-        hover_group.add(self.build_hover_opacity_control())
-        hover_group.add(self.build_hover_fade_control())
+        transparency_group.add(transparency_enable_row)
+        transparency_group.add(self.build_transparency_opacity_control())
+        transparency_group.add(self.build_transparency_fade_control())
 
         playback_page = Adw.PreferencesPage(
             title="Playback",
@@ -1635,7 +1608,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         playback_page.add(cycling_group)
         playback_page.add(beat_group)
-        playback_page.add(hover_group)
+        playback_page.add(transparency_group)
 
         rendering_group = Adw.PreferencesGroup()
         rendering_group.add(self.build_mesh_size_control())
