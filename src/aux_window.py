@@ -396,6 +396,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.set_default_size(480, 320)
         elif kind in ("terrain", "waterfall", "pipes"):
             self.set_default_size(520, 360)
+        elif kind in ("xy", "vectorscope"):
+            self.set_default_size(400, 400)
         else:
             self.set_default_size(360, 220)
 
@@ -439,7 +441,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.num_bars = 24
         self.decay = 0.85
-        self.show_labels = False
+        # Scope-type kinds (axis ticks/reference lines) read as more
+        # useful with labels on by default than the bar/meter kinds,
+        # where labels are more of an optional add-on - requested.
+        self.show_labels = kind in ("xy", "oscilloscope", "vectorscope")
         self.mirror_reflection = False
         self.spectrogram_vertical = False
 

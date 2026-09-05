@@ -128,20 +128,23 @@
       it too, and - checking the actual production data path, not
       just the window.py side - now_playing.py's real _info_from_proxy
       genuinely includes an "album" key in what it reports.
-- [ ] X-Y Scope and Vector Scope square by default - requested,
+- [x] X-Y Scope and Vector Scope square by default - requested,
       clarified as meaning their actual *window* default size/aspect
       ratio ("as in their windows"), not just the drawn content inside
-      whatever rectangular size the window happens to be - i.e. their
-      default set_default_size() call should be square (e.g. 400x400)
-      instead of whatever generic rectangular default other aux
-      windows use. Not implemented.
-- [ ] Labels (self.show_labels - already exists, used by e.g.
-      draw_vu_needle's tick marks, X-Y Scope) should default on for
-      "scope, etc" mini visualizers - requested, not implemented.
-      Needs deciding exactly which kinds count (X-Y Scope/Vector
-      Scope/Oscilloscope seem the obvious "scope" ones; unclear if
-      VU Meter's needle ticks should also flip since it's a
-      per-kind-shared boolean, not per-kind-independent state).
+      whatever rectangular size the window happens to be. Their
+      set_default_size() call (aux_window.py) is now 400x400 for kind
+      in ("xy", "vectorscope"), same branch style as the existing
+      dvd/terrain-waterfall-pipes special cases. Verified in the
+      sandbox against real AuxVisualizerWindow instances.
+- [x] Labels (self.show_labels) default on for "scope, etc" mini
+      visualizers - requested, implemented. Resolved the open question
+      of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope
+      default to labels on; VU Meter/Spectrum/etc. (and everything
+      else) stay off by default, since show_labels is a per-instance
+      (not global) flag - each aux window kind gets its own
+      AuxVisualizerWindow instance, so this doesn't force VU Meter's
+      needle ticks on too. Verified in the sandbox: xy/vectorscope/
+      oscilloscope show_labels=True, spectrum/vu/dvd show_labels=False.
 - [x] Now Playing Enabled toggle in the hamburger menu (in addition to
       Preferences) - built. now_playing_enabled_changed became a real
       win.now-playing-enabled stateful action (was previously a plain
