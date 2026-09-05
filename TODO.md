@@ -498,46 +498,41 @@
       text gets bigger while fullscreen, whatever fixes that bug needs
       to also handle the box's fixed size changing when the scale
       factor itself changes, not just staying fixed within one scale).
-- [ ] Scroll Long Titles bug - reported (TODO-only, not implemented):
-      "the outline box changes size each scroll movement... the box
-      [should] remain fixed size during scrolling." This is the direct
-      flip side of the previous fix (start_now_playing_title_scroll
-      setting max-width-chars to -1/ellipsize to NONE to stop GTK from
-      clipping the already-correctly-rotating text) - removing that
-      constraint fixed the truncation bug but means the label's own
-      *natural* width now varies tick to tick with whatever substring
-      is currently shown (different characters, different pixel
-      widths), and GtkBox/the card naturally renegotiates its size to
-      that natural width, producing the reported jitter.
-      Real fix isn't "put the width limit back" (that's the bug that
-      was just fixed) - it needs the label's *visible container* to
-      have a genuinely fixed size while its *content* is allowed to be
-      wider than that and get clipped, rather than sizing the
-      container to the content.
-      Correction to this entry's own earlier recommendation:
-      Gtk.Overflow.HIDDEN on a plain wrapper does NOT actually solve
-      this - confirmed by direct measurement while fixing the
-      unrelated-but-structurally-identical Now Playing album art
-      sizing bug elsewhere in this file. Overflow:hidden only clips
-      *rendering*; the wrapper's own measure() still propagates the
-      oversized child's natural size upward, so the surrounding layout
-      (the card, the rest of now_playing_box) would still jitter/
-      resize even though the *visible* text looked clipped to a fixed
-      box. The confirmed-working mechanism for "cap size regardless of
-      an oversized child's own preferred size" instead is a
-      Gtk.ScrolledWindow with both scrollbar policies set NEVER and
-      propagate-natural-width/height set False (see the Now Playing
-      album art fix above for the exact pattern and the measurements
-      that confirmed it) - wrapping the scrolling title label in one
-      of these instead of a plain Gtk.Box, sized once via measuring the
-      label at the configured Text Box Width, would be the same
-      "fixed viewport onto content that can be wider" trick applied to
-      text instead of an image.
-      Possibly related follow-up report: "the scroll long lines also
-      seems to break after resizing the box a couple times" - not yet
-      reproduced/investigated on its own; may just be a more visible
-      symptom of this same box-jitter bug compounding after repeated
-      resizes rather than a separate issue, but that's not confirmed.
+- [x] Scroll Long Titles bug - reported: "the outline box changes size
+      each scroll movement... the box [should] remain fixed size
+      during scrolling." Fixed, using the exact Gtk.ScrolledWindow
+      technique this entry had already correctly identified (both
+      scrollbar policies NEVER, propagate-natural-width/height False -
+      same pattern as the Now Playing album art fix) - now_playing_
+      title_label is wrapped in a new now_playing_title_frame. While
+      not scrolling, apply_now_playing_title_frame_width() just
+      measures and applies the label's own real natural width, so
+      normal display is unaffected. While scrolling,
+      start_now_playing_title_scroll() measures the label once right
+      after the first tick and locks the frame to that one reference
+      width for the whole run - later ticks' slightly different
+      natural widths (same character count, different glyphs) no
+      longer reach the frame at all, so any tick that happens to
+      render wider than the locked reference gets cleanly clipped by
+      the frame instead of resizing the card. stop_now_playing_title_
+      scroll() releases the lock and re-measures for the static title
+      once scrolling ends.
+      Verified in the sandbox against a real MelangeWindow: a
+      non-scrolling short title's frame width exactly equals the
+      label's measured natural width (wrapper is a no-op); starting a
+      real scroll with a long title locks the frame to one width;
+      sampling get_size_request() across 8 real ~300ms scroll ticks
+      showed the label's own natural width still genuinely fluctuating
+      (231-238px, confirming the underlying bug), while the frame's
+      requested width stayed at exactly one value (242px) the entire
+      time; stopping the scroll released the lock and re-measured
+      correctly against the real static title (252px).
+      The possibly-related follow-up report ("the scroll long lines
+      also seems to break after resizing the box a couple times") is
+      still open - not yet reproduced/investigated on its own; may
+      have been this same box-jitter bug compounding after repeated
+      resizes rather than a separate issue, worth re-checking now that
+      this fix is in.
 - [ ] Toolbar Hide Delay bug - reported (TODO-only, not investigated):
       setting Hide Delay to 0 ("Never") keeps the header bar/nav
       arrows visible as intended, but the mouse *cursor* itself still

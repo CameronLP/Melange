@@ -286,7 +286,27 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_title_label = Gtk.Label(xalign=0.0)
         self.now_playing_title_label.add_css_class("now-playing-title")
         self.now_playing_title_label.set_ellipsize(Pango.EllipsizeMode.END)
-        self.now_playing_text_box.append(self.now_playing_title_label)
+
+        # Wrapped for the same reason Album Art needed a
+        # Gtk.ScrolledWindow wrapper - Scroll Long Titles feeds the
+        # label a different substring every tick, and even at a fixed
+        # character count a Label's own *natural* width still varies
+        # tick to tick (different glyphs render at different widths),
+        # which a plain set_size_request() can't cap (only raises the
+        # minimum, confirmed during the Album Art fix). This let the
+        # whole card visibly resize every ~300ms while scrolling - see
+        # apply_now_playing_title_frame_width/start_now_playing_title_
+        # scroll for how the frame's width gets locked during a scroll
+        # and released again once it stops.
+        self.now_playing_title_frame = Gtk.ScrolledWindow()
+        self.now_playing_title_frame.set_policy(
+            Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER
+        )
+        self.now_playing_title_frame.set_propagate_natural_width(False)
+        self.now_playing_title_frame.set_propagate_natural_height(False)
+        self.now_playing_title_frame.set_halign(Gtk.Align.START)
+        self.now_playing_title_frame.set_child(self.now_playing_title_label)
+        self.now_playing_text_box.append(self.now_playing_title_frame)
 
         self.now_playing_artist_label = Gtk.Label(xalign=0.0)
         self.now_playing_artist_label.add_css_class("now-playing-artist")
@@ -1395,6 +1415,24 @@ class MelangeWindow(Adw.ApplicationWindow):
         if self.now_playing_scroll_title is None:
             self.now_playing_title_label.set_max_width_chars(self.now_playing_width)
 
+        self.apply_now_playing_title_frame_width()
+
+    # Locks the title row's own frame width so the Scroll Long Titles
+    # marquee doesn't visibly resize the whole card every tick - a
+    # no-op while actively scrolling, since start_now_playing_title_
+    # scroll/stop_now_playing_title_scroll own the frame's width for
+    # that duration instead (see the comment on now_playing_title_
+    # frame's construction for why a wrapper is needed at all here).
+    def apply_now_playing_title_frame_width(self):
+
+        if self.now_playing_scroll_title is not None:
+            return
+
+        _, natural, _, _ = self.now_playing_title_label.measure(
+            Gtk.Orientation.HORIZONTAL, -1
+        )
+        self.now_playing_title_frame.set_size_request(natural, -1)
+
     # Requested ("it should be limited by the box size... in general
     # it should match the height of the lines of now playing text") -
     # measures now_playing_text_box's own actual natural height (title
@@ -1442,6 +1480,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         else:
             self.stop_now_playing_title_scroll()
             self.now_playing_title_label.set_label(title)
+            self.apply_now_playing_title_frame_width()
 
     NOW_PLAYING_SCROLL_TICK_MS = 300
     NOW_PLAYING_SCROLL_SEPARATOR = "   •   "
@@ -1497,6 +1536,19 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         tick()
 
+        # Lock the frame to this one reference width for the whole
+        # scroll run - a same-length substring's *natural* width still
+        # varies tick to tick (different glyphs), which used to make
+        # the whole card visibly resize every ~300ms. Any given tick's
+        # content that renders wider than this reference gets clipped
+        # by the frame instead (a ScrolledWindow with both scrollbar
+        # policies NEVER just crops, no scrollbar ever appears) -
+        # reads as a clean, stable-width ticker rather than jitter.
+        _, natural, _, _ = self.now_playing_title_label.measure(
+            Gtk.Orientation.HORIZONTAL, -1
+        )
+        self.now_playing_title_frame.set_size_request(natural, -1)
+
         self.now_playing_scroll_timer = GLib.timeout_add(
             self.NOW_PLAYING_SCROLL_TICK_MS, tick
         )
@@ -1510,8 +1562,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         if self.now_playing_scroll_title is not None:
             self.now_playing_title_label.set_max_width_chars(self.now_playing_width)
             self.now_playing_title_label.set_ellipsize(Pango.EllipsizeMode.END)
-
-        self.now_playing_scroll_title = None
+            self.now_playing_scroll_title = None
+            self.apply_now_playing_title_frame_width()
+        else:
+            self.now_playing_scroll_title = None
 
     NOW_PLAYING_FADE_TICK_MS = 16
 
@@ -1689,6 +1743,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             label.set_attributes(attrs)
 
         self.apply_now_playing_art_size()
+        self.apply_now_playing_title_frame_width()
 
     NOW_PLAYING_POSITION_TICK_MS = 1000
 
