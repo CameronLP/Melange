@@ -432,7 +432,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # green Lissajous trace (self.color's own default, "#33cc55"),
         # not a rainbow one.
         self.color_mode = (
-            "solid" if kind in ("oscilloscope", "vectorscope", "xy", "spectrum")
+            "solid" if kind in ("oscilloscope", "vectorscope", "xy", "spectrum", "vu")
             else "rainbow"
         )
         self.xy_line_width = 1.0

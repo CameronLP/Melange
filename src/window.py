@@ -219,18 +219,46 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.now_playing_art = Gtk.Picture()
         self.now_playing_art.add_css_class("now-playing-art")
-        # Was previously stretching to fill the whole card's height
-        # (driven by the text column next to it) instead of staying
-        # at its own intended size - a plain Gtk.Picture defaults to
-        # valign=FILL, and nothing here overrode that. CENTER is what
-        # actually makes set_size_request (see apply_now_playing_art_
-        # size) mean anything.
-        self.now_playing_art.set_valign(Gtk.Align.CENTER)
-        self.now_playing_art.set_halign(Gtk.Align.CENTER)
+        self.now_playing_art.set_valign(Gtk.Align.FILL)
+        self.now_playing_art.set_halign(Gtk.Align.FILL)
         self.now_playing_art.set_content_fit(Gtk.ContentFit.COVER)
         self.now_playing_art.set_can_shrink(True)
-        self.now_playing_art.set_visible(False)
-        self.now_playing_box.append(self.now_playing_art)
+
+        # A real Gtk.Picture's *natural* size comes from the loaded
+        # paintable's own intrinsic dimensions (confirmed: a real
+        # 500x500 album art texture measured natural=500 even with
+        # set_size_request(44, 44) on the picture itself) - size_
+        # request only ever raises the *minimum*, it doesn't cap the
+        # natural/preferred size from above, so a plain Picture with
+        # CENTER alignment (tried first) still gets allocated close to
+        # the full image size regardless of set_size_request, which
+        # was the actual "album art still does not change size" bug -
+        # apply_now_playing_art_size was changing a number nothing
+        # downstream of it actually respected as a maximum.
+        # Gtk.Overflow.HIDDEN on a plain wrapper doesn't fix this
+        # either - confirmed it only clips *rendering*, the wrapper's
+        # own measure() still propagates the child's oversized natural
+        # size upward. A Gtk.ScrolledWindow with scrolling disabled
+        # and propagate-natural-width/height off is the one thing
+        # confirmed to actually cap both min *and* natural size to
+        # exactly what's requested on the scrolled window itself,
+        # regardless of the child's own preferred size - that's what
+        # it exists for (a fixed viewport onto content that can be
+        # bigger), just not usually used for a static image. The inner
+        # Picture fills whatever the frame gives it (FILL, not CENTER)
+        # and COVER-crops/scales the real image down to that.
+        self.now_playing_art_frame = Gtk.ScrolledWindow()
+        self.now_playing_art_frame.set_policy(
+            Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER
+        )
+        self.now_playing_art_frame.set_propagate_natural_width(False)
+        self.now_playing_art_frame.set_propagate_natural_height(False)
+        self.now_playing_art_frame.set_valign(Gtk.Align.CENTER)
+        self.now_playing_art_frame.set_halign(Gtk.Align.CENTER)
+        self.now_playing_art_frame.set_child(self.now_playing_art)
+        self.now_playing_art_frame.set_visible(False)
+
+        self.now_playing_box.append(self.now_playing_art_frame)
 
         self.now_playing_text_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL, spacing=2
@@ -1303,7 +1331,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             )
             size = max(24, natural)
 
-        self.now_playing_art.set_size_request(size, size)
+        self.now_playing_art_frame.set_size_request(size, size)
 
     def now_playing_scroll_long_titles_changed(self, enabled):
 
@@ -1638,7 +1666,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         token = self.now_playing_art_token
 
         if not art_url or not self.now_playing_show_artwork:
-            self.now_playing_art.set_visible(False)
+            self.now_playing_art_frame.set_visible(False)
             return
 
         def on_loaded(source, result):
@@ -1652,17 +1680,17 @@ class MelangeWindow(Adw.ApplicationWindow):
             try:
                 ok, contents, etag = source.load_contents_finish(result)
             except GLib.Error:
-                self.now_playing_art.set_visible(False)
+                self.now_playing_art_frame.set_visible(False)
                 return
 
             try:
                 texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(contents))
             except GLib.Error:
-                self.now_playing_art.set_visible(False)
+                self.now_playing_art_frame.set_visible(False)
                 return
 
             self.now_playing_art.set_paintable(texture)
-            self.now_playing_art.set_visible(True)
+            self.now_playing_art_frame.set_visible(True)
 
         # Gio.File.load_contents_async transparently handles both
         # file:// (the common case - most players cache art locally)

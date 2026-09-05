@@ -105,6 +105,30 @@
 
 ## In progress / not started
 
+- [ ] Simplify the Now Playing settings - requested, not designed.
+      This group has grown to ~16 separate controls this session
+      (Enabled, Source, Placement, five Show */Background toggles,
+      Font, Text Box Width, Text Size, Text Color, Scroll Long Titles,
+      Album Art Size, Auto-Hide + its delay, Periodic Fade + its
+      interval) - genuinely a lot to scroll through for one feature.
+      No specific simplification direction chosen yet - could mean
+      sub-grouping into collapsible sections, hiding secondary sliders
+      behind their own toggle until enabled (e.g. Auto-Hide Delay only
+      shown once Auto-Hide itself is on), consolidating related
+      settings, or something else. Needs a decision on approach before
+      implementing.
+- [x] VU Meter needle defaults to solid, not rainbow - requested
+      ("vu needle should not default to rainbow"). Confirmed
+      draw_vu_needle's pointer line (not the arc/zones, which are
+      hardcoded regardless of color_mode the same way the bar/LED
+      styles' zone colors are) does respect self.color_mode - "vu"
+      simply wasn't in the kind-list that already defaults Oscilloscope/
+      Vector Scope/X-Y Scope/Spectrum to solid instead of rainbow.
+      Added it. Only visibly affects the needle style specifically -
+      bar/LED styles never reference color_mode in their own zone-color
+      logic either way, so this doesn't touch them. Verified in the
+      sandbox that a freshly constructed VU Meter window now defaults
+      to color_mode == "solid".
 - [x] Fixed: Now Playing album art rendered too large/tall - reported
       bug ("it is scaled to full size, too large/tall. It should be
       limited by the box size"). Root cause: now_playing_art (a plain
@@ -136,6 +160,47 @@
       square number that actually grows when Text Size increases and
       shrinks when a text line (artist) is hidden, and an explicit
       fixed size correctly overrides Auto until switched back.
+      Follow-up, the same bug persisted after the above ("the album
+      art still does not change size... by default it should scale
+      with the height of the text") - the CENTER-alignment fix wasn't
+      actually the whole story. Real root cause, confirmed directly:
+      Gtk.Picture's *natural* size comes from the loaded paintable's
+      own intrinsic dimensions - measured a real 500x500 texture (the
+      user's actual Firefox album art) and got natural=500 even with
+      set_size_request(44, 44) on the picture itself. size_request
+      only ever raises the *minimum*, never caps natural size from
+      above, so with CENTER alignment (not stretching to fill) the
+      box still allocated the picture close to the full 500px image
+      size regardless of whatever apply_now_playing_art_size had just
+      computed - the setting was changing a number nothing downstream
+      actually treated as a maximum. Also confirmed Gtk.Overflow.HIDDEN
+      on a wrapper does NOT fix this either (tried and measured) - it
+      only clips *rendering*, the wrapper's own measure() still
+      propagates the child's oversized natural size upward, which
+      would still be able to distort the layout despite content
+      merely looking visually clipped.
+      Real fix: now_playing_art (the Gtk.Picture) lives inside a new
+      now_playing_art_frame (a Gtk.ScrolledWindow with both scrollbar
+      policies NEVER and propagate-natural-width/height set False) -
+      confirmed by direct measurement that this specific combination
+      is what actually caps *both* minimum and natural size to exactly
+      what's requested on the frame, regardless of the child's own
+      preferred size (it's a "fixed viewport onto content that can be
+      bigger", just repurposed here for a static image instead of
+      scrollable content). The inner Picture now fills whatever the
+      frame gives it (FILL, not CENTER) and COVER-crops/scales the
+      real image down to fit. All the existing show/hide and size
+      logic (load_now_playing_art, apply_now_playing_art_size) now
+      targets the frame instead of the picture directly.
+      Verified this time against the real 500x500 texture end to end:
+      the frame's actual measure() result (not just its requested
+      size) is genuinely capped at the Auto-computed value with the
+      real image loaded, the full real pipeline (real art_url -> real
+      async download -> real texture -> capped display) produces a
+      correctly-sized frame, and increasing Text Size grows both the
+      Auto setting *and* the frame's real measured natural size
+      together, confirming they're actually linked now rather than
+      one being cosmetic.
 - [x] Fixed: Lock Preset didn't actually stop cycling, just its
       result - reported bug ("if lock is on then cycling should be
       completely stopped from running... toast 'preset is locked'
@@ -329,15 +394,31 @@
       was just fixed) - it needs the label's *visible container* to
       have a genuinely fixed size while its *content* is allowed to be
       wider than that and get clipped, rather than sizing the
-      container to the content. GTK4's per-widget set_overflow(Gtk.
-      Overflow.HIDDEN) (used nowhere in this codebase yet) is the
-      likely mechanism - clip a fixed-size viewport around the title
-      label instead of relying on ellipsize/max-width-chars at all
-      while scrolling. The fixed size itself would need computing once
-      when a scroll starts (e.g. measure the label at the configured
-      Text Box Width via Pango/measure(), not a live natural-size
-      read that would reintroduce the same jitter) rather than derived
-      from whatever's currently showing.
+      container to the content.
+      Correction to this entry's own earlier recommendation:
+      Gtk.Overflow.HIDDEN on a plain wrapper does NOT actually solve
+      this - confirmed by direct measurement while fixing the
+      unrelated-but-structurally-identical Now Playing album art
+      sizing bug elsewhere in this file. Overflow:hidden only clips
+      *rendering*; the wrapper's own measure() still propagates the
+      oversized child's natural size upward, so the surrounding layout
+      (the card, the rest of now_playing_box) would still jitter/
+      resize even though the *visible* text looked clipped to a fixed
+      box. The confirmed-working mechanism for "cap size regardless of
+      an oversized child's own preferred size" instead is a
+      Gtk.ScrolledWindow with both scrollbar policies set NEVER and
+      propagate-natural-width/height set False (see the Now Playing
+      album art fix above for the exact pattern and the measurements
+      that confirmed it) - wrapping the scrolling title label in one
+      of these instead of a plain Gtk.Box, sized once via measuring the
+      label at the configured Text Box Width, would be the same
+      "fixed viewport onto content that can be wider" trick applied to
+      text instead of an image.
+      Possibly related follow-up report: "the scroll long lines also
+      seems to break after resizing the box a couple times" - not yet
+      reproduced/investigated on its own; may just be a more visible
+      symptom of this same box-jitter bug compounding after repeated
+      resizes rather than a separate issue, but that's not confirmed.
 - [ ] Toolbar Hide Delay bug - reported (TODO-only, not investigated):
       setting Hide Delay to 0 ("Never") keeps the header bar/nav
       arrows visible as intended, but the mouse *cursor* itself still
