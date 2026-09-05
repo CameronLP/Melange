@@ -105,6 +105,37 @@
 
 ## In progress / not started
 
+- [x] Fixed: Now Playing album art rendered too large/tall - reported
+      bug ("it is scaled to full size, too large/tall. It should be
+      limited by the box size"). Root cause: now_playing_art (a plain
+      Gtk.Picture) had no explicit valign set, so it defaulted to
+      FILL - it stretched to match now_playing_box's full allocated
+      height (driven by the text column next to it) instead of
+      staying at its own requested size, getting worse the taller the
+      text column got (more lines shown, or a bigger Text Size).
+      Fixed by setting valign/halign to CENTER, which is what actually
+      makes set_size_request mean something for this widget.
+      Also added the requested new setting: Album Art Size (0 = Auto,
+      the default, else a fixed pixel size up to 128px). Auto
+      measures now_playing_text_box's own real natural height via
+      Gtk.Widget.measure() - what was requested ("in general it should
+      match the height of the lines of now playing text") - rather
+      than computing it from font metrics by hand, so it stays correct
+      automatically across every combination of Show Title/Artist/Time
+      and Text Size without needing to know how tall a line of text
+      actually renders. Re-evaluated on every relevant change: field
+      visibility (apply_now_playing_field_visibility), text style/size
+      (apply_now_playing_text_style), the playback-time label's own
+      visibility (update_now_playing_position, since that toggles
+      independently on its own 1-second timer), and the new setting
+      itself. now_playing_text_box (previously a bare local variable)
+      is now stored as self. to make this measurement possible.
+      Verified in the sandbox against a real, presented window (needed
+      for measure() to give real numbers): the picture no longer
+      defaults to FILL alignment, the Auto size is a real positive
+      square number that actually grows when Text Size increases and
+      shrinks when a text line (artist) is hidden, and an explicit
+      fixed size correctly overrides Auto until switched back.
 - [x] Fixed: Lock Preset didn't actually stop cycling, just its
       result - reported bug ("if lock is on then cycling should be
       completely stopped from running... toast 'preset is locked'

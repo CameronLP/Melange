@@ -114,6 +114,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_scroll_timer = None
         self.now_playing_scroll_offset = 0
         self.now_playing_scroll_title = None
+        # 0 = Auto (match the current height of the text column next
+        # to it), matching the same "boundary value is a special
+        # state" convention as Cycle Interval/Framerate elsewhere.
+        self.now_playing_art_size = 0
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
@@ -215,37 +219,45 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.now_playing_art = Gtk.Picture()
         self.now_playing_art.add_css_class("now-playing-art")
-        self.now_playing_art.set_size_request(48, 48)
+        # Was previously stretching to fill the whole card's height
+        # (driven by the text column next to it) instead of staying
+        # at its own intended size - a plain Gtk.Picture defaults to
+        # valign=FILL, and nothing here overrode that. CENTER is what
+        # actually makes set_size_request (see apply_now_playing_art_
+        # size) mean anything.
+        self.now_playing_art.set_valign(Gtk.Align.CENTER)
+        self.now_playing_art.set_halign(Gtk.Align.CENTER)
         self.now_playing_art.set_content_fit(Gtk.ContentFit.COVER)
         self.now_playing_art.set_can_shrink(True)
         self.now_playing_art.set_visible(False)
         self.now_playing_box.append(self.now_playing_art)
 
-        now_playing_text = Gtk.Box(
+        self.now_playing_text_box = Gtk.Box(
             orientation=Gtk.Orientation.VERTICAL, spacing=2
         )
-        now_playing_text.set_valign(Gtk.Align.CENTER)
+        self.now_playing_text_box.set_valign(Gtk.Align.CENTER)
 
         self.now_playing_title_label = Gtk.Label(xalign=0.0)
         self.now_playing_title_label.add_css_class("now-playing-title")
         self.now_playing_title_label.set_ellipsize(Pango.EllipsizeMode.END)
-        now_playing_text.append(self.now_playing_title_label)
+        self.now_playing_text_box.append(self.now_playing_title_label)
 
         self.now_playing_artist_label = Gtk.Label(xalign=0.0)
         self.now_playing_artist_label.add_css_class("now-playing-artist")
         self.now_playing_artist_label.set_ellipsize(Pango.EllipsizeMode.END)
-        now_playing_text.append(self.now_playing_artist_label)
+        self.now_playing_text_box.append(self.now_playing_artist_label)
 
         self.now_playing_time_label = Gtk.Label(xalign=0.0)
         self.now_playing_time_label.add_css_class("now-playing-artist")
         self.now_playing_time_label.set_visible(False)
-        now_playing_text.append(self.now_playing_time_label)
+        self.now_playing_text_box.append(self.now_playing_time_label)
 
-        self.now_playing_box.append(now_playing_text)
+        self.now_playing_box.append(self.now_playing_text_box)
 
         self.apply_now_playing_placement()
         self.apply_now_playing_text_style()
         self.apply_now_playing_width()
+        self.apply_now_playing_art_size()
 
         webview_overlay.add_overlay(self.now_playing_box)
 
@@ -1179,6 +1191,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_show_artist and bool(info["artist"])
         )
 
+        self.apply_now_playing_art_size()
+
     def now_playing_show_title_changed(self, enabled):
 
         self.now_playing_show_title = enabled
@@ -1263,6 +1277,33 @@ class MelangeWindow(Adw.ApplicationWindow):
         # new width (the visible window size is read fresh every tick).
         if self.now_playing_scroll_title is None:
             self.now_playing_title_label.set_max_width_chars(self.now_playing_width)
+
+    def now_playing_art_size_changed(self, value):
+
+        self.now_playing_art_size = int(value)
+        self.apply_now_playing_art_size()
+
+    # Requested ("it should be limited by the box size... in general
+    # it should match the height of the lines of now playing text") -
+    # 0 (Auto, the default) measures now_playing_text_box's own actual
+    # natural height (title + whichever of artist/time are currently
+    # visible, at the current Text Size/Font) via Gtk.Widget.measure()
+    # rather than computing it from font metrics by hand, so it stays
+    # correct across every combination of Show Title/Artist/Time and
+    # Text Size without this needing to know anything about how tall
+    # a line of text actually renders. A positive value overrides that
+    # with a fixed pixel size instead.
+    def apply_now_playing_art_size(self):
+
+        if self.now_playing_art_size > 0:
+            size = self.now_playing_art_size
+        else:
+            _, natural, _, _ = self.now_playing_text_box.measure(
+                Gtk.Orientation.VERTICAL, -1
+            )
+            size = max(24, natural)
+
+        self.now_playing_art.set_size_request(size, size)
 
     def now_playing_scroll_long_titles_changed(self, enabled):
 
@@ -1524,6 +1565,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         ):
             label.set_attributes(attrs)
 
+        self.apply_now_playing_art_size()
+
     NOW_PLAYING_POSITION_TICK_MS = 1000
 
     def restart_now_playing_position_timer(self):
@@ -1559,12 +1602,14 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if info is None:
             self.now_playing_time_label.set_visible(False)
+            self.apply_now_playing_art_size()
             return False
 
         position_us = self.now_playing_watcher.get_position_us(info["bus_name"])
 
         if position_us is None:
             self.now_playing_time_label.set_visible(False)
+            self.apply_now_playing_art_size()
             return False
 
         self.now_playing_time_label.set_label(
@@ -1572,6 +1617,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             f"{self.format_now_playing_time(info['length_us'])}"
         )
         self.now_playing_time_label.set_visible(True)
+        self.apply_now_playing_art_size()
 
         return True
 
@@ -2343,6 +2389,19 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Show Artwork", True, self.now_playing_show_artwork_changed
         )
 
+    def build_now_playing_art_size_control(self):
+
+        def format_art_size(value):
+            return "Auto" if value <= 0 else f"{int(value)}px"
+
+        return self.build_slider_row(
+            "Album Art Size",
+            0.0, 128.0, 4.0, 0.0,
+            format_art_size,
+            self.now_playing_art_size_changed,
+            store_as="now_playing_art_size_scale"
+        )
+
     def build_now_playing_show_time_control(self):
 
         return self.build_toggle_row(
@@ -2747,6 +2806,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_show_title_control())
         now_playing_group.add(self.build_now_playing_show_artist_control())
         now_playing_group.add(self.build_now_playing_show_artwork_control())
+        now_playing_group.add(self.build_now_playing_art_size_control())
         now_playing_group.add(self.build_now_playing_show_time_control())
         now_playing_group.add(self.build_now_playing_show_background_control())
         now_playing_group.add(self.build_now_playing_auto_hide_control())
