@@ -1381,6 +1381,7 @@ window.setShuffle = function(enabled) {
 let cycleTimer = null;
 let cycleIntervalSeconds = 0;
 let cycleJitter = 0; // 0-1 fraction of the interval, each direction
+let cyclePaused = false;
 
 
 // A recursive setTimeout chain rather than setInterval, so jitter can
@@ -1393,11 +1394,13 @@ function scheduleCycleTick() {
 
     cycleTimer = setTimeout(
         () => {
-            // No separate on/off toggle - routed through the same
-            // "NAV_NEXT" debug message the (now GTK-side) nav arrows
-            // use rather than calling nextPreset() directly, so
-            // auto-cycling also respects the preset lock (and its
-            // toast) via Python's existing next_preset().
+            // Routed through the same "NAV_NEXT" debug message the
+            // (GTK-side) nav arrows use rather than calling
+            // nextPreset() directly, so auto-cycling shares next_
+            // preset()'s own lock check - but that alone isn't
+            // enough to actually *stop* cycling while locked (see
+            // setCyclePaused below), just to block each attempt after
+            // the fact.
             debug("NAV_NEXT");
             scheduleCycleTick();
         },
@@ -1416,7 +1419,32 @@ window.setCycleInterval = function(seconds) {
 
     cycleIntervalSeconds = seconds;
 
-    if (seconds > 0) {
+    if (seconds > 0 && !cyclePaused) {
+        scheduleCycleTick();
+    }
+};
+
+
+// Called from Python when Lock Preset is toggled (lock_preset_changed)
+// - reported bug: relying solely on next_preset()'s own lock check to
+// block each cycle tick's *result* meant the tick itself kept firing
+// the whole time a preset was locked, re-showing "Preset is locked"
+// on every single interval instead of just once. Actually pausing the
+// timer here stops the ticks themselves, not just their effect.
+// Resuming reschedules a fresh tick from now rather than remembering
+// how much of the previous interval had already elapsed - acceptable
+// since jitter already means each tick's exact delay isn't meant to
+// be predictable to begin with.
+window.setCyclePaused = function(paused) {
+
+    cyclePaused = paused;
+
+    if (cycleTimer) {
+        clearTimeout(cycleTimer);
+        cycleTimer = null;
+    }
+
+    if (!paused && cycleIntervalSeconds > 0) {
         scheduleCycleTick();
     }
 };

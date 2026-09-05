@@ -2033,16 +2033,21 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.preset_locked = value.get_boolean()
 
-        # Cycling/auto-advance already refused to fire while locked
-        # (next_preset() itself checks preset_locked, and every
-        # auto-cycle/beat/drop trigger routes through it - see
-        # on_webview_debug_message's NAV_NEXT handling) - this just
-        # makes that visible on the controls themselves too, rather
-        # than leaving them interactive while silently having no
-        # effect. Blend Time is included even though it's not
+        # Auto-cycle's own JS-side timer (setCyclePaused, main.js) is
+        # actually paused here, not just relied on to have its result
+        # blocked - real bug report: next_preset()'s own lock check
+        # was already enough to stop it from ever *advancing* while
+        # locked, but the timer itself kept ticking the whole time,
+        # so "Preset is locked" kept re-toasting on every single
+        # interval instead of just once. Blend Time's own control is
+        # included in the greyed-out group even though it's not
         # cycling-specific by itself, since it's only ever relevant to
         # a preset *change* actually happening.
         self.cycling_group.set_sensitive(not self.preset_locked)
+
+        self.run_js(
+            f"setCyclePaused({'true' if self.preset_locked else 'false'});"
+        )
 
         self.show_toast(
             "Preset locked" if self.preset_locked else "Preset unlocked"

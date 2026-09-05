@@ -105,6 +105,37 @@
 
 ## In progress / not started
 
+- [x] Fixed: Lock Preset didn't actually stop cycling, just its
+      result - reported bug ("if lock is on then cycling should be
+      completely stopped from running... toast 'preset is locked'
+      messages persist"). Cycling's greyed-out Preferences controls
+      were only ever cosmetic - the JS-side auto-cycle setTimeout
+      chain (main.js) kept ticking the entire time a preset was
+      locked, relying solely on next_preset()'s own preset_locked
+      check to block each attempt *after* the fact, which meant
+      "Preset is locked" re-toasted on every single interval instead
+      of just once. Added a real pause: main.js's scheduleCycleTick/
+      setCycleInterval gained a cyclePaused flag and a new window.
+      setCyclePaused(paused) that actually clears/reschedules the
+      timer itself (resuming starts a fresh interval from now, not
+      wherever the previous one left off - acceptable, since jitter
+      already means the exact delay isn't meant to be predictable).
+      lock_preset_changed now calls it alongside the existing
+      cycling_group.set_sensitive() toggle. Scoped to exactly what was
+      reported (the Cycling group/Cycle Interval timer) - Beat
+      Detection's own cycle trigger (a separate feature, its own
+      Experimental-page settings, not part of what's greyed out by
+      Lock Preset) has the same underlying shape (checkBeat gates on
+      its own beatCycleEnabled flag, also routes through next_preset()
+      on a hit) but wasn't touched, since it wasn't part of this
+      report and isn't currently disabled by locking either - worth
+      a look if it turns out to have the identical spam problem.
+      Verified in the sandbox against the real running app (not just
+      state assertions): with a real 1-second cycle interval and Lock
+      Preset on, zero "Preset is locked" toasts fired over 3.5 real
+      seconds (previously would have fired ~3 times) - confirms the
+      timer itself stopped ticking, not just that its result kept
+      getting silently swallowed.
 - [ ] Disable the 3D mini visualizers (Terrain/Waterfall/Pipes) until
       their performance can be improved - requested, not implemented.
       Related to the already-logged Mini Visualizer efficiency TODO
