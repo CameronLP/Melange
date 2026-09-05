@@ -104,7 +104,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_players = {}
         self.now_playing_show_title = True
         self.now_playing_show_artist = True
-        self.now_playing_show_album = False
+        self.now_playing_show_album = True
         self.now_playing_show_artwork = True
         self.now_playing_show_time = False
         self.now_playing_show_background = True
@@ -2467,7 +2467,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     def build_now_playing_show_album_control(self):
 
         return self.build_toggle_row(
-            "Show Album", False, self.now_playing_show_album_changed
+            "Show Album", True, self.now_playing_show_album_changed
         )
 
     def build_now_playing_show_artwork_control(self):
