@@ -105,6 +105,121 @@
 
 ## In progress / not started
 
+- [ ] Disable the 3D mini visualizers (Terrain/Waterfall/Pipes) until
+      their performance can be improved - requested, not implemented.
+      Related to the already-logged Mini Visualizer efficiency TODO
+      above (no profiling done yet for any of them) - this is a
+      narrower, more immediate ask (hide/disable specifically the 3D
+      ones from the menu in the meantime) rather than waiting on a
+      real perf fix.
+- [ ] FPS counter overlay for visualizers, toggleable - requested, not
+      designed. "Including the mini ones" implies both the main
+      window and every aux_window.py kind - unclear yet whether this
+      is one shared per-window toggle or a single global setting,
+      and where it would live in each window's own settings surface
+      (main window has Preferences; aux windows have their own
+      settings popover; mirror windows have neither an easy place for
+      it, matching the earlier "these have no settings-dialog
+      infrastructure" theme).
+- [ ] Needle VU meter not vertically centered - reported bug, not
+      investigated yet. draw_vu_needle's own comment describes a
+      "pivots near the bottom of the cell" gauge shape - worth
+      checking whether that's the actual root cause of what reads as
+      "not centered" (a bottom-pivoted needle dial deliberately uses
+      the *lower* portion of its cell by design, which may be exactly
+      what looks off-center) or a separate real bug in its geometry
+      math.
+- [ ] Mini visualizer settings popover doesn't close on click-outside,
+      and the gear icon itself sometimes doesn't respond - reported
+      bug. This is a *known-unresolved* area, not a fresh report: a
+      CAPTURE-phase click-outside fix was applied earlier this
+      project's history, then a second layered fix (a notify::
+      is-active-based popdown) made things actively worse ("now I
+      cannot open the setting in the mini visualizers") and was fully
+      reverted rather than patched further, since there was no way to
+      click-test the result at the time - see that revert's own
+      history for the full reasoning. The original CAPTURE-phase fix
+      was left in place but explicitly "not yet confirmed as fully
+      sufficient." This report confirms it isn't. "Gear icon sometimes
+      doesn't respond" is a new symptom on top of that, and could
+      plausibly share a root cause with the click-outside failure
+      (some event/grab being swallowed or left dangling) rather than
+      being two unrelated bugs - worth investigating together. Escape
+      already working to close it is a useful clue: whatever's
+      failing is specific to the click/pointer path, not the
+      popover's dismissal logic in general.
+- [x] (confirmed via reading the code, not yet fixed) VU LED segments'
+      peak-hold outline doesn't use the custom Peak Hold Color -
+      reported bug, root cause found: draw_vu_led's hold-segment
+      outline (the "which segment the peak currently sits in" marker)
+      still calls self.canvas_foreground_rgba(0.9) directly - it was
+      never updated to go through peak_hold_draw_color() when Peak
+      Hold Color was added this session. draw_vu_bar/draw_peak_bar/
+      both Spectrum render functions all got that update; draw_vu_led
+      was simply missed. Trivial one-line fix once picked up
+      (cr.set_source_rgba(*self.peak_hold_draw_color(0.9))), just not
+      done yet since this whole batch was requested as TODO-only.
+- [ ] VU LED segments' "rainbow option does nothing" - reported.
+      Real cause, found while looking at the peak-hold bug above:
+      draw_vu_led's segment colors are hardcoded to the fixed green/
+      yellow/red zone convention with no reference to self.color_mode
+      or self.color at all - same as draw_vu_bar, which documents this
+      as *deliberate* ("kept fixed - not the user color setting -
+      since the zones themselves are the information"). So this may
+      not be a bug in the sense of broken code so much as a design
+      decision the user is now pushing back on for LED style
+      specifically - needs a decision on whether LED segments should
+      actually respect color_mode/rainbow (and if so, how that
+      interacts with the zone-color convention the bar style
+      deliberately keeps) rather than a pure code fix.
+- [ ] Now Playing artwork doesn't appear - reported. Needs
+      disambiguating before assuming a cause: this may be the already-
+      known, already-decided limitation (no home-filesystem access,
+      user's explicit choice - file:// art, e.g. Firefox's, was
+      already confirmed to fail closed rather than display) rather
+      than a new bug, *unless* it's also failing for https://-served
+      art (e.g. Feishin's), which was expected to work fine under the
+      existing sandbox permissions and was never actually confirmed
+      end-to-end (the earlier verification only got as far as
+      confirming the URL scheme, not a real successful image load, and
+      a later attempt to test the real https:// URL was blocked by the
+      permission classifier since it contained the user's own account
+      password). Needs the user to say which case this actually is.
+- [ ] Placeholder artwork when Show Artwork is on but no art is
+      available for the current track - requested, not implemented.
+- [ ] "Find a better graphics engine for spectrograms?" - open-ended
+      research question, not investigated. Related to (but broader
+      than) the already-logged Mini Visualizer efficiency TODO and the
+      shared-FFT idea below - unclear whether this means a genuinely
+      different rendering approach/library or just optimizing the
+      existing Cairo one.
+- [ ] Common/shared FFT for all mini visualizers - requested again,
+      reinforcing the same idea already logged multiple times above
+      (each aux window currently runs its own independent FFT per
+      frame - real, confirmed duplicated work, not yet implemented).
+- [ ] Audio not detected on launch - reported bug, not investigated.
+      No details yet on reproduction (which audio source, timing,
+      whether switching sources or reloading fixes it).
+- [ ] Settings should persist between app launches - requested. This
+      app currently has zero settings persistence beyond the current
+      session, except Settings Profiles' own explicit named-snapshot
+      save/load (profile_fields/save_profiles/load_profiles) - there's
+      no GSettings schema or equivalent auto-persisted defaults layer
+      at all. Related to (but broader than) the already-logged Export
+      Settings TODO above - that one's about getting a snapshot out to
+      a portable file on request; this one's about the app remembering
+      its own current settings automatically across restarts with no
+      user action needed, most likely via a real GSettings schema
+      (data/ already has a place for one, per this project's standard
+      GNOME app layout, but none exists yet) rather than reusing the
+      profiles JSON file for this different job.
+- [ ] Tunable X-Y Scope that can write text/draw images - requested,
+      a much bigger feature idea than a simple setting. This is the
+      "oscilloscope art"/vector-monitor genre (Lissajous-style X-Y
+      traces shaped to spell text or draw recognizable images via
+      carefully constructed waveforms) - would need real waveform-
+      synthesis work, not just a rendering tweak to the existing X-Y
+      Scope aux window. Not scoped or designed at all yet.
 - [ ] Now Playing text transparency - requested (TODO-only, not
       implemented). Real gap found while noting this down: the
       existing Text Color Gtk.ColorDialogButton already lets picking
