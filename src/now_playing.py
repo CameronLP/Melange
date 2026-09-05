@@ -238,6 +238,7 @@ class NowPlayingWatcher:
             "bus_name": bus_name,
             "title": metadata.get("xesam:title", ""),
             "artist": ", ".join(artists) if artists else "",
+            "album": metadata.get("xesam:album", ""),
             "art_url": metadata.get("mpris:artUrl", ""),
             "status": self._playback_status(proxy),
             "length_us": metadata.get("mpris:length", 0),

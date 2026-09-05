@@ -105,6 +105,29 @@
 
 ## In progress / not started
 
+- [x] Album field for Now Playing - requested ("Add Album field in now
+      playing"), built. now_playing.py's _info_from_proxy now also
+      reads xesam:album from Metadata (previously ignored entirely -
+      only title/artist/art/status/length were read). New Show Album
+      Preferences toggle, off by default (matching Show Playback
+      Time's own off-by-default precedent for a newer, non-essential
+      field) - a new now_playing_album_label sits between Artist and
+      Playback Time, hidden whenever either the toggle is off or the
+      current track simply has no album tag, same pattern as Title/
+      Artist. Included in the existing width (apply_now_playing_width)
+      and text style (apply_now_playing_text_style) label loops, so it
+      automatically gets Text Box Width/Text Size/Font/Color/alpha
+      applied the same as every other line - and since apply_now_
+      playing_art_size already measures now_playing_text_box as a
+      whole rather than hardcoding which labels exist, Album Art
+      Size's Auto mode picks up the extra line with no changes needed
+      there either.
+      Verified in the sandbox: off by default with the label hidden,
+      enabling it shows the real album text, an empty album tag stays
+      hidden even with the toggle on, width/text-size changes apply to
+      it too, and - checking the actual production data path, not
+      just the window.py side - now_playing.py's real _info_from_proxy
+      genuinely includes an "album" key in what it reports.
 - [ ] X-Y Scope and Vector Scope square by default - requested,
       clarified as meaning their actual *window* default size/aspect
       ratio ("as in their windows"), not just the drawn content inside

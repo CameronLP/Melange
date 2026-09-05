@@ -104,6 +104,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_players = {}
         self.now_playing_show_title = True
         self.now_playing_show_artist = True
+        self.now_playing_show_album = False
         self.now_playing_show_artwork = True
         self.now_playing_show_time = False
         self.now_playing_show_background = True
@@ -274,6 +275,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_artist_label.add_css_class("now-playing-artist")
         self.now_playing_artist_label.set_ellipsize(Pango.EllipsizeMode.END)
         self.now_playing_text_box.append(self.now_playing_artist_label)
+
+        self.now_playing_album_label = Gtk.Label(xalign=0.0)
+        self.now_playing_album_label.add_css_class("now-playing-artist")
+        self.now_playing_album_label.set_ellipsize(Pango.EllipsizeMode.END)
+        self.now_playing_album_label.set_visible(False)
+        self.now_playing_text_box.append(self.now_playing_album_label)
 
         self.now_playing_time_label = Gtk.Label(xalign=0.0)
         self.now_playing_time_label.add_css_class("now-playing-artist")
@@ -1181,6 +1188,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.update_now_playing_title(info["title"])
         self.now_playing_artist_label.set_label(info["artist"])
+        self.now_playing_album_label.set_label(info["album"])
 
         self.apply_now_playing_field_visibility()
         self.load_now_playing_art(info["art_url"])
@@ -1232,7 +1240,16 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_show_artist and bool(info["artist"])
         )
 
+        self.now_playing_album_label.set_visible(
+            self.now_playing_show_album and bool(info["album"])
+        )
+
         self.apply_now_playing_art_size()
+
+    def now_playing_show_album_changed(self, enabled):
+
+        self.now_playing_show_album = enabled
+        self.apply_now_playing_field_visibility()
 
     def now_playing_show_title_changed(self, enabled):
 
@@ -1300,6 +1317,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         for label in (
             self.now_playing_artist_label,
+            self.now_playing_album_label,
             self.now_playing_time_label
         ):
             label.set_max_width_chars(self.now_playing_width)
@@ -1612,6 +1630,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         for label in (
             self.now_playing_title_label,
             self.now_playing_artist_label,
+            self.now_playing_album_label,
             self.now_playing_time_label
         ):
             label.set_attributes(attrs)
@@ -2445,6 +2464,12 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Show Artist", True, self.now_playing_show_artist_changed
         )
 
+    def build_now_playing_show_album_control(self):
+
+        return self.build_toggle_row(
+            "Show Album", False, self.now_playing_show_album_changed
+        )
+
     def build_now_playing_show_artwork_control(self):
 
         return self.build_toggle_row(
@@ -2867,6 +2892,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_placement_control())
         now_playing_group.add(self.build_now_playing_show_title_control())
         now_playing_group.add(self.build_now_playing_show_artist_control())
+        now_playing_group.add(self.build_now_playing_show_album_control())
         now_playing_group.add(self.build_now_playing_show_artwork_control())
         now_playing_group.add(self.build_now_playing_art_size_control())
         now_playing_group.add(self.build_now_playing_show_time_control())
