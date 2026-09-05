@@ -1586,6 +1586,16 @@ class MelangeWindow(Adw.ApplicationWindow):
             int(color.blue * 65535)
         ))
 
+        # Foreground color and its alpha are two separate Pango
+        # attribute types - the Text Color picker already lets
+        # choosing a translucent color (GTK4's color dialog has an
+        # alpha slider by default), but picking one had zero visible
+        # effect until this was added, since alpha was never read at
+        # all before.
+        attrs.insert(Pango.attr_foreground_alpha_new(
+            int(color.alpha * 65535)
+        ))
+
         for label in (
             self.now_playing_title_label,
             self.now_playing_artist_label,

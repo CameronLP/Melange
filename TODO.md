@@ -105,6 +105,46 @@
 
 ## In progress / not started
 
+- [ ] X-Y Scope and Vector Scope square by default - requested,
+      clarified as meaning their actual *window* default size/aspect
+      ratio ("as in their windows"), not just the drawn content inside
+      whatever rectangular size the window happens to be - i.e. their
+      default set_default_size() call should be square (e.g. 400x400)
+      instead of whatever generic rectangular default other aux
+      windows use. Not implemented.
+- [ ] Labels (self.show_labels - already exists, used by e.g.
+      draw_vu_needle's tick marks, X-Y Scope) should default on for
+      "scope, etc" mini visualizers - requested, not implemented.
+      Needs deciding exactly which kinds count (X-Y Scope/Vector
+      Scope/Oscilloscope seem the obvious "scope" ones; unclear if
+      VU Meter's needle ticks should also flip since it's a
+      per-kind-shared boolean, not per-kind-independent state).
+- [ ] Now Playing Enabled toggle in the hamburger menu (in addition to
+      Preferences) - requested, not implemented. Same shape as
+      Transparency Mode/Immersive Mode already being real menu items
+      alongside their Preferences controls.
+- [x] Now Playing text color's alpha channel now actually applies -
+      real gap found and fixed while logging it as a TODO earlier
+      ("now playing text transparency"): the Text Color
+      Gtk.ColorDialogButton already let picking a translucent color
+      (GTK4's color dialog has an alpha slider by default), but
+      apply_now_playing_text_style only ever read color.red/green/
+      blue into Pango.attr_foreground_new - alpha was silently
+      dropped, so picking one had zero visible effect. Added
+      Pango.attr_foreground_alpha_new(int(color.alpha * 65535))
+      alongside the existing foreground attribute - Pango keeps color
+      and its alpha as two separate attribute types. Verified in the
+      sandbox that setting a translucent color produces a foreground-
+      alpha attribute with the correct value on the title label.
+- [x] VU LED segments' peak-hold outline now uses the custom Peak Hold
+      Color - the bug found and logged earlier this session
+      (draw_vu_led's hold-segment outline still called self.
+      canvas_foreground_rgba(0.9) directly, never updated when Peak
+      Hold Color was added) is now actually fixed:
+      cr.set_source_rgba(*self.peak_hold_draw_color(0.9)). Verified by
+      rendering a real Cairo surface with a custom green color set and
+      confirming that exact color genuinely appears in the pixel
+      buffer, not just that the state changed.
 - [ ] Simplify the Now Playing settings - requested, not designed.
       This group has grown to ~16 separate controls this session
       (Enabled, Source, Placement, five Show */Background toggles,

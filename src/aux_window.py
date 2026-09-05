@@ -3334,7 +3334,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             cr.fill()
 
             if hold_segment_index is not None and i == hold_segment_index:
-                cr.set_source_rgba(*self.canvas_foreground_rgba(0.9))
+                cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
                 cr.set_line_width(1.5)
                 cr.rectangle(x + 0.75, seg_y + 0.75, w - 1.5, seg_height - 1.5)
                 cr.stroke()
