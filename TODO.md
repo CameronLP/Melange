@@ -172,19 +172,26 @@
       actually respect color_mode/rainbow (and if so, how that
       interacts with the zone-color convention the bar style
       deliberately keeps) rather than a pure code fix.
-- [ ] Now Playing artwork doesn't appear - reported. Needs
-      disambiguating before assuming a cause: this may be the already-
-      known, already-decided limitation (no home-filesystem access,
-      user's explicit choice - file:// art, e.g. Firefox's, was
-      already confirmed to fail closed rather than display) rather
-      than a new bug, *unless* it's also failing for https://-served
-      art (e.g. Feishin's), which was expected to work fine under the
-      existing sandbox permissions and was never actually confirmed
-      end-to-end (the earlier verification only got as far as
-      confirming the URL scheme, not a real successful image load, and
-      a later attempt to test the real https:// URL was blocked by the
-      permission classifier since it contained the user's own account
-      password). Needs the user to say which case this actually is.
+- [x] Now Playing artwork doesn't appear - resolved. Directly
+      confirmed the cause via a live D-Bus query (redacting the URL
+      itself, just checking its scheme): the user's actual current
+      audio source (Firefox) publishes mpris:artUrl as file://, the
+      known-restricted case - not a new bug, the already-decided
+      sandbox limitation from earlier this session (no home-
+      filesystem access). GNOME Shell's own now-playing notification
+      can show the same art because Shell itself isn't sandboxed.
+      Asked "what is recommended?" given the concrete real-world
+      impact (most desktop players cache art as file://, not
+      https://, so the practical cost of leaving this restricted is
+      "album art basically never shows") - recommended granting
+      --filesystem=home:ro given that, since read-only home access is
+      a bounded, well-understood permission and the feature is meant
+      to be genuinely useful. User agreed - added to
+      com.cameronlp.Melange.json's finish-args. Verified end to end
+      against the exact real, live, currently-playing track (not a
+      synthetic fixture): the real local file:// artwork now actually
+      loads into now_playing_art (both get_visible() and
+      get_paintable() confirmed) where it previously failed closed.
 - [ ] Placeholder artwork when Show Artwork is on but no art is
       available for the current track - requested, not implemented.
 - [ ] "Find a better graphics engine for spectrograms?" - open-ended
