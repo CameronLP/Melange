@@ -119,10 +119,26 @@
       Scope/Oscilloscope seem the obvious "scope" ones; unclear if
       VU Meter's needle ticks should also flip since it's a
       per-kind-shared boolean, not per-kind-independent state).
-- [ ] Now Playing Enabled toggle in the hamburger menu (in addition to
-      Preferences) - requested, not implemented. Same shape as
-      Transparency Mode/Immersive Mode already being real menu items
-      alongside their Preferences controls.
+- [x] Now Playing Enabled toggle in the hamburger menu (in addition to
+      Preferences) - built. now_playing_enabled_changed became a real
+      win.now-playing-enabled stateful action (was previously a plain
+      Python callback wired only to a Preferences build_toggle_row
+      switch) - same shape as Transparency Mode/Immersive Mode.
+      Preferences > Appearance > Now Playing > Enabled is now an
+      action-name-bound Adw.SwitchRow instead, so it and the new menu
+      item stay in sync automatically in both directions via the
+      shared action, with no extra state to reconcile. Menu item
+      appended at the end of the window-management section (after
+      Transparency Mode) - preserves Mirror Windows' own positional
+      index (item 0) once again.
+      Verified in the sandbox: the action exists, the menu item is
+      present at the right position, and - properly presenting both
+      the window and the Preferences dialog this time (action-name
+      resolution needs a real ancestor chain to the "win" group, which
+      an unpresented dialog doesn't have - a gap in this verification
+      itself, not the feature, caught and corrected before concluding
+      anything) - toggling either the action or the real Preferences
+      switch updates the other.
 - [x] Now Playing text color's alpha channel now actually applies -
       real gap found and fixed while logging it as a TODO earlier
       ("now playing text transparency"): the Text Color

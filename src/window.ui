@@ -239,6 +239,15 @@
         <attribute name="action">win.transparency-mode</attribute>
       </item>
 
+      <!-- Same shape as Transparency Mode/Immersive Mode above -
+           requested in addition to (not instead of) the Preferences >
+           Appearance > Now Playing > Enabled switch, which stays in
+           sync with this automatically via the shared action. -->
+      <item>
+        <attribute name="label" translatable="yes">Now Playing</attribute>
+        <attribute name="action">win.now-playing-enabled</attribute>
+      </item>
+
     </section>
 
 

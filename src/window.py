@@ -727,6 +727,19 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(immersive_mode_action)
 
+        now_playing_enabled_action = Gio.SimpleAction.new_stateful(
+            "now-playing-enabled",
+            None,
+            GLib.Variant("b", False)
+        )
+
+        now_playing_enabled_action.connect(
+            "change-state",
+            self.now_playing_enabled_changed
+        )
+
+        self.add_action(now_playing_enabled_action)
+
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
             None,
@@ -1709,9 +1722,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         # needed for either.
         Gio.File.new_for_uri(art_url).load_contents_async(None, on_loaded)
 
-    def now_playing_enabled_changed(self, enabled):
+    # A real win.now-playing-enabled action (not just a Preferences
+    # toggle) now, matching Transparency Mode/Immersive Mode - a
+    # hamburger menu item alongside them.
+    def now_playing_enabled_changed(self, action, value):
 
-        self.now_playing_enabled = enabled
+        action.set_state(value)
+
+        self.now_playing_enabled = value.get_boolean()
         self.update_now_playing_visibility()
 
     # Was previously given an extra-large top margin (56px vs the
@@ -2339,14 +2357,20 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="transparency_fade_scale"
         )
 
+    # Bound via action-name (like Transparency Mode's own Enabled row)
+    # rather than build_toggle_row now that this is a real action -
+    # stays in sync with the hamburger menu item automatically in both
+    # directions, no extra state to keep them agreeing.
     def build_now_playing_enabled_control(self):
 
-        return self.build_toggle_row(
-            "Enabled",
-            False,
-            self.now_playing_enabled_changed,
-            store_as="now_playing_enabled_row"
+        row = Adw.SwitchRow(
+            title="Enabled",
+            action_name="win.now-playing-enabled"
         )
+
+        self.now_playing_enabled_row = row
+
+        return row
 
     NOW_PLAYING_PLACEMENT_LABELS = [
         ("top-left", "Top Left"),
