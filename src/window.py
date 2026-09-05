@@ -81,6 +81,20 @@ class MelangeWindow(Adw.ApplicationWindow):
     menu_button = Gtk.Template.Child()
     fullscreen_button = Gtk.Template.Child()
 
+    # Now Playing's Scale slider is a single multiplier applied to
+    # both of these base values (see recompute_now_playing_scale) -
+    # unchanged from the old independent Text Size/Text Box Width
+    # defaults, so scale=1.0 looks identical to before this setting
+    # existed. Album Art isn't listed here since its Auto sizing
+    # already measures the real (now-scaled) text column height.
+    NOW_PLAYING_BASE_TEXT_SIZE = 13.0
+    NOW_PLAYING_BASE_WIDTH = 28
+    NOW_PLAYING_MIN_SCALE = 0.5
+    NOW_PLAYING_MAX_SCALE = 2.0
+    # Matches window.ui's own default-width - Lock to Window Size
+    # reads as "no bigger/smaller than usual" at the app's own default
+    # window size.
+    NOW_PLAYING_REFERENCE_WIDTH = 800
 
     def __init__(self, **kwargs):
 
@@ -108,17 +122,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_show_artwork = True
         self.now_playing_show_time = False
         self.now_playing_show_background = True
-        self.now_playing_text_size = 13.0
+        # now_playing_text_size/now_playing_width are always *derived*
+        # (see recompute_now_playing_scale) from now_playing_scale, or
+        # from the window's own width when now_playing_lock_to_window
+        # is on - never set directly by their own slider anymore, one
+        # shared Scale control replaced those alongside Album Art Size.
+        self.now_playing_scale = 1.0
+        self.now_playing_lock_to_window = False
+        self.now_playing_text_size = self.NOW_PLAYING_BASE_TEXT_SIZE
         self.now_playing_font_desc = "Sans"
-        self.now_playing_width = 28
+        self.now_playing_width = self.NOW_PLAYING_BASE_WIDTH
         self.now_playing_scroll_long_titles = False
         self.now_playing_scroll_timer = None
         self.now_playing_scroll_offset = 0
         self.now_playing_scroll_title = None
-        # 0 = Auto (match the current height of the text column next
-        # to it), matching the same "boundary value is a special
-        # state" convention as Cycle Interval/Framerate elsewhere.
-        self.now_playing_art_size = 0
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
@@ -810,7 +827,17 @@ class MelangeWindow(Adw.ApplicationWindow):
             "theme-selector"
         )
 
+    # Only exists for Now Playing's Lock to Window Size - there's no
+    # notify::default-width/height to bind to for a *live* interactive
+    # resize in GTK4 (those properties only reflect the initially
+    # requested size), so this is the real, always-correct hook.
+    # Cheap no-op when the toggle is off, which is the common case.
+    def do_size_allocate(self, width, height, baseline):
 
+        Adw.ApplicationWindow.do_size_allocate(self, width, height, baseline)
+
+        if self.now_playing_lock_to_window:
+            self.recompute_now_playing_scale()
 
     def on_webview_debug_message(self, text):
 
@@ -1282,10 +1309,53 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_show_time = enabled
         self.restart_now_playing_position_timer()
 
-    def now_playing_text_size_changed(self, value):
+    # Text Size and Text Box Width used to be two independent sliders
+    # (plus a third for Album Art Size) - consolidated into one Scale
+    # multiplier on request, to cut down the sheer number of Now
+    # Playing settings. now_playing_text_size/now_playing_width stay
+    # as real attributes (read all over: apply_now_playing_text_style,
+    # apply_now_playing_width, the scroll-marquee logic) - this is now
+    # the only place that ever assigns them.
+    def recompute_now_playing_scale(self):
 
-        self.now_playing_text_size = value
+        if self.now_playing_lock_to_window:
+            width = self.get_width() or self.NOW_PLAYING_REFERENCE_WIDTH
+            scale = width / self.NOW_PLAYING_REFERENCE_WIDTH
+            scale = max(
+                self.NOW_PLAYING_MIN_SCALE,
+                min(self.NOW_PLAYING_MAX_SCALE, scale)
+            )
+        else:
+            scale = self.now_playing_scale
+
+        self.now_playing_text_size = self.NOW_PLAYING_BASE_TEXT_SIZE * scale
+        self.now_playing_width = max(
+            10, round(self.NOW_PLAYING_BASE_WIDTH * scale)
+        )
+
         self.apply_now_playing_text_style()
+        self.apply_now_playing_width()
+
+        # The width/size change may have pushed the current title
+        # across the "too long to fit" threshold either way -
+        # re-evaluate rather than leaving a scroll running (or not
+        # running) against a now-stale size.
+        if self.now_playing_info is not None:
+            self.update_now_playing_title(self.now_playing_info["title"])
+
+    def now_playing_scale_changed(self, value):
+
+        self.now_playing_scale = value
+        self.recompute_now_playing_scale()
+
+    def now_playing_lock_to_window_changed(self, active):
+
+        self.now_playing_lock_to_window = active
+
+        if hasattr(self, "now_playing_scale_row"):
+            self.now_playing_scale_row.set_visible(not active)
+
+        self.recompute_now_playing_scale()
 
     def now_playing_text_color_changed(self, rgba):
 
@@ -1296,18 +1366,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.now_playing_font_desc = font_desc_string
         self.apply_now_playing_text_style()
-
-    def now_playing_width_changed(self, value):
-
-        self.now_playing_width = int(value)
-        self.apply_now_playing_width()
-
-        # The width change may have pushed the current title across
-        # the "too long to fit" threshold either way - re-evaluate
-        # rather than leaving a scroll running (or not running) against
-        # a now-stale window size.
-        if self.now_playing_info is not None:
-            self.update_now_playing_title(self.now_playing_info["title"])
 
     # max-width-chars, not a literal pixel width - matches how this
     # card was already sized (set_ellipsize + set_max_width_chars),
@@ -1337,30 +1395,25 @@ class MelangeWindow(Adw.ApplicationWindow):
         if self.now_playing_scroll_title is None:
             self.now_playing_title_label.set_max_width_chars(self.now_playing_width)
 
-    def now_playing_art_size_changed(self, value):
-
-        self.now_playing_art_size = int(value)
-        self.apply_now_playing_art_size()
-
     # Requested ("it should be limited by the box size... in general
     # it should match the height of the lines of now playing text") -
-    # 0 (Auto, the default) measures now_playing_text_box's own actual
-    # natural height (title + whichever of artist/time are currently
-    # visible, at the current Text Size/Font) via Gtk.Widget.measure()
-    # rather than computing it from font metrics by hand, so it stays
-    # correct across every combination of Show Title/Artist/Time and
-    # Text Size without this needing to know anything about how tall
-    # a line of text actually renders. A positive value overrides that
-    # with a fixed pixel size instead.
+    # measures now_playing_text_box's own actual natural height (title
+    # + whichever of artist/album/time are currently visible, at the
+    # current Text Size/Font) via Gtk.Widget.measure() rather than
+    # computing it from font metrics by hand, so it stays correct
+    # across every combination of Show Title/Artist/Time and Scale
+    # without this needing to know anything about how tall a line of
+    # text actually renders. No manual override anymore (that used to
+    # be a separate Album Art Size slider, removed when Text Size/Text
+    # Box Width/Album Art Size were consolidated into one Scale
+    # control) - Auto sizing already tracks Scale for free since it
+    # measures the real, now-scaled text column.
     def apply_now_playing_art_size(self):
 
-        if self.now_playing_art_size > 0:
-            size = self.now_playing_art_size
-        else:
-            _, natural, _, _ = self.now_playing_text_box.measure(
-                Gtk.Orientation.VERTICAL, -1
-            )
-            size = max(24, natural)
+        _, natural, _, _ = self.now_playing_text_box.measure(
+            Gtk.Orientation.VERTICAL, -1
+        )
+        size = max(24, natural)
 
         self.now_playing_art_frame.set_size_request(size, size)
 
@@ -2476,19 +2529,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Show Artwork", True, self.now_playing_show_artwork_changed
         )
 
-    def build_now_playing_art_size_control(self):
-
-        def format_art_size(value):
-            return "Auto" if value <= 0 else f"{int(value)}px"
-
-        return self.build_slider_row(
-            "Album Art Size",
-            0.0, 128.0, 4.0, 0.0,
-            format_art_size,
-            self.now_playing_art_size_changed,
-            store_as="now_playing_art_size_scale"
-        )
-
     def build_now_playing_show_time_control(self):
 
         return self.build_toggle_row(
@@ -2501,10 +2541,59 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Show Background", True, self.now_playing_show_background_changed
         )
 
-    def build_now_playing_auto_hide_control(self):
+    # One collapsed row instead of 6 always-visible toggle rows - the
+    # individual build_now_playing_show_*_control methods are unchanged
+    # and still used, just nested inside this Adw.ExpanderRow instead
+    # of added to the Preferences group directly.
+    def build_now_playing_displayed_fields_control(self):
+
+        row = Adw.ExpanderRow(title="Displayed Fields")
+
+        for sub_row in (
+            self.build_now_playing_show_title_control(),
+            self.build_now_playing_show_artist_control(),
+            self.build_now_playing_show_album_control(),
+            self.build_now_playing_show_artwork_control(),
+            self.build_now_playing_show_time_control(),
+            self.build_now_playing_show_background_control()
+        ):
+            row.add_row(sub_row)
+
+        return row
+
+    # Text Size/Album Art Size/Text Box Width used to be three
+    # independent sliders - consolidated into one Scale multiplier on
+    # request (see recompute_now_playing_scale). Hidden while Lock to
+    # Window Size is on, since sizing is then fully automatic.
+    def build_now_playing_scale_control(self):
+
+        def format_scale(value):
+            return f"{round(value * 100)}%"
+
+        row = self.build_slider_row(
+            "Scale",
+            self.NOW_PLAYING_MIN_SCALE, self.NOW_PLAYING_MAX_SCALE,
+            0.05, self.now_playing_scale,
+            format_scale,
+            self.now_playing_scale_changed,
+            store_as="now_playing_scale_scale"
+        )
+
+        # build_slider_row's store_as= captures the inner Gtk.Scale,
+        # not the Adw.ActionRow itself - a separate handle is needed
+        # here so now_playing_lock_to_window_changed can hide/show the
+        # whole row, not just the scale widget inside it.
+        self.now_playing_scale_row = row
+        row.set_visible(not self.now_playing_lock_to_window)
+
+        return row
+
+    def build_now_playing_lock_to_window_control(self):
 
         return self.build_toggle_row(
-            "Auto-Hide", False, self.now_playing_auto_hide_changed
+            "Lock to Window Size",
+            self.now_playing_lock_to_window,
+            self.now_playing_lock_to_window_changed
         )
 
     def build_now_playing_auto_hide_seconds_control(self):
@@ -2520,11 +2609,30 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="now_playing_auto_hide_seconds_scale"
         )
 
-    def build_now_playing_periodic_fade_control(self):
+    # Toggle-row-plus-separate-slider-row collapsed into one
+    # Adw.ExpanderRow with its own built-in enable switch - the switch
+    # is the same on/off state now_playing_auto_hide_changed always
+    # drove, and expanding/collapsing (auto-synced to the switch, so
+    # no separate click is needed to see it) reveals the Auto-Hide
+    # Delay slider only when it's actually relevant.
+    def build_now_playing_auto_hide_control(self):
 
-        return self.build_toggle_row(
-            "Periodic Fade", False, self.now_playing_periodic_fade_changed
+        row = Adw.ExpanderRow(
+            title="Auto-Hide",
+            show_enable_switch=True,
+            enable_expansion=self.now_playing_auto_hide,
+            expanded=self.now_playing_auto_hide
         )
+
+        def on_enable_changed(r, param):
+            active = r.get_enable_expansion()
+            r.set_expanded(active)
+            self.now_playing_auto_hide_changed(active)
+
+        row.connect("notify::enable-expansion", on_enable_changed)
+        row.add_row(self.build_now_playing_auto_hide_seconds_control())
+
+        return row
 
     def build_now_playing_periodic_fade_seconds_control(self):
 
@@ -2539,18 +2647,25 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="now_playing_periodic_fade_seconds_scale"
         )
 
-    def build_now_playing_text_size_control(self):
+    # Same ExpanderRow-with-switch treatment as Auto-Hide above.
+    def build_now_playing_periodic_fade_control(self):
 
-        def format_text_size(value):
-            return f"{int(value)}px"
-
-        return self.build_slider_row(
-            "Text Size",
-            8.0, 72.0, 1.0, 13.0,
-            format_text_size,
-            self.now_playing_text_size_changed,
-            store_as="now_playing_text_size_scale"
+        row = Adw.ExpanderRow(
+            title="Periodic Fade",
+            show_enable_switch=True,
+            enable_expansion=self.now_playing_periodic_fade,
+            expanded=self.now_playing_periodic_fade
         )
+
+        def on_enable_changed(r, param):
+            active = r.get_enable_expansion()
+            r.set_expanded(active)
+            self.now_playing_periodic_fade_changed(active)
+
+        row.connect("notify::enable-expansion", on_enable_changed)
+        row.add_row(self.build_now_playing_periodic_fade_seconds_control())
+
+        return row
 
     # Level=FACE restricts the native GTK4 font picker to choosing a
     # typeface plus its style (Regular/Bold/Italic/Bold Italic, per
@@ -2586,19 +2701,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_font_button = button
 
         return row
-
-    def build_now_playing_width_control(self):
-
-        def format_width(value):
-            return f"{int(value)} chars"
-
-        return self.build_slider_row(
-            "Text Box Width",
-            10.0, 200.0, 2.0, 28.0,
-            format_width,
-            self.now_playing_width_changed,
-            store_as="now_playing_width_scale"
-        )
 
     def build_now_playing_scroll_long_titles_control(self):
 
@@ -2890,21 +2992,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_enabled_control())
         now_playing_group.add(self.build_now_playing_source_control())
         now_playing_group.add(self.build_now_playing_placement_control())
-        now_playing_group.add(self.build_now_playing_show_title_control())
-        now_playing_group.add(self.build_now_playing_show_artist_control())
-        now_playing_group.add(self.build_now_playing_show_album_control())
-        now_playing_group.add(self.build_now_playing_show_artwork_control())
-        now_playing_group.add(self.build_now_playing_art_size_control())
-        now_playing_group.add(self.build_now_playing_show_time_control())
-        now_playing_group.add(self.build_now_playing_show_background_control())
+        now_playing_group.add(self.build_now_playing_displayed_fields_control())
+        now_playing_group.add(self.build_now_playing_lock_to_window_control())
+        now_playing_group.add(self.build_now_playing_scale_control())
         now_playing_group.add(self.build_now_playing_auto_hide_control())
-        now_playing_group.add(self.build_now_playing_auto_hide_seconds_control())
         now_playing_group.add(self.build_now_playing_periodic_fade_control())
-        now_playing_group.add(self.build_now_playing_periodic_fade_seconds_control())
-        now_playing_group.add(self.build_now_playing_font_control())
-        now_playing_group.add(self.build_now_playing_width_control())
         now_playing_group.add(self.build_now_playing_scroll_long_titles_control())
-        now_playing_group.add(self.build_now_playing_text_size_control())
+        now_playing_group.add(self.build_now_playing_font_control())
         now_playing_group.add(self.build_now_playing_text_color_control())
 
         toolbar_group = Adw.PreferencesGroup(

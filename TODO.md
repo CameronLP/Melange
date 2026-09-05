@@ -187,18 +187,55 @@
       rendering a real Cairo surface with a custom green color set and
       confirming that exact color genuinely appears in the pixel
       buffer, not just that the state changed.
-- [ ] Simplify the Now Playing settings - requested, not designed.
-      This group has grown to ~16 separate controls this session
-      (Enabled, Source, Placement, five Show */Background toggles,
-      Font, Text Box Width, Text Size, Text Color, Scroll Long Titles,
-      Album Art Size, Auto-Hide + its delay, Periodic Fade + its
-      interval) - genuinely a lot to scroll through for one feature.
-      No specific simplification direction chosen yet - could mean
-      sub-grouping into collapsible sections, hiding secondary sliders
-      behind their own toggle until enabled (e.g. Auto-Hide Delay only
-      shown once Auto-Hide itself is on), consolidating related
-      settings, or something else. Needs a decision on approach before
-      implementing.
+- [x] Simplify the Now Playing settings - requested, designed and
+      built. The group had grown to 19 separate controls (Enabled,
+      Source, Placement, six Show */Background toggles, Album Art
+      Size, Auto-Hide + its delay, Periodic Fade + its interval, Text
+      Size, Font, Text Box Width, Scroll Long Titles, Text Color) -
+      collapsed to 11 top-level rows, with everything still fully
+      configurable:
+      - Displayed Fields - the 6 Show Title/Artist/Album/Artwork/
+        Playback Time/Background toggles moved into one collapsed
+        Adw.ExpanderRow (first use of this widget in the codebase),
+        unchanged individually.
+      - Scale - one new slider (50%-200%, default 100%) replaces Text
+        Size, Album Art Size, and Text Box Width. Text Size/Text Box
+        Width scale off shared NOW_PLAYING_BASE_TEXT_SIZE (13px)/
+        NOW_PLAYING_BASE_WIDTH (28 chars) constants via a single
+        recompute_now_playing_scale() method; Album Art Size's old
+        manual override is gone since its Auto sizing already measures
+        the real (now-scaled) text column height, so it tracks Scale
+        for free with no separate art-scaling code.
+      - Lock to Window Size - new toggle; when on, Scale is hidden
+        (self.now_playing_scale_row.set_visible(False)) and the
+        effective scale is instead computed from the real main window
+        width against a NOW_PLAYING_REFERENCE_WIDTH=800 baseline
+        (matching window.ui's own default-width), clamped to the same
+        50%-200% range. Required a genuinely new mechanism for this
+        codebase - there was no existing window-resize hook anywhere
+        (window.py/mirror_window.py/aux_window.py all confirmed clean
+        via grep) - added a do_size_allocate override on MelangeWindow
+        itself, since Gtk.Window's default-width/height properties are
+        only the *initial* requested size in GTK4 and don't track a
+        live interactive resize.
+      - Auto-Hide and Periodic Fade each collapsed from a toggle row +
+        a separate always-visible slider row into one Adw.ExpanderRow
+        with show_enable_switch=True - the switch is the same on/off
+        state as before, and flipping it also auto-expands/collapses
+        the row (synced via notify::enable-expansion) so the Delay/
+        Interval slider only takes up space when it's actually
+        relevant, without needing a second click to see it.
+      Verified in the sandbox against real MelangeWindow/widget
+      instances: default values unchanged from before this change
+      (scale=1.0 behaves identically to the old hardcoded defaults),
+      Scale=1.5 produces the expected proportional text_size/width,
+      Lock to Window Size hides the Scale row and a real
+      set_default_size() + do_size_allocate() genuinely rescales text
+      (clamped correctly at the 200% ceiling), disabling it restores
+      the manual value, both ExpanderRows construct as real
+      Adw.ExpanderRow widgets with working switch<->expansion sync,
+      and Album Art's Auto sizing still exactly matches the (rescaled)
+      text box's measured height.
 - [x] VU Meter needle defaults to solid, not rainbow - requested
       ("vu needle should not default to rainbow"). Confirmed
       draw_vu_needle's pointer line (not the arc/zones, which are
