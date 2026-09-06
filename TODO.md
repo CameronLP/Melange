@@ -245,6 +245,12 @@
       defaults to 1.2 (aux_window.py), with an existing "Dot Size"
       slider (0.5-4.0) in its settings popover already exposing this -
       just the default value needs bumping, not a new control.
+- [ ] TODO: Now Playing's Lock to Window Size should default on -
+      requested, not implemented. self.now_playing_lock_to_window
+      (window.py) currently defaults to False; the Scale row/control
+      it hides when enabled already exists (see the Now Playing
+      settings consolidation above) - just the default value needs
+      flipping, not a new control.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope
