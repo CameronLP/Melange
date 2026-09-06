@@ -491,6 +491,20 @@
       shared-FFT idea below - unclear whether this means a genuinely
       different rendering approach/library or just optimizing the
       existing Cairo one.
+- [ ] TODO: different graphics library for mini viz - OpenGL, NanoVG,
+      etc, instead of the current per-frame Cairo (software,
+      CPU-bound) rendering every aux window uses. Directly related to
+      (a more specific version of) the two entries just above - a
+      genuine rendering-backend swap rather than optimizing within
+      Cairo. Not investigated: GTK4 has Gtk.GLArea for a real OpenGL
+      context inside a widget (would need each draw_* function's
+      Cairo calls rewritten against a different API entirely, a large
+      rewrite touching every aux window kind), while NanoVG has no
+      existing Python/PyGObject binding used anywhere in this codebase
+      - would need vetting for one that actually works well with
+      PyGObject/GTK4 before it's a real option. No decision yet on
+      whether this is worth the rewrite cost versus the shared-FFT/
+      other optimization ideas already logged.
 - [ ] Common/shared FFT for all mini visualizers - requested again,
       reinforcing the same idea already logged multiple times above
       (each aux window currently runs its own independent FFT per
