@@ -128,14 +128,34 @@
       it too, and - checking the actual production data path, not
       just the window.py side - now_playing.py's real _info_from_proxy
       genuinely includes an "album" key in what it reports.
-- [x] X-Y Scope and Vector Scope square by default - requested,
+- [ ] X-Y Scope and Vector Scope square by default - requested,
       clarified as meaning their actual *window* default size/aspect
       ratio ("as in their windows"), not just the drawn content inside
-      whatever rectangular size the window happens to be. Their
-      set_default_size() call (aux_window.py) is now 400x400 for kind
-      in ("xy", "vectorscope"), same branch style as the existing
-      dvd/terrain-waterfall-pipes special cases. Verified in the
-      sandbox against real AuxVisualizerWindow instances.
+      whatever rectangular size the window happens to be. Built once
+      this session (400x400 default via a kind in ("xy", "vectorscope")
+      branch in aux_window.py, same style as the existing dvd/terrain-
+      waterfall-pipes special cases) and verified against real
+      AuxVisualizerWindow instances, but reverted on request right
+      after - "the x-y scope is broken now"/"also the vector scope"
+      immediately followed enabling Labels-by-default for these same
+      two kinds in the same window (see below), and although no crash
+      or rendering exception was found (drawing math is resolution-
+      independent, and rendering at the real allocated 400x400 size
+      threw nothing in the sandbox), the user asked to undo the
+      dimension change specifically rather than dig further, so both
+      kinds are back to the standard 360x220 default. Root cause of
+      the original "broken" report was never confirmed either way -
+      possibly just the user's own already-running Melange process not
+      having picked up a same-session code change yet (this app has no
+      hot-reload; a long-running instance keeps whatever code was
+      loaded at its own startup) rather than a real bug in the square
+      size itself. Back open if the square-window request comes up
+      again - worth deciding whether to retry it, and if so, checking
+      whether X-Y Scope's "R" label/Vector Scope's "M" label (both
+      drawn at a fixed y=14, very close to the top edge - unlike
+      Oscilloscope's own labels, which sit at the bottom of each
+      strip) read badly once Labels defaults on for a taller square
+      window, before assuming it's unrelated.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope
