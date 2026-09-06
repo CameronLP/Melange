@@ -128,34 +128,45 @@
       it too, and - checking the actual production data path, not
       just the window.py side - now_playing.py's real _info_from_proxy
       genuinely includes an "album" key in what it reports.
-- [ ] X-Y Scope and Vector Scope square by default - requested,
+- [x] X-Y Scope and Vector Scope square by default - requested,
       clarified as meaning their actual *window* default size/aspect
       ratio ("as in their windows"), not just the drawn content inside
-      whatever rectangular size the window happens to be. Built once
-      this session (400x400 default via a kind in ("xy", "vectorscope")
-      branch in aux_window.py, same style as the existing dvd/terrain-
-      waterfall-pipes special cases) and verified against real
-      AuxVisualizerWindow instances, but reverted on request right
-      after - "the x-y scope is broken now"/"also the vector scope"
-      immediately followed enabling Labels-by-default for these same
-      two kinds in the same window (see below), and although no crash
-      or rendering exception was found (drawing math is resolution-
-      independent, and rendering at the real allocated 400x400 size
-      threw nothing in the sandbox), the user asked to undo the
-      dimension change specifically rather than dig further, so both
-      kinds are back to the standard 360x220 default. Root cause of
-      the original "broken" report was never confirmed either way -
-      possibly just the user's own already-running Melange process not
-      having picked up a same-session code change yet (this app has no
-      hot-reload; a long-running instance keeps whatever code was
-      loaded at its own startup) rather than a real bug in the square
-      size itself. Back open if the square-window request comes up
-      again - worth deciding whether to retry it, and if so, checking
-      whether X-Y Scope's "R" label/Vector Scope's "M" label (both
-      drawn at a fixed y=14, very close to the top edge - unlike
-      Oscilloscope's own labels, which sit at the bottom of each
-      strip) read badly once Labels defaults on for a taller square
-      window, before assuming it's unrelated.
+      whatever rectangular size the window happens to be. 400x400
+      default via a kind in ("xy", "vectorscope") branch in
+      aux_window.py, same style as the existing dvd/terrain-waterfall-
+      pipes special cases.
+      This went back and forth once this session: built, then reverted
+      on an initial "the x-y scope is broken now"/"also the vector
+      scope" report, then re-applied here once that report turned out
+      to be unrelated - root-caused (with real evidence, not
+      speculation) to two separate environment issues rather than
+      anything wrong with the square size itself:
+      1. This session's own `flatpak run --command=python3 ... -`
+         sandbox verification scripts were leaving orphaned Flatpak
+         instances running in the background instead of fully exiting
+         even after app.quit() - 13 stray `com.cameronlp.Melange`
+         processes had accumulated (confirmed via `flatpak ps`), any
+         of which could have been showing a real window still running
+         stale code from earlier in the session. Cleaned up via
+         `flatpak kill com.cameronlp.Melange`; see [[melange_flatpak_
+         test_orphans]] memory note for the reusable fix.
+      2. A genuinely separate, follow-up report ("both seem to be
+         limited by a diamond shaped area" after resizing) turned out
+         to be expected, correct behavior, not a bug - confirmed via
+         plain-Python math with no GTK/Flatpak involved (so it can't
+         hang): Vector Scope is a goniometer (rotates L/R into Mid/
+         Side), for which the reachable region for any signal bounded
+         to [-1,1] on both channels is *exactly* a diamond by
+         construction - the standard, correct goniometer look. X-Y
+         Scope's plain L-vs-R scatter genuinely can reach all four
+         corners (confirmed: 56/5000 random samples landed within 0.9
+         of both axes), but doing so needs both channels independently
+         near full-scale at the same instant, a low-probability joint
+         event for random noise and rarer still for real, correlated
+         music - so the visibly dense trace naturally reads as diamond/
+         lens-shaped with sparse corners. Not present before because
+         Labels (crosshair) defaulting off previously, plus the small
+         window, made it easy to not notice.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope

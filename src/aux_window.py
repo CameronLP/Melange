@@ -396,6 +396,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.set_default_size(480, 320)
         elif kind in ("terrain", "waterfall", "pipes"):
             self.set_default_size(520, 360)
+        elif kind in ("xy", "vectorscope"):
+            self.set_default_size(400, 400)
         else:
             self.set_default_size(360, 220)
 
