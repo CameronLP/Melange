@@ -240,6 +240,11 @@
       400px canvas legitimately pushes that same full-scale sample
       off-canvas, which is expected clipping (same as a real scope
       going off-screen at high gain), not a bug.
+- [ ] TODO: Vector Scope's default Dot Size should be larger -
+      requested, not implemented. Currently self.vector_dot_size
+      defaults to 1.2 (aux_window.py), with an existing "Dot Size"
+      slider (0.5-4.0) in its settings popover already exposing this -
+      just the default value needs bumping, not a new control.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope
