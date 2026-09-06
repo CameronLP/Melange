@@ -198,6 +198,34 @@
       just "did it crash") - control points for 4 exactly collinear
       input points land exactly on that line (y=0 for both), i.e. a
       straight input never produces a spurious curve/bow.
+- [x] X-Y Scope/Vector Scope: "Equal Aspect Ratio" toggle, requested
+      ("maintain equal aspect ratio... to the scopes"). Confirmed via
+      real introspection first, not assumed: GTK4 genuinely has no
+      window-level geometry-hint/aspect-ratio API left (Gdk.Toplevel
+      and Gtk.Window both have zero aspect/geometry/hint methods -
+      GTK3's old set_geometry_hints() is gone), so there's no way to
+      make the compositor itself lock an actual interactive window
+      resize to a fixed ratio. Implemented at the *content* level
+      instead, which is achievable and was the recommended fallback:
+      a new shared apply_aspect_letterbox(cr, width, height) always
+      paints the real background across the full canvas, then - only
+      when self.maintain_aspect_ratio is on (default) - confines
+      everything drawn afterward to a centered square inscribed in
+      whatever rectangle shape the window/drawing area actually is,
+      by translating cr so (0,0) becomes that square's own corner;
+      returns the (possibly-reduced) width/height for the rest of the
+      draw function to treat as the whole canvas. Both draw_xy_scope
+      and draw_vector_scope now start with this call instead of their
+      own separate background paint - for Vector Scope specifically,
+      this also correctly resizes its persistent vector_surface trail
+      buffer to the square size, not the full rectangle. New "Equal
+      Aspect Ratio" switch in both kinds' settings popovers.
+      Verified in the sandbox by capturing the actual Cairo matrix
+      translation and returned width/height (not pixel-scanning):
+      ON, a 600x300 canvas correctly reduces to a centered 300x300
+      square translated by exactly (150, 0) for both kinds; OFF
+      passes 600x300 through unchanged with no translation; an
+      already-square 400x400 canvas is correctly a no-op either way.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope

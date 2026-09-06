@@ -449,6 +449,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # default (the just-requested look), toggleable back to the
         # original straight-line look on request.
         self.xy_curved = True
+        # X-Y Scope/Vector Scope only - GTK4 has no window-level
+        # geometry-hint/aspect-ratio API to lock an actual interactive
+        # resize (confirmed via introspection: Gdk.Toplevel/Gtk.Window
+        # have no such methods, unlike GTK3's old geometry hints), so
+        # this is enforced at the *content* level instead - see
+        # apply_aspect_letterbox - by confining what gets drawn to a
+        # centered square inscribed in the drawing area, regardless of
+        # what shape the window itself gets resized to. On by default,
+        # matching these two kinds' new square-by-default window size.
+        self.maintain_aspect_ratio = True
 
         self.num_bars = 24
         self.decay = 0.85
@@ -1638,6 +1648,29 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             dot_size_row.append(dot_size_scale)
             box.append(dot_size_row)
 
+        if self.kind in ("xy", "vectorscope"):
+
+            aspect_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            aspect_label = Gtk.Label(
+                label="Equal Aspect Ratio", xalign=0, hexpand=True
+            )
+            aspect_row.append(aspect_label)
+
+            aspect_switch = Gtk.Switch()
+            aspect_switch.set_active(self.maintain_aspect_ratio)
+            aspect_switch.set_valign(Gtk.Align.CENTER)
+
+            aspect_switch.connect(
+                "notify::active",
+                self.on_maintain_aspect_ratio_changed
+            )
+
+            aspect_row.append(aspect_switch)
+            box.append(aspect_row)
+
         if self.kind in (
             "spectrum", "spectrogram", "vu", "peak", "oscilloscope", "vectorscope",
             "xy"
@@ -2756,6 +2789,36 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.xy_curved = switch.get_active()
         self.drawing_area.queue_draw()
 
+    def on_maintain_aspect_ratio_changed(self, switch, param):
+
+        self.maintain_aspect_ratio = switch.get_active()
+        self.drawing_area.queue_draw()
+
+    # Always paints the real background across the *full* canvas
+    # first (so the caller never needs its own separate background
+    # paint), then - only when Equal Aspect Ratio is on - confines the
+    # rest of drawing to a centered square inscribed in whatever
+    # rectangle the drawing area actually is, by translating cr so
+    # (0,0) becomes that square's own top-left corner. Any leftover
+    # strip on the long axis just reads as a plain margin, since it's
+    # the same background color, not a visibly different letterbox
+    # bar. Callers should treat the returned width/height as the
+    # entire canvas from that point on; a no-op beyond the background
+    # paint (original width/height, no translation) when the setting
+    # is off.
+    def apply_aspect_letterbox(self, cr, width, height):
+
+        cr.set_source_rgb(*self.canvas_background_rgb())
+        cr.paint()
+
+        if not self.maintain_aspect_ratio:
+            return width, height
+
+        side = min(width, height)
+        cr.translate((width - side) / 2, (height - side) / 2)
+
+        return side, side
+
     def on_pipes_drag_begin(self, gesture, start_x, start_y):
 
         self.pipes_rotate_start = (self.pipes_azimuth, self.pipes_elevation)
@@ -3717,8 +3780,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_xy_scope(self, cr, width, height):
 
-        cr.set_source_rgb(*self.canvas_background_rgb())
-        cr.paint()
+        width, height = self.apply_aspect_letterbox(cr, width, height)
 
         cx = width / 2
         cy = height / 2
@@ -3922,6 +3984,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return max(-1.0, min(1.0, sum_lr / denominator))
 
     def draw_vector_scope(self, cr, width, height):
+
+        width, height = self.apply_aspect_letterbox(cr, width, height)
 
         bg = self.canvas_background_rgb()
 
