@@ -438,6 +438,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             else "rainbow"
         )
         self.xy_line_width = 1.0
+        # 0 = All (every sample in the current audio chunk, the
+        # original/default behavior) - a positive value subsamples
+        # down to that many evenly-spaced points instead, requested as
+        # an adjustable "number of lines drawn" control.
+        self.xy_points = 0
+        # Smooth Catmull-Rom curve through the plotted points instead
+        # of a plain straight polyline, requested to look more like a
+        # real analog scope's continuously-curving beam trace. On by
+        # default (the just-requested look), toggleable back to the
+        # original straight-line look on request.
+        self.xy_curved = True
 
         self.num_bars = 24
         self.decay = 0.85
@@ -2455,6 +2466,54 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             xy_line_width_row.append(xy_line_width_scale)
             box.append(xy_line_width_row)
 
+            xy_points_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            xy_points_label = Gtk.Label(
+                label="Points", xalign=0, hexpand=True
+            )
+            xy_points_row.append(xy_points_label)
+
+            self.xy_points_value_label = Gtk.Label(label=self.format_xy_points(self.xy_points))
+
+            xy_points_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.0, 200.0, 4.0
+            )
+            xy_points_scale.set_value(self.xy_points)
+            xy_points_scale.set_size_request(120, -1)
+            xy_points_scale.set_draw_value(False)
+
+            xy_points_scale.connect(
+                "value-changed",
+                self.on_xy_points_changed
+            )
+
+            xy_points_row.append(self.xy_points_value_label)
+            xy_points_row.append(xy_points_scale)
+            box.append(xy_points_row)
+
+            xy_curved_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            xy_curved_label = Gtk.Label(
+                label="Curved Lines", xalign=0, hexpand=True
+            )
+            xy_curved_row.append(xy_curved_label)
+
+            xy_curved_switch = Gtk.Switch()
+            xy_curved_switch.set_active(self.xy_curved)
+            xy_curved_switch.set_valign(Gtk.Align.CENTER)
+
+            xy_curved_switch.connect(
+                "notify::active",
+                self.on_xy_curved_changed
+            )
+
+            xy_curved_row.append(xy_curved_switch)
+            box.append(xy_curved_row)
+
         popover = Gtk.Popover()
         popover.set_child(box)
 
@@ -2680,6 +2739,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_xy_line_width_changed(self, scale):
 
         self.xy_line_width = scale.get_value()
+        self.drawing_area.queue_draw()
+
+    def format_xy_points(self, value):
+
+        return "All" if value <= 0 else str(int(value))
+
+    def on_xy_points_changed(self, scale):
+
+        self.xy_points = int(scale.get_value())
+        self.xy_points_value_label.set_label(self.format_xy_points(self.xy_points))
+        self.drawing_area.queue_draw()
+
+    def on_xy_curved_changed(self, switch, param):
+
+        self.xy_curved = switch.get_active()
         self.drawing_area.queue_draw()
 
     def on_pipes_drag_begin(self, gesture, start_x, start_y):
@@ -3544,6 +3618,103 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.draw_text_label(cr, left_x + cell_width / 2 - 3, label_y, "L")
             self.draw_text_label(cr, right_x + cell_width / 2 - 3, label_y, "R")
 
+    # Catmull-Rom-to-Bezier: a smooth curve through every given point
+    # (not just near them, unlike a plain Bezier fit) - requested for
+    # X-Y Scope specifically ("more curved lines like a real x-y
+    # scope"), since a real analog scope's electron beam physically
+    # traces a continuous curve rather than the straight polyline
+    # segments a plain move_to/line_to chain draws between discrete
+    # samples. Standard technique: the Bezier control points for the
+    # segment between p1 and p2 are derived from the *surrounding*
+    # points p0 and p3, so each segment's tangent naturally continues
+    # the curve's direction through its neighbors instead of putting a
+    # visible kink at every sample.
+    def catmull_rom_control_points(self, p0, p1, p2, p3):
+
+        c1 = (p1[0] + (p2[0] - p0[0]) / 6.0, p1[1] + (p2[1] - p0[1]) / 6.0)
+        c2 = (p2[0] - (p3[0] - p1[0]) / 6.0, p2[1] - (p3[1] - p1[1]) / 6.0)
+
+        return c1, c2
+
+    # One continuous smooth path through every point, single color -
+    # the caller sets the source and calls stroke() once afterward.
+    def stroke_smooth_path(self, cr, points):
+
+        n = len(points)
+
+        if n < 2:
+            return
+
+        cr.move_to(*points[0])
+
+        if n == 2:
+            cr.line_to(*points[1])
+            return
+
+        for i in range(n - 1):
+
+            p0 = points[i - 1] if i > 0 else points[i]
+            p1 = points[i]
+            p2 = points[i + 1]
+            p3 = points[i + 2] if i + 2 < n else points[i + 1]
+
+            c1, c2 = self.catmull_rom_control_points(p0, p1, p2, p3)
+            cr.curve_to(c1[0], c1[1], c2[0], c2[1], p2[0], p2[1])
+
+    # Same smooth curve, but each segment gets its own color/stroke()
+    # call - for the "rainbow comet trail" color mode, which needs a
+    # color that changes along the trace's length.
+    def stroke_smooth_path_rainbow(self, cr, points, opacity):
+
+        n = len(points)
+
+        if n < 2:
+            return
+
+        for i in range(n - 1):
+
+            p0 = points[i - 1] if i > 0 else points[i]
+            p1 = points[i]
+            p2 = points[i + 1]
+            p3 = points[i + 2] if i + 2 < n else points[i + 1]
+
+            cr.set_source_rgba(*rainbow_color(i / max(1, n - 2)), opacity)
+            cr.move_to(*p1)
+
+            if n == 2:
+                cr.line_to(*p2)
+            else:
+                c1, c2 = self.catmull_rom_control_points(p0, p1, p2, p3)
+                cr.curve_to(c1[0], c1[1], c2[0], c2[1], p2[0], p2[1])
+
+            cr.stroke()
+
+    # The original plain polyline, kept as an option (Curved Lines
+    # toggle) rather than replacing it outright.
+    def stroke_straight_path(self, cr, points):
+
+        if len(points) < 2:
+            return
+
+        cr.move_to(*points[0])
+
+        for p in points[1:]:
+            cr.line_to(*p)
+
+    def stroke_straight_path_rainbow(self, cr, points, opacity):
+
+        n = len(points)
+
+        if n < 2:
+            return
+
+        for i in range(1, n):
+
+            cr.set_source_rgba(*rainbow_color(i / max(1, n - 1)), opacity)
+            cr.move_to(*points[i - 1])
+            cr.line_to(*points[i])
+            cr.stroke()
+
     def draw_xy_scope(self, cr, width, height):
 
         cr.set_source_rgb(*self.canvas_background_rgb())
@@ -3575,38 +3746,38 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if count == 0:
             return
 
+        # Points (self.xy_points, 0 = All) subsamples down to that many
+        # evenly-spaced indices across the chunk instead of plotting
+        # every raw sample - requested as an adjustable "number of
+        # lines drawn" control. Evenly spaced (not just a stride) so
+        # the last plotted sample is always the chunk's actual last
+        # one, not whatever a fixed stride happens to land on.
+        if 1 < self.xy_points < count:
+            step = (count - 1) / (self.xy_points - 1)
+            indices = [round(i * step) for i in range(self.xy_points)]
+        else:
+            indices = range(count)
+
+        points = [
+            (cx + self.left[i] * scale, cy - self.right[i] * scale)
+            for i in indices
+        ]
+
         cr.set_line_width(self.xy_line_width)
 
         if self.color_mode == "rainbow":
-
-            # A continuous single-color path can't have a color that
-            # itself changes along its length - drawn as one short
-            # segment per sample pair instead, each colored by its own
-            # position in the trace, for a "rainbow comet trail"
-            # look. Costs one stroke call per sample rather than one
-            # for the whole path; count is bounded by the audio chunk
-            # size (not a large rolling buffer here, unlike the
-            # Oscilloscope), so this stays cheap.
-            for i in range(1, count):
-
-                cr.set_source_rgba(*rainbow_color(i / max(1, count - 1)), 0.85)
-                cr.move_to(
-                    cx + self.left[i - 1] * scale, cy - self.right[i - 1] * scale
-                )
-                cr.line_to(cx + self.left[i] * scale, cy - self.right[i] * scale)
-                cr.stroke()
-
+            if self.xy_curved:
+                self.stroke_smooth_path_rainbow(cr, points, 0.85)
+            else:
+                self.stroke_straight_path_rainbow(cr, points, 0.85)
         else:
-
             cr.set_source_rgba(
                 self.color.red, self.color.green, self.color.blue, 0.85
             )
-
-            cr.move_to(cx + self.left[0] * scale, cy - self.right[0] * scale)
-
-            for i in range(1, count):
-                cr.line_to(cx + self.left[i] * scale, cy - self.right[i] * scale)
-
+            if self.xy_curved:
+                self.stroke_smooth_path(cr, points)
+            else:
+                self.stroke_straight_path(cr, points)
             cr.stroke()
 
     def find_scope_trigger_index(self, samples, count):

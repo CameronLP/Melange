@@ -167,6 +167,37 @@
          lens-shaped with sparse corners. Not present before because
          Labels (crosshair) defaulting off previously, plus the small
          window, made it easy to not notice.
+- [x] X-Y Scope: adjustable "Points" setting and a "Curved Lines"
+      toggle, both requested. Two new controls in its settings
+      popover (aux_window.py):
+      - Points (self.xy_points, slider 0-200, "All" at 0) subsamples
+        the current audio chunk down to that many evenly-spaced
+        indices (always including the chunk's actual first/last
+        sample, not just every Nth by a fixed stride) instead of
+        plotting every raw sample - previously the "number of lines"
+        was just whatever the audio callback's chunk size happened to
+        be, with no way to reduce it.
+      - Curved Lines (self.xy_curved, on by default) draws a smooth
+        Catmull-Rom-to-Bezier curve through the plotted points instead
+        of a plain straight polyline, requested to look more like a
+        real analog scope's continuously-curving beam trace rather
+        than a jagged line between discrete samples - toggleable back
+        to the original straight-line look. Implemented as 4 small
+        helpers (stroke_smooth_path/_rainbow, stroke_straight_path/
+        _rainbow) so both the solid and rainbow color modes get proper
+        curved or straight rendering.
+      Verified in the sandbox (capturing which stroke helper actually
+      ran and with how many points, rather than pixel-scanning - a
+      full pixel scan across several Cairo surfaces caused a genuine
+      multi-hour hang earlier this session, see [[melange_flatpak_
+      test_orphans]]): defaults are xy_points=0/xy_curved=True; a
+      500-sample chunk with Points=50 reaches the stroke helper with
+      exactly 50 points; toggling Curved Lines switches between the
+      smooth and straight helpers correctly in both color modes; the
+      Catmull-Rom control-point math itself checked directly (not
+      just "did it crash") - control points for 4 exactly collinear
+      input points land exactly on that line (y=0 for both), i.e. a
+      straight input never produces a spurious curve/bow.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope
