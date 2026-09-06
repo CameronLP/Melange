@@ -459,6 +459,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # what shape the window itself gets resized to. On by default,
         # matching these two kinds' new square-by-default window size.
         self.maintain_aspect_ratio = True
+        # Zooms the plotted trace in/out within the fixed canvas -
+        # useful to zoom in on a quiet signal that only uses a small
+        # fraction of the square, or zoom out to avoid clipping a hot
+        # one. Multiplies the existing auto-computed scale rather than
+        # replacing it, so 1.0 (default) looks identical to before
+        # this setting existed.
+        self.scope_zoom = 1.0
 
         self.num_bars = 24
         self.decay = 0.85
@@ -1671,6 +1678,35 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             aspect_row.append(aspect_switch)
             box.append(aspect_row)
 
+            zoom_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            zoom_label = Gtk.Label(
+                label="Zoom", xalign=0, hexpand=True
+            )
+            zoom_row.append(zoom_label)
+
+            self.scope_zoom_value_label = Gtk.Label(
+                label=self.format_scope_zoom(self.scope_zoom)
+            )
+
+            zoom_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.25, 3.0, 0.05
+            )
+            zoom_scale.set_value(self.scope_zoom)
+            zoom_scale.set_size_request(120, -1)
+            zoom_scale.set_draw_value(False)
+
+            zoom_scale.connect(
+                "value-changed",
+                self.on_scope_zoom_changed
+            )
+
+            zoom_row.append(self.scope_zoom_value_label)
+            zoom_row.append(zoom_scale)
+            box.append(zoom_row)
+
         if self.kind in (
             "spectrum", "spectrogram", "vu", "peak", "oscilloscope", "vectorscope",
             "xy"
@@ -2794,6 +2830,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.maintain_aspect_ratio = switch.get_active()
         self.drawing_area.queue_draw()
 
+    def format_scope_zoom(self, value):
+
+        return f"{value:.2f}x"
+
+    def on_scope_zoom_changed(self, scale):
+
+        self.scope_zoom = scale.get_value()
+        self.scope_zoom_value_label.set_label(self.format_scope_zoom(self.scope_zoom))
+        self.drawing_area.queue_draw()
+
     # Always paints the real background across the *full* canvas
     # first (so the caller never needs its own separate background
     # paint), then - only when Equal Aspect Ratio is on - confines the
@@ -3784,7 +3830,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cx = width / 2
         cy = height / 2
-        scale = min(width, height) / 2 - 8
+        scale = (min(width, height) / 2 - 8) * self.scope_zoom
 
         if self.show_labels:
 
@@ -4017,7 +4063,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         trail_cr.fill()
 
         cx, cy = width / 2, height / 2
-        scale = min(width, height) / 2 - 12
+        scale = (min(width, height) / 2 - 12) * self.scope_zoom
 
         # Rotated 45° from a plain L/R plot - Mid ((L+R)/sqrt(2)) on
         # the vertical axis, Side ((L-R)/sqrt(2)) on the horizontal -

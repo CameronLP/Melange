@@ -226,6 +226,20 @@
       square translated by exactly (150, 0) for both kinds; OFF
       passes 600x300 through unchanged with no translation; an
       already-square 400x400 canvas is correctly a no-op either way.
+- [x] X-Y Scope/Vector Scope: "Zoom" slider, requested. New
+      self.scope_zoom (0.25x-3.0x, default 1.0x) multiplies the
+      existing auto-computed trace scale in both draw_xy_scope and
+      draw_vector_scope, so 1.0x looks identical to before this
+      setting existed - lets a quiet signal that only uses a small
+      fraction of the square be zoomed in, or a hot one zoomed out to
+      avoid clipping. Same shared settings-popover block as Equal
+      Aspect Ratio above. Verified in the sandbox by checking the
+      actual rendered pixel position of a known extreme sample
+      (left=1.0, right=0.0) against the exact predicted formula at
+      0.5x/1.0x zoom for both kinds (all 4 exact matches); 2.0x on a
+      400px canvas legitimately pushes that same full-scale sample
+      off-canvas, which is expected clipping (same as a real scope
+      going off-screen at high gain), not a bug.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope
