@@ -3356,8 +3356,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # sweep-left-to-sweep-right gauge than Cairo's own
         # positive-x-axis convention.
         cx = x + w / 2
-        cy = y + h - 4
         radius = max(4.0, min(w / 2, h) * 0.92)
+
+        # Vertically centers the whole gauge shape (the arc above the
+        # pivot, down to the pivot dot) within the cell, rather than
+        # anchoring the pivot a fixed 4px above the bottom edge -
+        # anchoring it left a large empty gap above the dial whenever
+        # the cell's *width* (not height) was the limiting dimension
+        # for radius, which is the common case at this window's
+        # default aspect ratio. Reported as "the entire VU needle dial
+        # is not centered" - confirmed by rendering a real cell and
+        # measuring a 116px gap above the dial vs 1px below it.
+        # pivot_margin mirrors the small bottom-edge margin the old
+        # fixed "-4" offset used to provide.
+        pivot_margin = 4.0
+        cy = y + h / 2 + (radius - pivot_margin) / 2
         sweep = math.radians(55)
 
         level = min(level, 1.0)

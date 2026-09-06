@@ -367,14 +367,28 @@
       settings popover; mirror windows have neither an easy place for
       it, matching the earlier "these have no settings-dialog
       infrastructure" theme).
-- [ ] Needle VU meter not vertically centered - reported bug, not
-      investigated yet. draw_vu_needle's own comment describes a
-      "pivots near the bottom of the cell" gauge shape - worth
-      checking whether that's the actual root cause of what reads as
-      "not centered" (a bottom-pivoted needle dial deliberately uses
-      the *lower* portion of its cell by design, which may be exactly
-      what looks off-center) or a separate real bug in its geometry
-      math.
+- [x] Needle VU meter not vertically centered - reported bug
+      ("the entire VU needle dial is not centered"), root-caused and
+      fixed. draw_vu_needle anchored the needle's pivot a fixed 4px
+      above the cell's bottom edge regardless of the gauge's actual
+      radius - fine when the cell's height was the limiting dimension
+      for radius (min(w/2, h)*0.92), but whenever the cell's *width*
+      was the limiting dimension instead (the common case at this
+      window's default aspect ratio, and any time it's resized taller
+      than wide), the resulting radius was much smaller than the
+      available height, leaving a large empty gap above the dial while
+      it stayed pinned to the bottom. Confirmed by rendering the real
+      draw_vu_meter to a Cairo surface at the default 360x220 size and
+      measuring the actual drawn pixels: 116px of empty space above
+      the dial vs 1px below it. Fixed by deriving the pivot's y
+      position from centering the whole shape's bounding box (arc top
+      to pivot dot) within the cell instead of a fixed bottom offset -
+      re-measured the same way after the fix: 57px above vs 60px
+      below (centered within a few px). Also re-verified at a wide/
+      short aspect ratio (700x140) where the cell's height is the
+      limiting dimension instead, to confirm that case - which was
+      already correct - didn't regress: 1px above vs 4px below,
+      basically unchanged from before.
 - [ ] Mini visualizer settings popover doesn't close on click-outside,
       and the gear icon itself sometimes doesn't respond - reported
       bug. This is a *known-unresolved* area, not a fresh report: a
