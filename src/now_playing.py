@@ -65,7 +65,21 @@ class NowPlayingWatcher:
             self._on_name_owner_changed
         )
 
-        self._discover_existing_players()
+        # Deferred rather than called directly here - a player already
+        # active on the bus at construction time made this fire
+        # on_change synchronously, mid-__init__, before the caller's
+        # own `self.now_playing_watcher = NowPlayingWatcher(...)`
+        # assignment had actually completed. window.py's on_change
+        # callback (on_now_playing_changed) reaches back into
+        # self.now_playing_watcher, which didn't exist yet -
+        # AttributeError, but only when something happened to already
+        # be playing at the exact moment a MelangeWindow was
+        # constructed (confirmed: reproduced by real MPRIS state on a
+        # live system, not something a quiet-at-startup test would
+        # ever hit). GLib.idle_add runs this on the next main loop
+        # iteration instead, by which point construction (and the
+        # assignment) has genuinely finished.
+        GLib.idle_add(self._discover_existing_players)
 
     # None means "Auto" (the default best-guess heuristic below).
     # Falls straight back to auto, rather than showing nothing, if the

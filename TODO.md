@@ -556,8 +556,42 @@
       synthetic fixture): the real local file:// artwork now actually
       loads into now_playing_art (both get_visible() and
       get_paintable() confirmed) where it previously failed closed.
-- [ ] Placeholder artwork when Show Artwork is on but no art is
-      available for the current track - requested, not implemented.
+- [x] Placeholder artwork when Show Artwork is on but no art is
+      available for the current track - requested ("audio playing
+      from a source like firefox, not a music player - there should
+      be placeholder artwork there"), implemented. A source like a
+      browser tab typically has no mpris:artUrl at all, so the art
+      frame used to just stay empty. New now_playing_art_placeholder
+      (a Gtk.Image showing "audio-x-generic-symbolic", not a raw
+      IconPaintable on a Picture - Gtk.Image is what actually applies
+      the current foreground/symbolic recoloring automatically, a
+      Picture's generic paintable snapshot does not), layered via a
+      small Gtk.Overlay over the existing real-art Gtk.Picture inside
+      the same now_playing_art_frame. show_now_playing_art_placeholder()
+      is now the single place all 3 "no usable art" cases go through:
+      no art_url at all, a failed download, and a failed image decode
+      (previously each of those 3 just hid the frame). Its pixel size
+      tracks the frame's own computed size (apply_now_playing_art_size,
+      ~50% of the frame's side) so it scales with the Now Playing Scale
+      setting like the real artwork would.
+      Found and fixed a real, previously-latent bug while testing this
+      (now_playing.py): NowPlayingWatcher.__init__ called
+      _discover_existing_players() synchronously, which fires
+      on_change() immediately if a player is already active on the
+      bus at construction time - reaching back into window.py's
+      self.now_playing_watcher before that attribute's own assignment
+      (`self.now_playing_watcher = NowPlayingWatcher(...)`) had
+      actually completed, an AttributeError. Only reproduces when
+      something is genuinely already playing at the exact moment a
+      MelangeWindow is constructed, which is why dozens of earlier
+      sandbox tests this session never hit it. Fixed by deferring that
+      call via GLib.idle_add so it runs after construction (and the
+      assignment) has finished.
+      Verified in the sandbox: no art_url shows the placeholder (frame
+      visible, placeholder visible); a real but unreachable art_url
+      fails its async load and falls back to the same placeholder;
+      Show Artwork off still hides the frame entirely, not the
+      placeholder; and the crash above no longer reproduces.
 - [ ] "Find a better graphics engine for spectrograms?" - open-ended
       research question, not investigated. Related to (but broader
       than) the already-logged Mini Visualizer efficiency TODO and the

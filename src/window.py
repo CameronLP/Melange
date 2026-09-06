@@ -120,7 +120,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_show_artist = True
         self.now_playing_show_album = True
         self.now_playing_show_artwork = True
-        self.now_playing_show_time = False
+        self.now_playing_show_time = True
         self.now_playing_show_background = True
         # now_playing_text_size/now_playing_width are always *derived*
         # (see recompute_now_playing_scale) from now_playing_scale, or
@@ -132,7 +132,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_text_size = self.NOW_PLAYING_BASE_TEXT_SIZE
         self.now_playing_font_desc = "Sans"
         self.now_playing_width = self.NOW_PLAYING_BASE_WIDTH
-        self.now_playing_scroll_long_titles = False
+        self.now_playing_scroll_long_titles = True
         self.now_playing_scroll_timer = None
         self.now_playing_scroll_offset = 0
         self.now_playing_scroll_title = None
@@ -242,6 +242,28 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_art.set_content_fit(Gtk.ContentFit.COVER)
         self.now_playing_art.set_can_shrink(True)
 
+        # Shown instead of hiding the whole art frame whenever Show
+        # Artwork is on but there's genuinely no usable art - no
+        # mpris:artUrl at all (the common case for a source like a
+        # browser tab, which usually has none), or the art failed to
+        # download/decode. A plain Gtk.Image (not another Picture/
+        # IconPaintable on its own) specifically because Gtk.Image is
+        # what actually applies the current foreground/symbolic
+        # recoloring automatically - a raw IconPaintable drawn via
+        # Picture's generic paintable snapshot does not reliably do
+        # that on its own.
+        self.now_playing_art_placeholder = Gtk.Image.new_from_icon_name(
+            "audio-x-generic-symbolic"
+        )
+        self.now_playing_art_placeholder.add_css_class("now-playing-art-placeholder")
+        self.now_playing_art_placeholder.set_valign(Gtk.Align.CENTER)
+        self.now_playing_art_placeholder.set_halign(Gtk.Align.CENTER)
+        self.now_playing_art_placeholder.set_visible(False)
+
+        now_playing_art_overlay = Gtk.Overlay()
+        now_playing_art_overlay.set_child(self.now_playing_art)
+        now_playing_art_overlay.add_overlay(self.now_playing_art_placeholder)
+
         # A real Gtk.Picture's *natural* size comes from the loaded
         # paintable's own intrinsic dimensions (confirmed: a real
         # 500x500 album art texture measured natural=500 even with
@@ -273,7 +295,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_art_frame.set_propagate_natural_height(False)
         self.now_playing_art_frame.set_valign(Gtk.Align.CENTER)
         self.now_playing_art_frame.set_halign(Gtk.Align.CENTER)
-        self.now_playing_art_frame.set_child(self.now_playing_art)
+        self.now_playing_art_frame.set_child(now_playing_art_overlay)
         self.now_playing_art_frame.set_visible(False)
 
         self.now_playing_box.append(self.now_playing_art_frame)
@@ -1454,6 +1476,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         size = max(24, natural)
 
         self.now_playing_art_frame.set_size_request(size, size)
+        self.now_playing_art_placeholder.set_pixel_size(max(12, int(size * 0.5)))
 
     def now_playing_scroll_long_titles_changed(self, enabled):
 
@@ -1806,6 +1829,17 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return f"{minutes}:{seconds:02d}"
 
+    # Requested - a source like a browser tab typically has no
+    # mpris:artUrl at all, so Show Artwork being on used to just leave
+    # an empty gap where the art frame would be rather than showing
+    # anything. Also reused for a real art_url that fails to download
+    # or decode, so every "no usable art" case looks the same.
+    def show_now_playing_art_placeholder(self):
+
+        self.now_playing_art.set_paintable(None)
+        self.now_playing_art_placeholder.set_visible(True)
+        self.now_playing_art_frame.set_visible(True)
+
     # Guards against a slow/late art fetch for a track that's since
     # been skipped past clobbering whatever's already showing - each
     # call gets a fresh token, and the async callback only applies its
@@ -1815,8 +1849,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_art_token += 1
         token = self.now_playing_art_token
 
-        if not art_url or not self.now_playing_show_artwork:
+        if not self.now_playing_show_artwork:
             self.now_playing_art_frame.set_visible(False)
+            return
+
+        if not art_url:
+            self.show_now_playing_art_placeholder()
             return
 
         def on_loaded(source, result):
@@ -1830,15 +1868,16 @@ class MelangeWindow(Adw.ApplicationWindow):
             try:
                 ok, contents, etag = source.load_contents_finish(result)
             except GLib.Error:
-                self.now_playing_art_frame.set_visible(False)
+                self.show_now_playing_art_placeholder()
                 return
 
             try:
                 texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(contents))
             except GLib.Error:
-                self.now_playing_art_frame.set_visible(False)
+                self.show_now_playing_art_placeholder()
                 return
 
+            self.now_playing_art_placeholder.set_visible(False)
             self.now_playing_art.set_paintable(texture)
             self.now_playing_art_frame.set_visible(True)
 
@@ -2587,7 +2626,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     def build_now_playing_show_time_control(self):
 
         return self.build_toggle_row(
-            "Show Playback Time", False, self.now_playing_show_time_changed
+            "Show Playback Time", True, self.now_playing_show_time_changed
         )
 
     def build_now_playing_show_background_control(self):
@@ -2761,7 +2800,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.build_toggle_row(
             "Scroll Long Titles",
-            False,
+            True,
             self.now_playing_scroll_long_titles_changed
         )
 
