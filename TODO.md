@@ -720,6 +720,38 @@
       hide/hide_toolbar, and likely doesn't check toolbar_hide_delay
       at all - "Never" for the toolbar wouldn't currently imply
       "never" for the cursor unless that path is also gated on it.
+      Partially re-checked while logging a related bug just below:
+      Gdk.Cursor.new_from_name("none") only actually appears once in
+      window.py, inside hide_toolbar itself (line ~2028), which is
+      only ever scheduled by schedule_toolbar_hide - and that method
+      already returns early without scheduling anything when
+      toolbar_hide_delay <= 0. So on a fresh read, "Never" *should*
+      prevent hide_toolbar from ever firing again, cursor included -
+      doesn't explain the original report as stated. Not yet
+      reconciled; a plausible alternate explanation is a *stale*
+      already-hidden cursor from before Hide Delay was changed to
+      Never, never re-shown because nothing called set_cursor(None)
+      again until an actual detected mouse move (mouse_move has a
+      1px MOVEMENT_THRESHOLD_PX to filter WebKit's synthetic motion
+      events) - i.e. maybe not a "cursor disappears" bug at all, but
+      more like "cursor doesn't reliably reappear." Needs a real
+      repro to tell which it actually is.
+- [ ] **BUG**: mouse cursor disappears in fullscreen while the
+      Preferences dialog is open and the mouse is moved over the
+      dialog itself, reported. hide_toolbar (window.py, ~line 2004)
+      hides the cursor after Hide Delay elapses unless
+      self.mouse_over_toolbar is True or self.menu_open is True -
+      neither of those two guards has any awareness of the
+      Preferences dialog (self.menu_open is only ever set from the
+      hamburger menu_button's own toggle state, confirmed via grep -
+      nothing sets or checks it for Adw.PreferencesDialog). So moving
+      the mouse over an open Preferences dialog in fullscreen doesn't
+      count as "over the toolbar" to this logic, and the normal
+      fullscreen auto-hide timer just runs its course and hides the
+      cursor out from under an actively-open dialog. Not yet fixed -
+      likely needs hide_toolbar's guard extended to also check
+      whether self.preferences_dialog is currently presented/visible,
+      the same way it already checks mouse_over_toolbar/menu_open.
 - [x] Scroll Long Titles - requested ("if text title is too long for
       now playing, i want setting to have it scroll across"). New
       toggle - when on and a title's length exceeds Text Box Width,
