@@ -264,6 +264,26 @@
       value) and clamp Auto sizing to never go below it, rather than
       just following the text box's actual current (possibly empty)
       height unconditionally.
+- [ ] TODO: If title/artist are unknown (e.g. a bare stream/browser tab
+      with no MPRIS metadata), show the player source name and maybe
+      "Unknown Artist"/"Unknown Title" instead of just hiding those
+      fields - requested, not implemented. Currently
+      update_now_playing_visibility (window.py) only shows the Title/
+      Artist labels when both the corresponding Show */ toggle is on
+      *and* info["title"]/info["artist"] is non-empty
+      (now_playing.py's _info_from_proxy returns "" when
+      xesam:title/xesam:artist are absent from Metadata) - so a source
+      with no metadata at all currently shows nothing in those fields
+      rather than any placeholder text. The player source's own display
+      name is already tracked and available with no new plumbing
+      needed: self.now_playing_players (populated by
+      on_now_playing_players_changed from NowPlayingWatcher's
+      identities dict) maps info["bus_name"] to the same human-readable
+      Identity string (e.g. "Firefox") already used elsewhere for
+      source selection. Not yet decided: whether the source name
+      replaces the title line entirely when title is unknown, or shows
+      alongside "Unknown Title"/"Unknown Artist", and whether this
+      should be unconditional or its own toggle.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope
