@@ -251,6 +251,19 @@
       it hides when enabled already exists (see the Now Playing
       settings consolidation above) - just the default value needs
       flipping, not a new control.
+- [ ] TODO: Now Playing artwork should have a minimum size, equal to
+      the size it would be if title/artist/album/time were displayed -
+      requested, not implemented. Currently apply_now_playing_art_size's
+      Auto mode measures now_playing_text_box's own real natural height
+      (see the Album Art fix above) and sizes the art frame to match
+      it directly, so with every text field hidden (Show Title/Artist/
+      Album/Playback Time all off, e.g. only Show Artwork on) the text
+      box's natural height collapses toward zero and the art frame
+      shrinks along with it. Needs a floor: compute what the text box's
+      height would be with those fields shown (or a fixed reference
+      value) and clamp Auto sizing to never go below it, rather than
+      just following the text box's actual current (possibly empty)
+      height unconditionally.
 - [x] Labels (self.show_labels) default on for "scope, etc" mini
       visualizers - requested, implemented. Resolved the open question
       of which kinds count: X-Y Scope, Vector Scope, and Oscilloscope
