@@ -1,17 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="trayFront" x1="8" x2="120" y1="0" y2="0" gradientUnits="userSpaceOnUse">
+    <linearGradient id="trayFront" x1="6" x2="122" y1="0" y2="0" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#c0bfbc"/>
       <stop offset="0.08" stop-color="#deddda"/>
       <stop offset="0.92" stop-color="#deddda"/>
       <stop offset="1" stop-color="#c0bfbc"/>
     </linearGradient>
-    <linearGradient id="butterFront" x1="16" x2="50" y1="0" y2="0" gradientUnits="userSpaceOnUse">
+    <linearGradient id="butterFront" x1="14" x2="48" y1="0" y2="0" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#f6dc7a"/>
       <stop offset="0.35" stop-color="#fae7a0"/>
       <stop offset="1" stop-color="#f8e08e"/>
     </linearGradient>
-    <linearGradient id="wrapFront" x1="44" x2="112" y1="0" y2="0" gradientUnits="userSpaceOnUse">
+    <linearGradient id="wrapFront" x1="44" x2="114" y1="0" y2="0" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#f5c211"/>
       <stop offset="0.85" stop-color="#f6d32d"/>
       <stop offset="1" stop-color="#e5a50a"/>
@@ -20,63 +20,60 @@
       <stop offset="0" stop-color="#ffffff"/>
       <stop offset="1" stop-color="#c0bfbc"/>
     </linearGradient>
-    <linearGradient id="handle" x1="0" x2="0" y1="-5" y2="5" gradientUnits="userSpaceOnUse">
+    <linearGradient id="handle" x1="0" x2="0" y1="-6.5" y2="6.5" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#b5835a"/>
       <stop offset="1" stop-color="#986a44"/>
     </linearGradient>
     <clipPath id="aboveButter">
-      <path d="M0 0 H128 V79.5 L0 47.5 Z"/>
+      <path d="M0 0 H128 V68.5 L0 36.5 Z"/>
     </clipPath>
   </defs>
 
   <!-- butter tray: rim top and floor (behind the butter) -->
-  <path fill="#f6f5f4" d="M15 84 H113 a4 4 0 0 1 3.6 2.3 L120 96 H8 L11.4 86.3 A4 4 0 0 1 15 84 Z"/>
-  <path fill="#c0bfbc" d="M17 87 H111 L114 94 H14 Z"/>
+  <path fill="#f6f5f4" d="M13 90 H115 a4 4 0 0 1 3.6 2.3 L122 102 H6 L9.4 92.3 A4 4 0 0 1 13 90 Z"/>
+  <path fill="#c0bfbc" d="M15 93 H113 L116 100 H12 Z"/>
 
-  <g transform="translate(0 -2)">
   <!-- butter end: side, front, top -->
-  <path fill="#e8c65a" d="M16 64 H54 V102 H22 a6 6 0 0 1 -6 -6 Z"/>
-  <path fill="url(#butterFront)" d="M16 62 H54 V97 H20 a4 4 0 0 1 -4 -4 Z"/>
-  <path fill="#fdf1b8" d="M25.5 48 H58 L54 62 H16 L22 50 A4 4 0 0 1 25.5 48 Z"/>
+  <path fill="#e8c65a" d="M14 52 H48 V106 H14 Z"/>
+  <path fill="url(#butterFront)" d="M14 50 H48 V104 H14 Z"/>
+  <path fill="#fdf1b8" d="M27 30 H58 L48 50 H14 L23.4 32.2 A4 4 0 0 1 27 30 Z"/>
 
   <!-- gold wrapper: side, front, top, folded edge -->
-  <path fill="#c88800" d="M44 64 H112 V96 a6 6 0 0 1 -6 6 H44 Z"/>
-  <path fill="url(#wrapFront)" d="M44 62 H112 V93 a4 4 0 0 1 -4 4 H44 Z"/>
-  <path fill="#f8e45c" d="M52 48 H102.5 a4 4 0 0 1 3.5 2 L112 62 H44 Z"/>
-  <path fill="#e5a50a" d="M52 48 H56 L48 62 V102 H44 V62 Z"/>
+  <path fill="#c88800" d="M44 52 H114 V106 H44 Z"/>
+  <path fill="url(#wrapFront)" d="M44 50 H114 V104 H44 Z"/>
+  <path fill="#f8e45c" d="M54 30 H100.5 a4 4 0 0 1 3.5 2 L114 50 H44 Z"/>
+  <path fill="#e5a50a" d="M54 30 H59.5 L49.5 50 V104 H44 V50 Z"/>
 
   <!-- badge -->
-  <circle cx="79" cy="79.5" r="14" fill="#26a269"/>
-  <circle cx="79" cy="79.5" r="11" fill="#ffffff"/>
-  <circle cx="79" cy="79.5" r="9" fill="#e01b24"/>
-  <path fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"
-        d="M72.5 79.5 C74 79.5 74 75 75.5 75 C77 75 77 84 79 84 C81 84 81 75 82.5 75 C84 75 84 79.5 85.5 79.5"/>
+  <circle cx="81.5" cy="76" r="22" fill="#26a269"/>
+  <circle cx="81.5" cy="76" r="17.5" fill="#ffffff"/>
+  <circle cx="81.5" cy="76" r="14.5" fill="#e01b24"/>
+  <path fill="none" stroke="#ffffff" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"
+        d="M71 76 C73.5 76 73.5 68.5 76.25 68.5 C79 68.5 79 83.5 81.5 83.5 C84 83.5 84 68.5 86.75 68.5 C89.5 68.5 89.5 76 92 76"/>
 
   <!-- dent in the butter where the blade goes in -->
-  <ellipse cx="34.5" cy="56.8" rx="10.5" ry="4" transform="rotate(14 34.5 56.8)" fill="#f3d978"/>
-  <ellipse cx="35" cy="57.7" rx="7.5" ry="2.4" transform="rotate(14 35 57.7)" fill="#e8c65a"/>
+  <ellipse cx="31" cy="44.5" rx="10" ry="3.6" transform="rotate(14 31 44.5)" fill="#e8c65a"/>
 
-  <!-- butter knife: blade, bolster and handle share one centre line (y = -0.5) -->
+  <!-- butter knife -->
   <g clip-path="url(#aboveButter)">
-    <g transform="translate(32.5 56.5) rotate(-28) scale(1.2)">
-      <path fill="url(#blade)" d="M-6 -4.5 H34 Q38 -4.5 38 -1.5 V0.5 Q38 3.5 34 3.5 C22 3.8 10 6 -6 6 Z"/>
+    <g transform="translate(30 44) rotate(-24) scale(1.35)">
+      <path fill="url(#blade)" d="M-8 -5 H28 Q32 -5 32 -2 V1 Q32 4 28 4 C18 4.3 8 6.5 -8 6.5 Z"/>
       <!-- bolster -->
-      <rect x="36" y="-3.2" width="7" height="9" rx="2" fill="#77767b"/>
-      <rect x="36" y="-5" width="7" height="9" rx="2" fill="#9a9996"/>
+      <rect x="30" y="-4" width="6.5" height="11" rx="2" fill="#77767b"/>
+      <rect x="30" y="-6" width="6.5" height="11" rx="2" fill="#9a9996"/>
       <!-- handle -->
-      <path fill="#63452c" d="M42 -3.7 H71 a5.5 5.5 0 0 1 0 11 H42 Z"/>
-      <path fill="url(#handle)" d="M42 -5.5 H71 a5.5 5.5 0 0 1 0 11 H42 Z"/>
+      <path fill="#63452c" d="M35.5 -4.5 H56 a6.5 6.5 0 0 1 0 13 H35.5 Z"/>
+      <path fill="url(#handle)" d="M35.5 -6.5 H56 a6.5 6.5 0 0 1 0 13 H35.5 Z"/>
       <!-- rivets -->
-      <circle cx="51" cy="0" r="2" fill="#77767b"/>
-      <circle cx="51" cy="-0.5" r="1.8" fill="#deddda"/>
-      <circle cx="65" cy="0" r="2" fill="#77767b"/>
-      <circle cx="65" cy="-0.5" r="1.8" fill="#deddda"/>
+      <circle cx="43" cy="0.5" r="2.4" fill="#77767b"/>
+      <circle cx="43" cy="0" r="2.2" fill="#deddda"/>
+      <circle cx="54" cy="0.5" r="2.4" fill="#77767b"/>
+      <circle cx="54" cy="0" r="2.2" fill="#deddda"/>
     </g>
-  </g>
   </g>
 
   <!-- butter tray: front lip, in front of the butter -->
-  <path fill="#9a9996" d="M8 98 H120 V106 a6 6 0 0 1 -6 6 H14 a6 6 0 0 1 -6 -6 Z"/>
-  <path fill="url(#trayFront)" d="M8 96 H120 V103 a5 5 0 0 1 -5 5 H13 a5 5 0 0 1 -5 -5 Z"/>
-  <path fill="#ffffff" d="M8 96 H120 V99 H8 Z"/>
+  <path fill="#9a9996" d="M6 104 H122 V112 a6 6 0 0 1 -6 6 H12 a6 6 0 0 1 -6 -6 Z"/>
+  <path fill="url(#trayFront)" d="M6 102 H122 V109 a5 5 0 0 1 -5 5 H11 a5 5 0 0 1 -5 -5 Z"/>
+  <path fill="#ffffff" d="M6 102 H122 V105 H6 Z"/>
 </svg>
