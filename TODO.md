@@ -2966,6 +2966,16 @@
       official Python binding exists. Realistically multi-day work -
       worth doing if memory footprint and native .milk compatibility
       are worth that trade-off, not something to start speculatively.
+      **Now requested** ("reimplement with projectm") - no longer
+      speculative. Not yet decided: whether projectM replaces
+      Butterchurn outright or ships alongside it as a selectable
+      backend for a transition period (keeps the curated JS packs
+      usable while native preset coverage catches up), and how much of
+      the JS-side feature set (beat/drop detection, preset queue,
+      favorites keyed on Butterchurn preset names) gets ported versus
+      dropped. Also relevant to the "some visualizers don't react to
+      music" item above - native .milk rendering removes the converter
+      as a possible cause.
 
 ## Paused
 
