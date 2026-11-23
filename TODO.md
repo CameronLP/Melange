@@ -2237,6 +2237,21 @@
 - [ ] Silence auto-pause - freeze/dim rendering when no audio is detected for a while, to save CPU/GPU
 - [ ] Global post-processing tint/gamma - a brightness/color adjustment layered on top of whatever the preset renders
 - [ ] Shuffle pool weighting/exclusion - let shuffle skip specific packs (e.g. exclude baron), or restrict it to favorites only now that those exist
+- [ ] Setting to respond to bass beats - requested, details not yet
+      specified. Relevant existing code: src/web/main.js's beat
+      detection (beatAnalyser, fftSize 256) already has a "bassEnergy"
+      in energy mode, but it averages the first 8 bins, which at
+      44.1kHz is roughly 0-1.4kHz - a lot wider than "bass" (kick/sub
+      sits around ~40-150Hz, i.e. only the first 1-2 bins at this FFT
+      size, so a real bass-only band likely wants a larger fftSize or
+      a lowpass BiquadFilterNode in front of a dedicated analyser).
+      Tempo mode uses spectral flux over all bins, with no band
+      restriction at all. Open questions: whether this means (a) a
+      bass-only/frequency-band option for the existing beat detection
+      (which currently only drives preset auto-cycle), (b) a new
+      reaction to bass hits in the visuals themselves (e.g. a bass
+      boost to the audio fed to Butterchurn, or a brief zoom/flash
+      punch like Pipes' Beat Zoom), or both.
 
 ### Bigger feature ideas
 
