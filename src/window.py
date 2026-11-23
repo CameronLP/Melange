@@ -4640,13 +4640,72 @@ class MelangeWindow(Adw.ApplicationWindow):
             for sink in sinks
         ]
 
+    # Longest label the Audio Source submenu will show. GtkPopoverMenu
+    # sizes every page to its widest item, so one long sink name made
+    # the whole main menu extremely wide, not just the submenu.
+    AUDIO_SOURCE_LABEL_MAX_CHARS = 40
+
+    # PipeWire sink descriptions are "<card name> <port name>", for
+    # example "500 Series Chipset Family On-Package High Definition
+    # Audio (HD Audio) HDMI / DisplayPort 3 Output" (97 chars). Drop
+    # the card name (device.description) when that leaves something,
+    # so this shows "HDMI / DisplayPort 3 Output" / "Speaker". Sinks
+    # whose description is just the device name (e.g. Bluetooth
+    # headphones) keep it as is. Falls back to the full description if
+    # two sinks would end up with the same short label, then
+    # middle-ellipsizes anything still too long, keeping the end
+    # (usually the part that tells outputs apart).
+    def list_sink_labels(self):
+
+        raw = subprocess.check_output(
+            ["pactl", "-f", "json", "list", "sinks"]
+        )
+
+        entries = []
+
+        for sink in json.loads(raw):
+
+            description = sink.get("description") or sink["name"]
+
+            card = sink.get("properties", {}).get(
+                "device.description", ""
+            )
+
+            short = description
+
+            if card and description.startswith(card):
+                short = description[len(card):].strip() or description
+
+            entries.append((sink["name"], description, short))
+
+        short_counts = {}
+
+        for _, _, short in entries:
+            short_counts[short] = short_counts.get(short, 0) + 1
+
+        limit = self.AUDIO_SOURCE_LABEL_MAX_CHARS
+        result = []
+
+        for name, description, short in entries:
+
+            label = short if short_counts[short] == 1 else description
+
+            if len(label) > limit:
+                head = (limit - 1) // 2
+                tail = limit - 1 - head
+                label = label[:head].rstrip() + "…" + label[-tail:].lstrip()
+
+            result.append((name, label))
+
+        return result
+
     def rebuild_audio_source_menu(self):
 
         self.audio_source_submenu.remove_all()
 
         devices = Gio.Menu()
 
-        for name, description in self.list_sinks():
+        for name, description in self.list_sink_labels():
 
             item = Gio.MenuItem.new(description, None)
 

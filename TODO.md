@@ -105,6 +105,23 @@
 
 ## In progress / not started
 
+- [x] **BUG**: Drop-down menu is sometimes extremely wide - reported
+      ("the drop down menu is sometimes extremely wide, fix"; it's the
+      Audio Source submenu). Cause: PipeWire sink descriptions are
+      "<card name> <port name>", e.g. "500 Series Chipset Family
+      On-Package High Definition Audio (HD Audio) HDMI / DisplayPort 3
+      Output" (97 chars), and GtkPopoverMenu sizes every page to its
+      widest item, so the whole hamburger menu got that wide. "Sometimes"
+      = whenever such a sink exists (HDMI outputs, docks). Fixed in
+      window.py's new list_sink_labels: strips the card name
+      (device.description) from the front, giving "HDMI / DisplayPort 3
+      Output" / "Speaker"; keeps the full description for sinks that
+      are only the device name (Bluetooth) or when two short labels
+      would collide; then middle-ellipsizes anything over
+      AUDIO_SOURCE_LABEL_MAX_CHARS (40). Labels checked against real
+      pactl output on the dev machine; not yet checked visually in the
+      Flatpak build.
+
 - [x] Album field for Now Playing - requested ("Add Album field in now
       playing"), built. now_playing.py's _info_from_proxy now also
       reads xesam:album from Metadata (previously ignored entirely -
