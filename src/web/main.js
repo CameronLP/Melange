@@ -159,13 +159,20 @@ function repairBadShader(str) {
 
 let audioSource = null;
 let currentStream = null;
+let audioSourceRequest = 0;
 let pcmNode = null;
 let analyser = null;
 let pcmReady = false;
 let currentAudioNode = null;
 let butterchurnSource = null;
 
+const DEBUG_MAX_LINES = 500;
+const DEBUG_MAX_LINE_LENGTH = 1000;
+
 function debug(msg) {
+
+    msg = String(msg);
+
     let d = document.getElementById("debug");
 
     if (!d) {
@@ -200,11 +207,29 @@ function debug(msg) {
         document.body.appendChild(d);
     }
 
-    d.textContent += msg + "\n";
-    d.scrollTop = d.scrollHeight;
+    // Capped: this used to be `d.textContent += msg`, which grew
+    // forever and re-copied the whole log on every message - with
+    // QUEUE: (full queue JSON every cycle) and BEAT_DETECTED (every
+    // beat) that became a real memory leak over a long session.
+    // Python gets every message via postMessage below regardless, so
+    // only the on-screen (F12) copy is trimmed; long lines (QUEUE:,
+    // PRESET_LIST:) are shortened for the same reason.
+    const line = msg.length > DEBUG_MAX_LINE_LENGTH
+        ? msg.slice(0, DEBUG_MAX_LINE_LENGTH) + "…"
+        : msg;
+
+    d.appendChild(document.createTextNode(line + "\n"));
+
+    while (d.childNodes.length > DEBUG_MAX_LINES) {
+        d.removeChild(d.firstChild);
+    }
+
+    if (d.style.display !== "none") {
+        d.scrollTop = d.scrollHeight;
+    }
 
     try {
-        window.webkit.messageHandlers.debug.postMessage(String(msg));
+        window.webkit.messageHandlers.debug.postMessage(msg);
     } catch(e) {}
 }
 
@@ -315,6 +340,8 @@ document.addEventListener(
                     d.style.display === "none"
                     ? "block"
                     : "none";
+
+                d.scrollTop = d.scrollHeight;
             }
         }
 
@@ -1638,11 +1665,27 @@ window.setAudioSource = async function(type) {
 
     debug("Audio source: " + type);
 
+    // setAudioSource is async (resume, getUserMedia), so a quick
+    // mic -> something-else switch could have the earlier call's
+    // stream arrive *after* the later call already finished - that
+    // stream would then leak (never stopped) and hijack the source
+    // the user actually picked last. Each call takes a ticket; a call
+    // whose ticket is stale after an await backs out.
+    const request = ++audioSourceRequest;
+
     if (audioContext.state !== "running") {
         await audioContext.resume();
         debug("AudioContext: " + audioContext.state);
     }
 
+    if (request !== audioSourceRequest) return;
+
+
+    // Any switch (including mic -> mic) releases the previous mic
+    // capture first - previously each Microphone pick opened a new
+    // getUserMedia stream and the old one's tracks were never
+    // stopped, so capture streams accumulated for the session.
+    stopMicStream();
 
     if (type === "none") {
         resetButterchurnAudio();
@@ -1672,7 +1715,17 @@ window.setAudioSource = async function(type) {
 
             debug("Promise created");
 
-            currentStream = await p;
+            const stream = await p;
+
+            if (request !== audioSourceRequest) {
+                for (const track of stream.getTracks()) {
+                    track.stop();
+                }
+                debug("Stale mic stream discarded");
+                return;
+            }
+
+            currentStream = stream;
 
             debug("STREAM RECEIVED");
 
@@ -1833,6 +1886,33 @@ function connectButterchurn(node, name) {
     debug(
         "Butterchurn source = " + name
     );
+}
+
+function stopMicStream() {
+
+    if (audioSource) {
+        try {
+            audioSource.disconnect();
+        } catch(e) {}
+
+        if (butterchurnSource === audioSource) {
+            butterchurnSource = null;
+        }
+
+        if (currentAudioNode === audioSource) {
+            currentAudioNode = null;
+        }
+
+        audioSource = null;
+    }
+
+    if (currentStream) {
+        for (const track of currentStream.getTracks()) {
+            track.stop();
+        }
+
+        currentStream = null;
+    }
 }
 
 function resetButterchurnAudio() {

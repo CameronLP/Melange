@@ -2998,6 +2998,29 @@
 
 ## Done
 
+- [x] Fixed memory leaks from leaving the app open a long time
+      (reported: memory seemed to grow over a long session).
+      1. The hidden F12 debug overlay (`debug()` in main.js) did
+         `textContent += msg` forever - never trimmed, and re-copied
+         the whole log on every message. With QUEUE: (whole queue
+         JSON every cycle step) and BEAT_DETECTED (every beat) that
+         grew without bound. Now capped at the last 500 lines, each
+         cut to 1000 chars; Python still gets every message. Measured
+         under ~20 x 3KB messages/sec for 3 minutes: the old build's
+         WebKitWebProcess went 420 -> 627MB and kept climbing, the
+         fixed build levelled off around 370MB.
+      2. Picking Microphone opened a new getUserMedia stream each time
+         without ever stopping the previous one's tracks. Any source
+         switch now stops and disconnects it (`stopMicStream`).
+      3. `bus.add_signal_watch()` in start_system_audio was never
+         paired with `remove_signal_watch()`, so every stop/restart
+         (device switch) left the old bus watch behind. Both paths
+         now go through `teardown_gst_pipeline()` (window.py).
+      Also fixed a race found while testing: switching away from
+      Microphone before its getUserMedia resolved let the late stream
+      leak and hijack the newer source choice. setAudioSource now
+      takes a ticket per call and discards stale streams.
+
 - [x] Per-row "add to playlist" button (bookmark-new-symbolic) next to
       the existing favorite-star/add-to-queue buttons on every row in
       the Presets and Favorites tabs (they share one row-rendering

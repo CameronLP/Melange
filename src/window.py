@@ -409,6 +409,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.content_box.add_controller(right_click_gesture)
 
         self.gst_pipeline = None
+        self.gst_bus_handler = None
         self.current_sink = None
         self.pinned_sink = None
         self.pactl_event_timer = None
@@ -4531,7 +4532,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         bus.add_signal_watch()
 
-        bus.connect(
+        self.gst_bus_handler = bus.connect(
             "message",
             self.on_gst_message
         )
@@ -4765,33 +4766,46 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def stop_audio_capture(self):
 
-        if self.gst_pipeline:
-
-            self.gst_pipeline.set_state(
-                Gst.State.NULL
-            )
-
-            self.gst_pipeline = None
+        self.teardown_gst_pipeline()
 
         self.current_sink = None
 
+    # add_signal_watch() in start_system_audio installs a GSource on
+    # the bus that keeps it (and the message handler) alive until
+    # remove_signal_watch() is called - previously never done, so every
+    # stop/restart (e.g. each audio device switch) left the old bus and
+    # its watch behind.
+    def teardown_gst_pipeline(self):
+
+        if not self.gst_pipeline:
+            return
+
+        self.gst_pipeline.set_state(
+            Gst.State.NULL
+        )
+
+        # set_state() only requests the transition - it can finish
+        # asynchronously. Without waiting for it here, a new pipeline
+        # built right after (restart_audio_monitor) gets its
+        # pipewiresrc attached while the old one is still tearing
+        # down its PipeWire stream, and the new appsink silently never
+        # receives a single sample.
+        self.gst_pipeline.get_state(
+            Gst.CLOCK_TIME_NONE
+        )
+
+        bus = self.gst_pipeline.get_bus()
+        bus.remove_signal_watch()
+
+        if self.gst_bus_handler is not None:
+            bus.disconnect(self.gst_bus_handler)
+            self.gst_bus_handler = None
+
+        self.gst_pipeline = None
+
     def restart_audio_monitor(self, sink_name=None):
 
-        if self.gst_pipeline:
-
-            self.gst_pipeline.set_state(
-                Gst.State.NULL
-            )
-
-            # set_state() only requests the transition - it can finish
-            # asynchronously. Without waiting for it here, the new
-            # pipeline below gets built (and its pipewiresrc tries to
-            # attach) while the old one is still tearing down its
-            # PipeWire stream, and the new appsink silently never
-            # receives a single sample.
-            self.gst_pipeline.get_state(
-                Gst.CLOCK_TIME_NONE
-            )
+        self.teardown_gst_pipeline()
 
         self.start_system_audio(sink_name)
 
