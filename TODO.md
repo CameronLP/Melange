@@ -2918,6 +2918,22 @@
       `forward_audio_to_aux_windows`/`on_audio_sample` in window.py);
       and whether it only affects windows opened *after* audio
       playback already started, versus ones open from the start.
+- [ ] Figure out why some visualizers don't seem to react to music -
+      requested, not yet investigated. Not yet clarified whether this
+      means the aux visualizer windows (in which case it's the same
+      report as the BUG entry directly above - merge into it) or
+      specific Butterchurn/baron presets in the main view. If presets:
+      worth separating "preset is genuinely low-reactivity by design"
+      (some MilkDrop presets lean mostly on time-based motion and
+      barely use bass/mid/treb) from "preset should react but gets
+      no/weak audio" - e.g. a preset that only keys off a band that's
+      near-silent at the current Sensitivity gain, or one whose
+      converted equations/shaders lost their audio terms (the
+      milkdrop-preset-converter issues under Paused below). A quick
+      way to tell the two apart: note the names of the presets that
+      look dead, check their JSON for bass/mid/treb (and *_att) usage,
+      and compare against how the same .milk behaves in projectM or
+      MilkDrop itself.
 - [ ] MPRIS "now playing" integration - pull actual track/artist from whatever's playing (Spotify, etc.) via D-Bus instead of just the preset name; also enables auto-advancing the preset on track change
 - [ ] Recording/export - save the visualizer output as a video clip, or grab a screenshot of a good moment
 - [ ] MIDI controller support - map physical knobs/pads to sensitivity, blend time, next/prev preset
