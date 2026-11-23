@@ -7,7 +7,7 @@
     <!-- wrapped block with the badge knocked out -->
     <path fill-rule="evenodd" d="M6 6 H13.5 Q14.5 6 14.5 7 V11 H6 Z M10.25 6.9 a1.6 1.6 0 1 0 0.001 0 Z"/>
     <!-- knife -->
-    <path fill="none" stroke="#2e3436" stroke-width="1.4" stroke-linecap="round" d="M3.6 5.6 L8.6 3.2"/>
-    <path fill="none" stroke="#2e3436" stroke-width="2.6" stroke-linecap="round" d="M9.6 2.75 L13.6 0.9"/>
+    <path fill="none" stroke="#2e3436" stroke-width="1.4" stroke-linecap="round" d="M3.8 5.9 L8.6 3.9"/>
+    <path fill="none" stroke="#2e3436" stroke-width="2.4" stroke-linecap="round" d="M9.5 3.5 L13.3 1.8"/>
   </g>
 </svg>
