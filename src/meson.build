@@ -32,6 +32,7 @@ melange_sources = [
   'aux_window.py',
   'mirror_window.py',
   'now_playing.py',
+  'preset_manager.py',
   'projectm_view.py',
   'webview.py',
   'window.py',

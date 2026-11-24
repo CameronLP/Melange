@@ -28,8 +28,6 @@ problems worked around below.
 import ctypes
 import locale
 import os
-import random
-import time
 from pathlib import Path
 
 from gi.repository import Gtk, GLib
@@ -131,28 +129,46 @@ def find_presets():
     return sorted(PRESET_DIR.rglob("*.milk"))
 
 
-class ProjectMView(Gtk.GLArea):
+def preset_catalog():
+    """{display name: path} for the bundled presets. Names are file
+    stems; a stem used in more than one category gets the category
+    appended so every name stays unique."""
 
-    def __init__(self, on_preset_changed, get_cycle_seconds):
+    paths = find_presets()
+    stems = {}
+
+    for path in paths:
+        stems[path.stem] = stems.get(path.stem, 0) + 1
+
+    catalog = {}
+
+    for path in paths:
+        name = path.stem
+
+        if stems[name] > 1:
+            name = f"{name} ({path.parent.name})"
+
+        catalog[name] = path
+
+    return catalog
+
+
+class ProjectMView(Gtk.GLArea):
+    """Renders presets it's told to load - navigation, history, the
+    queue and cycling live in preset_manager.PresetManager."""
+
+    def __init__(self, on_preset_failed=None):
 
         super().__init__()
 
-        self.on_preset_changed = on_preset_changed
-        self.get_cycle_seconds = get_cycle_seconds
+        # on_preset_failed(path, reason) - called on the main loop.
+        self.on_preset_failed_callback = on_preset_failed
 
         self.handle = None
         self.size_known = False
         self.pending_audio = bytearray()
-
-        # Shuffled once; history lets Previous retrace what was shown.
-        self.presets = find_presets()
-        random.shuffle(self.presets)
-        self.order_position = -1
-        self.history = []
-        self.history_position = -1
         self.requested_preset = None  # (path, smooth), loaded on next render
-        self.last_switch_time = time.monotonic()
-        self.cycle_timer = None
+        self.transition_seconds = SMOOTH_TRANSITION_SECONDS
 
         self.set_required_version(3, 3)
         self.set_hexpand(True)
@@ -192,7 +208,7 @@ class ProjectMView(Gtk.GLArea):
         _lib.projectm_set_preset_switch_failed_event_callback(
             self.handle, self._failed_callback, None
         )
-        _lib.projectm_set_soft_cut_duration(self.handle, SMOOTH_TRANSITION_SECONDS)
+        _lib.projectm_set_soft_cut_duration(self.handle, self.transition_seconds)
 
         # Melange decides when to switch presets (cycle interval,
         # next/previous), not projectM's own timer/hard cuts.
@@ -200,14 +216,7 @@ class ProjectMView(Gtk.GLArea):
 
         self.size_known = False
 
-        if self.cycle_timer is None:
-            self.cycle_timer = GLib.timeout_add_seconds(1, self.on_cycle_check)
-
     def on_unrealize(self, area):
-
-        if self.cycle_timer is not None:
-            GLib.source_remove(self.cycle_timer)
-            self.cycle_timer = None
 
         self.make_current()
 
@@ -239,14 +248,11 @@ class ProjectMView(Gtk.GLArea):
         if width <= 0 or height <= 0:
             return True
 
-        # The area is still 0x0 at realize, so the first preset is only
-        # loaded once there's a real size.
+        # The area is still 0x0 at realize, so presets are only loaded
+        # once there's a real size.
         if not self.size_known:
             self.size_known = True
             _lib.projectm_set_window_size(self.handle, width, height)
-
-            if self.requested_preset is None and not self.history:
-                self.next_preset(smooth=False)
 
         if self.requested_preset is not None:
             path, smooth = self.requested_preset
@@ -297,46 +303,19 @@ class ProjectMView(Gtk.GLArea):
 
     # --- presets --------------------------------------------------------
 
-    def next_preset(self, smooth=True):
+    def load_preset(self, path, smooth=True):
+        """Show this .milk file (loaded on the next frame, when the GL
+        context is current)."""
 
-        if not self.presets:
-            return
-
-        if self.history_position < len(self.history) - 1:
-            # Replaying forward through history after going back.
-            self.history_position += 1
-            path = self.history[self.history_position]
-        else:
-            self.order_position = (self.order_position + 1) % len(self.presets)
-            path = self.presets[self.order_position]
-            self.history.append(path)
-            self.history_position = len(self.history) - 1
-
-        self.show_preset(path, smooth)
-
-    def previous_preset(self, smooth=True):
-
-        if self.history_position <= 0:
-            return
-
-        self.history_position -= 1
-        self.show_preset(self.history[self.history_position], smooth)
-
-    def show_preset(self, path, smooth):
-
-        self.requested_preset = (path, smooth)
-        self.last_switch_time = time.monotonic()
+        self.requested_preset = (Path(path), smooth)
         self.queue_render()
 
-        if self.on_preset_changed:
-            self.on_preset_changed(path.stem)
+    def set_transition_seconds(self, seconds):
 
-    def current_preset_name(self):
+        self.transition_seconds = max(0.0, float(seconds))
 
-        if 0 <= self.history_position < len(self.history):
-            return self.history[self.history_position].stem
-
-        return None
+        if self.handle:
+            _lib.projectm_set_soft_cut_duration(self.handle, self.transition_seconds)
 
     def on_preset_failed(self, filename, message, user_data):
 
@@ -344,18 +323,9 @@ class ProjectMView(Gtk.GLArea):
         reason = message.decode(errors="replace") if message else ""
         print(f"projectM: preset failed: {name}: {reason}")
 
-        # Called from inside projectM; move on once it has returned.
-        GLib.idle_add(lambda: (self.next_preset(smooth=False), False)[1])
-
-    def on_cycle_check(self):
-
-        seconds = self.get_cycle_seconds()
-
-        if (
-            seconds > 0
-            and self.get_mapped()
-            and time.monotonic() - self.last_switch_time >= seconds
-        ):
-            self.next_preset(smooth=True)
-
-        return GLib.SOURCE_CONTINUE
+        # Called from inside projectM's render call; report it once
+        # that has returned.
+        if self.on_preset_failed_callback:
+            GLib.idle_add(
+                lambda: (self.on_preset_failed_callback(name, reason), False)[1]
+            )
