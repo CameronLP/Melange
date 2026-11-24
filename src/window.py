@@ -135,6 +135,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.immersive_mode_enabled = False
         self.transparency_opacity = 0.5
         self.transparency_fade_ms = 0.0
+        # Opaque on Hover: while Transparency Mode is on, the content
+        # fades back to fully opaque when the pointer is over the
+        # visualizer and to Opacity Level when it leaves (the original
+        # Hover Transparency behaviour, now optional).
+        self.transparency_hover_reveal = False
+        self.pointer_over_visualizer = False
         self.opacity_fade_timer = None
         self.now_playing_enabled = False
         self.now_playing_placement = "bottom-left"
@@ -235,6 +241,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         drop_target.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         drop_target.connect("drop", self.on_files_dropped)
         webview_overlay.add_controller(drop_target)
+
+        # Opaque on Hover (Transparency Mode). Only the visualizer area,
+        # not the header bar, so moving to the menu doesn't change it.
+        hover_motion = Gtk.EventControllerMotion()
+        hover_motion.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        hover_motion.connect("enter", self.on_visualizer_pointer_enter)
+        hover_motion.connect("leave", self.on_visualizer_pointer_leave)
+        webview_overlay.add_controller(hover_motion)
 
         self.prev_arrow_button = Gtk.Button(icon_name="go-previous-symbolic")
         self.prev_arrow_button.add_css_class("nav-arrow-button")
@@ -1158,6 +1172,40 @@ class MelangeWindow(Adw.ApplicationWindow):
     # Fade Speed setting, rather than one of the two being an instant
     # special case - there's no more mouse-position edge case to guard
     # against now that on/off is the only transition.
+    # The content opacity Transparency Mode should be heading for right
+    # now: fully opaque when the mode is off, or when Opaque on Hover is
+    # on and the pointer is over the visualizer; Opacity Level otherwise.
+    def transparency_target_opacity(self):
+
+        if not self.transparency_mode_enabled:
+            return 1.0
+
+        if self.transparency_hover_reveal and self.pointer_over_visualizer:
+            return 1.0
+
+        return self.transparency_opacity
+
+    def on_visualizer_pointer_enter(self, controller, x, y):
+
+        self.pointer_over_visualizer = True
+
+        if self.transparency_mode_enabled and self.transparency_hover_reveal:
+            self.animate_opacity(self.transparency_target_opacity())
+
+    def on_visualizer_pointer_leave(self, controller):
+
+        self.pointer_over_visualizer = False
+
+        if self.transparency_mode_enabled and self.transparency_hover_reveal:
+            self.animate_opacity(self.transparency_target_opacity())
+
+    def transparency_hover_reveal_changed(self, enabled):
+
+        self.transparency_hover_reveal = enabled
+
+        if self.transparency_mode_enabled:
+            self.animate_opacity(self.transparency_target_opacity())
+
     def transparency_mode_changed(self, action, value):
 
         action.set_state(value)
@@ -1172,11 +1220,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         else:
             self.remove_css_class("transparency-active")
 
-        self.animate_opacity(
-            self.transparency_opacity
-            if self.transparency_mode_enabled
-            else 1.0
-        )
+        self.animate_opacity(self.transparency_target_opacity())
 
         self.show_toast(
             "Transparency Mode enabled"
@@ -2593,7 +2637,9 @@ class MelangeWindow(Adw.ApplicationWindow):
                 GLib.source_remove(self.opacity_fade_timer)
                 self.opacity_fade_timer = None
 
-            self.toast_overlay.set_opacity(value)
+            # Opaque while hovered with Opaque on Hover on, so the new
+            # level applies once the pointer leaves.
+            self.toast_overlay.set_opacity(self.transparency_target_opacity())
 
         return self.build_slider_row(
             "Opacity Level",
@@ -2608,13 +2654,31 @@ class MelangeWindow(Adw.ApplicationWindow):
         def format_transparency_fade(value):
             return "Instant" if value <= 0 else f"{value:.1f}s"
 
-        return self.build_slider_row(
+        row = self.build_slider_row(
             "Fade Speed",
             0.0, 2.0, 0.1, 0.0,
             format_transparency_fade,
             lambda value: setattr(self, "transparency_fade_ms", value * 1000),
             store_as="transparency_fade_scale"
         )
+        row.set_tooltip_text(
+            "How long the fade takes when Transparency Mode turns on or off, "
+            "and with Opaque on Hover when the mouse enters or leaves"
+        )
+
+        return row
+
+    def build_transparency_hover_reveal_control(self):
+
+        row = self.build_toggle_row(
+            "Opaque on Hover",
+            self.transparency_hover_reveal,
+            self.transparency_hover_reveal_changed,
+            store_as="transparency_hover_reveal_row"
+        )
+        row.set_subtitle("Fully visible while the mouse is over the visualizer")
+
+        return row
 
     # Bound via action-name (like Transparency Mode's own Enabled row)
     # rather than build_toggle_row now that this is a real action -
@@ -3155,6 +3219,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         transparency_group.add(transparency_enable_row)
         transparency_group.add(self.build_transparency_opacity_control())
+        transparency_group.add(self.build_transparency_hover_reveal_control())
         transparency_group.add(self.build_transparency_fade_control())
 
         now_playing_group = Adw.PreferencesGroup(title="Now Playing")

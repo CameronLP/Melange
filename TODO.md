@@ -1058,7 +1058,7 @@
       entry below, since both currently hang off the single Scale.
       Done 2026-11-24 with the font size entry: Max Width (on top of
       Scale) sets how wide the card's text can get.
-- [ ] Figure out Transparency Mode's "Fade Speed" - reported ("seems to
+- [x] Figure out Transparency Mode's "Fade Speed" - reported ("seems to
       do nothing"), not investigated beyond reading the code. What it
       does today (window.py build_transparency_fade_control /
       animate_opacity): it's the *duration* (0-2 s, default 0 =
@@ -1073,6 +1073,14 @@
       fade actually animates (rule out a real bug). Then decide: rename
       to "Toggle Fade Duration" (or similar) with a clearer description,
       let it also smooth Opacity Level changes, or remove it.
+      Resolved 2026-11-24: Fade Speed was made for the original Hover
+      Transparency (fade when the mouse enters/leaves); commit 3ab6ba8
+      turned that into an always-on mode and dropped the hover part,
+      leaving Fade Speed only on the on/off toggle. Restored as an
+      optional "Opaque on Hover" switch (Transparency Mode group, off by
+      default): with it on, the content fades to fully opaque while the
+      pointer is over the visualizer and back to Opacity Level when it
+      leaves, using Fade Speed. Verified headless (9/9).
 - [ ] Option to mute the "Beat detected - next preset" message -
       requested ("I want a mute for the beat detected message"), not
       done. on_projectm_beat (window.py) shows that toast on every beat
