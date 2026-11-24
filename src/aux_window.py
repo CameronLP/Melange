@@ -349,12 +349,32 @@ def random_bounce_color():
     return color
 
 
+# Every aux window is handed the very same left/right list objects per
+# audio chunk (window.py forward_audio_to_aux_windows), and VU, DVD and
+# Pipes each took the RMS of both on every draw - so the last few
+# results are remembered by list identity. The list itself is kept in
+# the cache entry, so an id can't be reused while it's cached.
+_rms_cache = {}
+
+
 def rms(samples):
 
     if not samples:
         return 0.0
 
-    return math.sqrt(sum(s * s for s in samples) / len(samples))
+    cached = _rms_cache.get(id(samples))
+
+    if cached is not None and cached[0] is samples:
+        return cached[1]
+
+    value = math.sqrt(sum(s * s for s in samples) / len(samples))
+
+    if len(_rms_cache) >= 8:
+        _rms_cache.clear()
+
+    _rms_cache[id(samples)] = (samples, value)
+
+    return value
 
 
 # Bit-reversal permutation and twiddle factors per FFT length, built
@@ -613,6 +633,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.dvd_timer = None
         self._icon_cache_key = None
         self._icon_pixbuf = None
+        self._dvd_logo_cache = {}
+        self._projection_trig = (None, None, 1.0, 0.0, 1.0, 0.0)
 
         # Beat pulse state (see dvd_tick) - separate from dvd_level's
         # continuous VU-style ballistics.
@@ -4405,10 +4427,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # ship. Cached the same way load_dvd_icon caches theme lookups
         # - this is called every tick (~60/sec) and size is
         # continuously audio-reactive.
-        cache_key = ("__dvd_logo_resource__", size)
+        #
+        # Because size changes almost every tick, a cache keyed on the
+        # exact size missed nearly every time and re-rasterized the SVG
+        # each frame (~770 times per 30s in a profile). Now it's
+        # rasterized at size rounded *up* to the next 16px step, a few
+        # of those are kept, and draw_dvd_text_logo scales down to the
+        # exact size - same smooth size animation, a handful of
+        # rasterizations instead of one per frame.
+        size = -(-max(1, int(size)) // 16) * 16
 
-        if cache_key == self._icon_cache_key:
-            return self._icon_pixbuf
+        if size in self._dvd_logo_cache:
+            return self._dvd_logo_cache[size]
 
         pixbuf = None
 
@@ -4431,8 +4461,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         except GLib.Error:
             pixbuf = None
 
-        self._icon_cache_key = cache_key
-        self._icon_pixbuf = pixbuf
+        if len(self._dvd_logo_cache) >= 8:
+            self._dvd_logo_cache.pop(next(iter(self._dvd_logo_cache)))
+
+        self._dvd_logo_cache[size] = pixbuf
 
         return pixbuf
 
@@ -4442,10 +4474,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if pixbuf is not None:
 
+            # The cached pixbuf is rasterized at size rounded up to a
+            # 16px step (see load_dvd_logo_pixbuf) - scale it back down
+            # to the exact requested size.
+            scale = size / (-(-max(1, int(size)) // 16) * 16)
+
             cr.save()
             cr.translate(
-                self.dvd_x, self.dvd_y + (size - pixbuf.get_height()) / 2
+                self.dvd_x, self.dvd_y + (size - pixbuf.get_height() * scale) / 2
             )
+            cr.scale(scale, scale)
 
             # Recolored the same way draw_dvd_bounce recolors a
             # symbolic icon - the real logo's path is a plain black
@@ -5065,8 +5103,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # projected screen position plus a rotated depth value used
         # purely for back-to-front painter's-algorithm sorting, not
         # for the projection itself.
-        cos_a, sin_a = math.cos(azimuth), math.sin(azimuth)
-        cos_e, sin_e = math.cos(elevation), math.sin(elevation)
+        # Called once per projected point (~1M times per 30s with the
+        # 3D kinds open) but the camera angles only change on drag, so
+        # the trig is remembered for the last angles seen.
+        trig = self._projection_trig
+
+        if trig[0] != azimuth or trig[1] != elevation:
+            trig = self._projection_trig = (
+                azimuth, elevation,
+                math.cos(azimuth), math.sin(azimuth),
+                math.cos(elevation), math.sin(elevation),
+            )
+
+        _, _, cos_a, sin_a, cos_e, sin_e = trig
 
         rx = x * cos_a - y * sin_a
         ry = x * sin_a + y * cos_a
