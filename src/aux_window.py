@@ -234,12 +234,27 @@ def rainbow_color(level):
     # the old heatmap_color this whole gradient system replaced.
     # Brightness also rises with level (val) so quiet cells read as
     # dim rather than a fully saturated color at any level.
+    #
+    # Looked up from a precomputed table rather than calling colorsys
+    # each time - this runs per cell/dot (1.4 million calls per 30s in a
+    # profile with the aux windows open); 1024 steps is finer than any
+    # visible difference.
     level = max(0.0, min(1.0, level))
 
-    hue = (1.0 - level) * 0.72
-    r, g, b = colorsys.hsv_to_rgb(hue, 0.9, 0.35 + 0.65 * level)
+    return _RAINBOW_LUT[int(level * _RAINBOW_LUT_MAX + 0.5)]
 
-    return (r, g, b)
+
+def _rainbow_color_exact(level):
+
+    hue = (1.0 - level) * 0.72
+    return colorsys.hsv_to_rgb(hue, 0.9, 0.35 + 0.65 * level)
+
+
+_RAINBOW_LUT_MAX = 1023
+_RAINBOW_LUT = [
+    _rainbow_color_exact(i / _RAINBOW_LUT_MAX)
+    for i in range(_RAINBOW_LUT_MAX + 1)
+]
 
 
 def scale_level_for_color(level, ceiling):
@@ -862,6 +877,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # appended at the right edge and drawn there, scrolling left
         # as older ones fall off (see draw_spectrogram).
         self.spectrogram_columns = deque(maxlen=SPECTROGRAM_COLUMNS)
+        # Cached image for render_spectrogram - see update_spectrogram_image.
+        self.spectrogram_append_count = 0
+        self.spectrogram_image = None
+        self.spectrogram_image_key = None
+        self.spectrogram_image_appends = 0
+        self.spectrogram_pixel_table_cache = None
         self.last_spectrogram_frame_time = 0.0
 
         # 3D Terrain Spectrogram - terrain_rows holds the same shape of
@@ -4863,77 +4884,149 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
+        self.spectrogram_append_count += 1
         self.spectrogram_columns.append(
             self.bars_from_magnitudes(magnitudes, bin_count)
         )
+
+    def spectrogram_color_key(self):
+
+        lo, hi = self.spectrogram_color_lo, self.spectrogram_color_hi
+
+        return (
+            self.num_bars, self.spectrogram_palette,
+            self.spectrogram_color_ceiling,
+            (lo.red, lo.green, lo.blue), (hi.red, hi.green, hi.blue),
+        )
+
+    def spectrogram_pixel_table(self):
+
+        # 256 precomputed BGRA pixels (cairo ARGB32, little-endian),
+        # one per quantized color level, for the current palette/colors.
+        table = []
+
+        for i in range(256):
+
+            level = i / 255
+
+            if self.spectrogram_palette == "rainbow":
+                r, g, b = rainbow_color(level)
+            else:
+                r, g, b = gradient_color(
+                    level, self.spectrogram_color_lo, self.spectrogram_color_hi
+                )
+
+            table.append(bytes((
+                int(b * 255 + 0.5), int(g * 255 + 0.5), int(r * 255 + 0.5), 255
+            )))
+
+        return table
+
+    def write_spectrogram_column(self, data, stride, x, levels):
+
+        bin_count = self.num_bars
+        ceiling = max(0.05, self.spectrogram_color_ceiling)
+        table = self.spectrogram_pixel_table_cache
+        offset = x * 4
+
+        for row_index in range(min(bin_count, len(levels))):
+
+            scaled = levels[row_index] / ceiling
+            index = 255 if scaled >= 1.0 else (0 if scaled <= 0.0 else int(scaled * 255 + 0.5))
+
+            # Row 0 (lowest frequency) at the bottom of the image.
+            start = (bin_count - 1 - row_index) * stride + offset
+            data[start:start + 4] = table[index]
+
+    def update_spectrogram_image(self):
+
+        # One pixel per (column, frequency bin) cell, in a cached
+        # SPECTROGRAM_COLUMNS x num_bars image (newest column at the
+        # right edge, unfilled columns transparent), scaled up to the
+        # window when drawn. Previously every draw re-filled every
+        # cell as its own Cairo rectangle - ~12,800 fills per frame at
+        # the default 64 bars, even though only one new column had
+        # arrived. Now a new column just scrolls the image left by a
+        # pixel and writes that one column; the full rebuild only
+        # happens when a setting that changes the colors or bar count
+        # does.
+        key = self.spectrogram_color_key()
+        new_columns = self.spectrogram_append_count - self.spectrogram_image_appends
+        surface = self.spectrogram_image
+
+        if surface is None or key != self.spectrogram_image_key:
+
+            surface = cairo.ImageSurface(
+                cairo.FORMAT_ARGB32, SPECTROGRAM_COLUMNS, max(1, self.num_bars)
+            )
+            self.spectrogram_image = surface
+            self.spectrogram_image_key = key
+            self.spectrogram_pixel_table_cache = self.spectrogram_pixel_table()
+            new_columns = len(self.spectrogram_columns)
+
+        if new_columns <= 0:
+            return surface
+
+        new_columns = min(new_columns, SPECTROGRAM_COLUMNS)
+
+        surface.flush()
+        data = surface.get_data()
+        stride = surface.get_stride()
+        row_bytes = SPECTROGRAM_COLUMNS * 4
+        shift = new_columns * 4
+
+        for y in range(surface.get_height()):
+            start = y * stride
+            data[start:start + row_bytes - shift] = data[start + shift:start + row_bytes]
+
+        recent = list(self.spectrogram_columns)[-new_columns:]
+        first_x = SPECTROGRAM_COLUMNS - len(recent)
+
+        for offset, levels in enumerate(recent):
+            self.write_spectrogram_column(data, stride, first_x + offset, levels)
+
+        surface.mark_dirty()
+        self.spectrogram_image_appends = self.spectrogram_append_count
+
+        return surface
 
     def render_spectrogram(self, cr, width, height):
 
         if not self.spectrogram_columns:
             return
 
-        bin_count = self.num_bars
-        column_count = len(self.spectrogram_columns)
+        surface = self.update_spectrogram_image()
+        bin_count = max(1, self.num_bars)
+
+        cr.save()
 
         if self.spectrogram_vertical:
-
-            # Time runs top-to-bottom instead of left-to-right -
-            # newest row at the top, scrolling downward, the usual
-            # convention for a vertically-oriented waterfall (e.g. SDR
-            # receiver software) - and frequency runs left-to-right
-            # instead of bottom-to-top, low frequency at the left.
-            row_height = height / SPECTROGRAM_COLUMNS
+            # Time runs top-to-bottom instead of left-to-right - newest
+            # row at the top, scrolling downward, the usual convention
+            # for a vertically-oriented waterfall (e.g. SDR receiver
+            # software) - and frequency runs left-to-right, low at the
+            # left. Image x (time, newest at the right) maps to screen
+            # y (newest at the top); image y (frequency, low at the
+            # bottom) maps to screen x (low at the left).
             column_width = width / bin_count
-
+            row_height = height / SPECTROGRAM_COLUMNS
+            cr.transform(cairo.Matrix(
+                0, -row_height, -column_width, 0, width, height
+            ))
         else:
+            # Newest column at the right edge, low frequencies at the
+            # bottom - same up-is-higher convention as Spectrum's bars.
+            cr.scale(width / SPECTROGRAM_COLUMNS, height / bin_count)
 
-            column_width = width / SPECTROGRAM_COLUMNS
-            row_height = height / bin_count
+        pattern = cairo.SurfacePattern(surface)
+        # Crisp cell blocks, matching the old per-rectangle look,
+        # rather than blurring between cells.
+        pattern.set_filter(cairo.FILTER_NEAREST)
+        cr.set_source(pattern)
+        cr.rectangle(0, 0, SPECTROGRAM_COLUMNS, bin_count)
+        cr.fill()
 
-        # Newest column nearest the "front" edge (right in horizontal
-        # mode, top in vertical), oldest falls off the far edge - a
-        # live scrolling chart, same convention the X-Y scope and the
-        # main visualizer's own timeline already use for "newest is
-        # closest to now."
-        start_x = width - column_width * column_count
-
-        for column_index, levels in enumerate(self.spectrogram_columns):
-
-            if self.spectrogram_vertical:
-                x = None
-                y = (column_count - 1 - column_index) * row_height
-            else:
-                x = start_x + column_index * column_width
-
-            for row_index, level in enumerate(levels):
-
-                scaled_level = scale_level_for_color(
-                    level, self.spectrogram_color_ceiling
-                )
-
-                if self.spectrogram_palette == "rainbow":
-                    r, g, b = rainbow_color(scaled_level)
-                else:
-                    r, g, b = gradient_color(
-                        scaled_level, self.spectrogram_color_lo,
-                        self.spectrogram_color_hi
-                    )
-                cr.set_source_rgb(r, g, b)
-
-                if self.spectrogram_vertical:
-                    # Low frequencies at the left, same left-to-right
-                    # "increasing pitch" reading as the Spectrum bars.
-                    x = row_index * column_width
-                else:
-                    # Low frequencies at the bottom, same up-is-higher
-                    # convention as the Spectrum bars.
-                    y = height - (row_index + 1) * row_height
-
-                # +0.5 so adjacent cells overlap slightly - without it,
-                # Cairo's antialiasing leaves faint seams between
-                # same-colored neighboring rectangles.
-                cr.rectangle(x, y, column_width + 0.5, row_height + 0.5)
-                cr.fill()
+        cr.restore()
 
     def update_terrain_rows(self):
 
