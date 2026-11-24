@@ -5999,7 +5999,42 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         # Same deferred-destroy workaround as MirrorWindow.on_close_request
         # (mirror_window.py) - returning True alone left the window
-        # alive there too.
-        GLib.idle_add(self.destroy)
+        # alive there too. Default priority, not idle: with several aux
+        # windows redrawing, the main loop can stay busy enough that a
+        # plain idle callback never runs - the closed window (and all
+        # its buffers) then just sat in memory forever.
+        GLib.idle_add(
+            self.destroy_and_dispose,
+            priority=GLib.PRIORITY_DEFAULT
+        )
 
         return True
+
+    # destroy() alone left closed windows in memory for the rest of the
+    # session. Child widgets/controllers stored as attributes (e.g.
+    # self.drawing_area) hold callbacks bound to this window's methods
+    # (set_draw_func, gesture/notify handlers...), so: window's Python
+    # attributes -> child GObject -> C-side callback -> window. That
+    # loop passes through GTK's C code, which Python's GC can't see
+    # into, and run_dispose() doesn't break it either (the children
+    # stay alive through our own attribute references). Dropping the
+    # attributes once the window is torn down does: the children are
+    # then finalized, their callbacks released, and the window, its
+    # buffers and Cairo surfaces are actually freed. Event controllers
+    # and win.* actions attached to the window itself form the same
+    # loop through the window's own GObject (which GTK only releases on
+    # finalize), so those are removed explicitly first.
+    def destroy_and_dispose(self):
+
+        self.destroy()
+
+        for controller in list(self.observe_controllers()):
+            self.remove_controller(controller)
+
+        for action_name in self.list_actions():
+            self.remove_action(action_name)
+
+        self.run_dispose()
+        self.__dict__.clear()
+
+        return False

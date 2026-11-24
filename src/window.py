@@ -69,6 +69,11 @@ AUX_WINDOW_ACTIONS = {
 
 Gst.init(None)
 
+# Upper bound on captured audio waiting for the main thread: 0.25s of
+# 44.1kHz stereo S16. Anything older is dropped - the visualizers only
+# care about recent audio, and the JS PCM queue only keeps 50ms anyway.
+MAX_PENDING_AUDIO_BYTES = 44100 * 4 // 4
+
 @Gtk.Template(resource_path="/com/cameronlp/Melange/window.ui")
 class MelangeWindow(Adw.ApplicationWindow):
 
@@ -410,6 +415,9 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.gst_pipeline = None
         self.gst_bus_handler = None
+        self.pending_audio = bytearray()
+        self.pending_audio_lock = threading.Lock()
+        self.audio_flush_scheduled = False
         self.current_sink = None
         self.pinned_sink = None
         self.pactl_event_timer = None
@@ -4574,18 +4582,50 @@ class MelangeWindow(Adw.ApplicationWindow):
                 data = bytes(mapinfo.data)
                 buffer.unmap(mapinfo)
 
-                GLib.idle_add(
-                    self.send_audio_to_webview,
-                    data
-                )
+                # Runs on GStreamer's streaming thread. This used to
+                # GLib.idle_add() a separate callback (holding its own
+                # copy of the chunk) for every chunk, ~24 a second.
+                # Idle callbacks run at the lowest main-loop priority,
+                # so whenever the main thread was busy (e.g. aux
+                # windows redrawing) they piled up without limit -
+                # measured ~49MB in 5 minutes, and the visualizer fed
+                # increasingly stale audio. Now chunks accumulate in
+                # one bounded buffer, oldest audio dropped first, and
+                # at most one flush is scheduled at a time.
+                with self.pending_audio_lock:
 
-                if self.aux_windows:
-                    GLib.idle_add(
-                        self.forward_audio_to_aux_windows,
-                        data
-                    )
+                    self.pending_audio.extend(data)
+
+                    excess = len(self.pending_audio) - MAX_PENDING_AUDIO_BYTES
+
+                    if excess > 0:
+                        # Whole stereo S16 frames only (4 bytes), so
+                        # L/R never swap.
+                        del self.pending_audio[:excess + (-excess % 4)]
+
+                    if not self.audio_flush_scheduled:
+                        self.audio_flush_scheduled = True
+                        GLib.idle_add(
+                            self.flush_pending_audio,
+                            priority=GLib.PRIORITY_DEFAULT
+                        )
 
         return Gst.FlowReturn.OK
+
+    def flush_pending_audio(self):
+
+        with self.pending_audio_lock:
+            data = bytes(self.pending_audio)
+            self.pending_audio.clear()
+            self.audio_flush_scheduled = False
+
+        if data:
+            self.send_audio_to_webview(data)
+
+            if self.aux_windows:
+                self.forward_audio_to_aux_windows(data)
+
+        return False
 
 
 

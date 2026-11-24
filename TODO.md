@@ -3015,6 +3015,39 @@
 
 ## Done
 
+- [x] Fixed a second round of memory leaks, found by a soak test:
+      presets cycling every 2s, 8 aux windows + a mirror open, a
+      spectrogram + a mirror window opened/closed every 10s, pink
+      noise into a temporary null sink, tracemalloc on. Run headless
+      (`mutter --headless --no-x11 --virtual-monitor 1920x1080
+      --wayland-display <name>`, then `env -u DISPLAY
+      WAYLAND_DISPLAY=<name> flatpak run --env=GDK_BACKEND=wayland
+      ...`) - running it on the real desktop put ~10 jumping windows
+      on screen.
+      1. Audio chunk backlog (window.py on_audio_sample): every chunk
+         got its own GLib.idle_add, and idle callbacks run at the
+         lowest priority - with aux windows redrawing they barely ran,
+         ~49MB piled up in 5 minutes and the visualizer got stale
+         audio. Now chunks go into one buffer capped at 0.25s
+         (MAX_PENDING_AUDIO_BYTES, oldest whole frames dropped), with
+         at most one flush_pending_audio queued, at PRIORITY_DEFAULT.
+      2. Closed aux/mirror windows were never freed. Child widgets and
+         controllers held callbacks bound to the window's methods,
+         a loop through GTK's C side that Python's GC can't see.
+         destroy_and_dispose() (both files) now destroys, removes the
+         window's own controllers and win.* actions, run_dispose()s,
+         then clears the window's __dict__. It must be scheduled at
+         PRIORITY_DEFAULT: as a plain idle callback it was starved by
+         aux window redraws and never ran (same cause as 1). Mirror
+         windows also cancel hide_timer/opacity_fade_timer on close.
+      Result (4-minute soak, same load): Python RSS 198 -> 213MB and
+      flat from 90s on (was 244 -> 324MB and climbing), object count
+      flat, 0 closed windows alive (was every one), audio backlog gone
+      from the tracemalloc diff. Separately confirmed 0-1 audio
+      evaluate_javascript calls in flight at any time (2800 sent over
+      2 minutes), and that the pipes visualizer's segment list is
+      bounded (grid reset at PIPES_RESET_FRACTION).
+
 - [x] Fixed memory leaks from leaving the app open a long time
       (reported: memory seemed to grow over a long session).
       1. The hidden F12 debug overlay (`debug()` in main.js) did
