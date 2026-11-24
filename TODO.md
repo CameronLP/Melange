@@ -318,6 +318,17 @@
       Won't cover players that put art in /tmp (Melange's /tmp is
       private) or inside another sandbox's private /tmp, nor players
       that send no artUrl.
+- [ ] TODO: Option to hide artwork in Now Playing - requested ("option
+      to hide artwork in now playing"). Note: a Show Artwork switch
+      already exists in Now Playing's Preferences
+      (build_now_playing_show_artwork_control, window.py) and turning
+      it off hides the art frame entirely. Clarify what's wanted
+      beyond that - likely candidates: hide only the placeholder icon
+      when there's no real cover (e.g. "Show Placeholder" / "Hide
+      artwork when unavailable", so browser tabs and players whose art
+      can't be read - see the sandboxed-players entry above - show
+      text only), or a quicker way to toggle it than Preferences (a
+      hamburger-menu item like Now Playing itself has).
 - [ ] TODO: Now Playing artwork should have a minimum size, equal to
       the size it would be if title/artist/album/time were displayed -
       requested, not implemented. Currently apply_now_playing_art_size's
@@ -743,6 +754,20 @@
       (data/ already has a place for one, per this project's standard
       GNOME app layout, but none exists yet) rather than reusing the
       profiles JSON file for this different job.
+      **Requested again** ("make settings persistent"). Notes from a
+      fresh look: data/com.cameronlp.Melange.gschema.xml does exist
+      now but is an empty <schema>, so nothing is stored. Cheapest
+      route: profile_fields() (window.py) already lists a key, getter
+      and setter for every profile-able setting and
+      apply_profile_values() already restores them - so auto-saving
+      {key: getter()} for the current state (e.g. to
+      ~/.config/melange/settings.json, debounced after changes and on
+      close) and applying it at startup reuses all of that. A proper
+      GSettings schema is the more GNOME-native option but means
+      declaring every key and type in the schema. Check which
+      settings aren't in profile_fields() (window state, audio source,
+      Now Playing options, aux window settings) and whether they
+      should be remembered too.
 - [ ] Tunable X-Y Scope that can write text/draw images - requested,
       a much bigger feature idea than a simple setting. This is the
       "oscilloscope art"/vector-monitor genre (Lissajous-style X-Y
