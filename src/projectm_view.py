@@ -28,17 +28,23 @@ problems worked around below.
 import ctypes
 import locale
 import os
+import zipfile
 from pathlib import Path
+from typing import NamedTuple
 
 from gi.repository import Gtk, GLib
 
 # projectM's "Cream of the Crop" collection (Category/Subfolder/*.milk)
 # and the MilkDrop texture pack, both installed by flatpak modules into
 # pkgdatadir next to this module's own directory (see
-# com.cameronlp.Melange.json). Overridable for running from a source tree.
-PRESET_DIR = Path(os.environ.get(
+# com.cameronlp.Melange.json). The presets ship as one zip
+# (flatpak/pack_presets.py: ~30 MB instead of ~131 MB of loose files)
+# and are loaded straight from it. MELANGE_PROJECTM_PRESETS can point
+# at a .zip or a plain folder instead, e.g. when running from a source
+# tree.
+PRESET_SOURCE = Path(os.environ.get(
     "MELANGE_PROJECTM_PRESETS",
-    Path(__file__).resolve().parent.parent / "projectm-presets"
+    Path(__file__).resolve().parent.parent / "projectm-presets.zip"
 ))
 TEXTURE_DIR = Path(os.environ.get(
     "MELANGE_PROJECTM_TEXTURES",
@@ -89,6 +95,9 @@ def _load_libraries():
     lib.projectm_load_preset_file.argtypes = [
         ctypes.c_void_p, ctypes.c_char_p, ctypes.c_bool
     ]
+    lib.projectm_load_preset_data.argtypes = [
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_bool
+    ]
     lib.projectm_pcm_add_int16.argtypes = [
         ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_int
     ]
@@ -125,55 +134,102 @@ def availability():
         return False, f"libprojectM couldn't be loaded ({_load_error})"
 
     if not find_presets():
-        return False, f"No .milk presets found in {PRESET_DIR}"
+        return False, f"No .milk presets found in {PRESET_SOURCE}"
 
     return True, ""
 
 
-def find_presets():
+class ZipPreset(NamedTuple):
+    """A preset inside the bundled zip, by its member path
+    (e.g. "Dancer/Whirl/name.milk")."""
 
-    if not PRESET_DIR.is_dir():
-        return []
+    member: str
+
+    @property
+    def stem(self):
+
+        return Path(self.member).stem
+
+
+_archive = None
+
+
+def _open_archive():
+
+    global _archive
+
+    if _archive is None:
+        _archive = zipfile.ZipFile(PRESET_SOURCE)
+
+    return _archive
+
+
+def _is_shown(parts):
 
     # Folders starting with "!" (e.g. "! Transition") hold presets meant
     # for transitions, not for showing on their own.
-    return sorted(
-        path for path in PRESET_DIR.rglob("*.milk")
-        if not any(part.startswith("!") for part in path.relative_to(PRESET_DIR).parts)
-    )
+    return not any(part.startswith("!") for part in parts)
+
+
+def find_presets():
+    """Every bundled preset: ZipPreset entries when PRESET_SOURCE is a
+    zip, Paths when it's a folder."""
+
+    if PRESET_SOURCE.is_file():
+        try:
+            names = _open_archive().namelist()
+        except (OSError, zipfile.BadZipFile) as error:
+            print("projectM: couldn't open preset archive:", error)
+            return []
+
+        return sorted(
+            ZipPreset(name) for name in names
+            if name.endswith(".milk") and _is_shown(Path(name).parts)
+        )
+
+    if PRESET_SOURCE.is_dir():
+        return sorted(
+            path for path in PRESET_SOURCE.rglob("*.milk")
+            if _is_shown(path.relative_to(PRESET_SOURCE).parts)
+        )
+
+    return []
 
 
 def preset_catalog():
-    """{display name: path} for the bundled presets. Names are file
-    stems (unique across the whole Cream of the Crop collection); should
-    a stem ever repeat, its folder path is appended to keep names
-    unique."""
+    """{display name: preset} for the bundled presets (ZipPreset or
+    Path). Names are file stems (unique across the whole Cream of the
+    Crop collection); should a stem ever repeat, its folder path is
+    appended to keep names unique."""
 
-    paths = find_presets()
+    presets = find_presets()
     stems = {}
 
-    for path in paths:
-        stems[path.stem] = stems.get(path.stem, 0) + 1
+    for preset in presets:
+        stems[preset.stem] = stems.get(preset.stem, 0) + 1
 
     catalog = {}
 
-    for path in paths:
-        name = path.stem
+    for preset in presets:
+        name = preset.stem
 
         if stems[name] > 1:
-            name = f"{name} ({'/'.join(preset_folders(path))})"
+            name = f"{name} ({'/'.join(preset_folders(preset))})"
 
-        catalog[name] = path
+        catalog[name] = preset
 
     return catalog
 
 
-def preset_folders(path):
-    """The folder names between PRESET_DIR and this preset, e.g.
-    ("Dancer", "Whirl"); () for a file outside it (a loaded preset)."""
+def preset_folders(preset):
+    """The folder names above a bundled preset, e.g. ("Dancer", "Whirl");
+    () for a file loaded from elsewhere."""
+
+    if isinstance(preset, ZipPreset):
+        return Path(preset.member).parts[:-1]
 
     try:
-        return Path(path).relative_to(PRESET_DIR).parts[:-1]
+        return Path(preset).relative_to(PRESET_SOURCE).parts[:-1]
     except ValueError:
         return ()
 
@@ -186,13 +242,15 @@ class ProjectMView(Gtk.GLArea):
 
         super().__init__()
 
-        # on_preset_failed(path, reason) - called on the main loop.
+        # on_preset_failed(preset, reason) - called on the main loop with
+        # the ZipPreset/Path that was being loaded.
         self.on_preset_failed_callback = on_preset_failed
 
         self.handle = None
         self.size_known = False
         self.pending_audio = bytearray()
-        self.requested_preset = None  # (path, smooth), loaded on next render
+        self.requested_preset = None  # (preset, smooth), loaded on next render
+        self.loading_preset = None
         self.transition_seconds = SMOOTH_TRANSITION_SECONDS
 
         self.set_required_version(3, 3)
@@ -284,9 +342,19 @@ class ProjectMView(Gtk.GLArea):
             _lib.projectm_set_window_size(self.handle, width, height)
 
         if self.requested_preset is not None:
-            path, smooth = self.requested_preset
+            preset, smooth = self.requested_preset
             self.requested_preset = None
-            _lib.projectm_load_preset_file(self.handle, str(path).encode(), smooth)
+            self.loading_preset = preset
+
+            if isinstance(preset, ZipPreset):
+                try:
+                    data = _open_archive().read(preset.member)
+                except (OSError, KeyError, zipfile.BadZipFile) as error:
+                    self.report_failure(preset, str(error))
+                else:
+                    _lib.projectm_load_preset_data(self.handle, data, smooth)
+            else:
+                _lib.projectm_load_preset_file(self.handle, str(preset).encode(), smooth)
 
         if self.pending_audio:
             data = bytes(self.pending_audio)
@@ -332,11 +400,15 @@ class ProjectMView(Gtk.GLArea):
 
     # --- presets --------------------------------------------------------
 
-    def load_preset(self, path, smooth=True):
-        """Show this .milk file (loaded on the next frame, when the GL
-        context is current)."""
+    def load_preset(self, preset, smooth=True):
+        """Show this preset - a ZipPreset from the bundled collection or
+        a .milk file Path (loaded on the next frame, when the GL context
+        is current)."""
 
-        self.requested_preset = (Path(path), smooth)
+        if not isinstance(preset, ZipPreset):
+            preset = Path(preset)
+
+        self.requested_preset = (preset, smooth)
         self.queue_render()
 
     def set_transition_seconds(self, seconds):
@@ -348,13 +420,19 @@ class ProjectMView(Gtk.GLArea):
 
     def on_preset_failed(self, filename, message, user_data):
 
-        name = filename.decode(errors="replace") if filename else "?"
         reason = message.decode(errors="replace") if message else ""
-        print(f"projectM: preset failed: {name}: {reason}")
 
-        # Called from inside projectM's render call; report it once
-        # that has returned.
+        # projectM only knows a filename for file loads, so report the
+        # preset this view was loading instead.
+        self.report_failure(self.loading_preset, reason)
+
+    def report_failure(self, preset, reason):
+
+        print(f"projectM: preset failed: {preset}: {reason}")
+
+        # May be called from inside projectM's render call; report it
+        # once that has returned.
         if self.on_preset_failed_callback:
             GLib.idle_add(
-                lambda: (self.on_preset_failed_callback(name, reason), False)[1]
+                lambda: (self.on_preset_failed_callback(preset, reason), False)[1]
             )

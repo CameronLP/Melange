@@ -4854,11 +4854,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.projectm_view.load_preset(path)
         self.set_current_preset_name(name)
 
-    def on_projectm_preset_failed(self, path, reason):
+    def on_projectm_preset_failed(self, preset, reason):
 
         name = next(
-            (n for n, p in self.projectm_paths.items() if str(p) == path),
-            Path(path).stem
+            (n for n, p in self.projectm_paths.items() if p == preset),
+            getattr(preset, "stem", str(preset))
         )
 
         self.show_toast(f"Couldn't load preset: {name}")
