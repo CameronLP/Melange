@@ -1090,6 +1090,19 @@
       default): with it on, the content fades to fully opaque while the
       pointer is over the visualizer and back to Opacity Level when it
       leaves, using Fade Speed. Verified headless (9/9).
+- [ ] POSSIBLE: Combine the "Add to Queue" and "Add to Playlist…" row
+      buttons - suggested ("combine the add to queue and add to playlist
+      buttons?"), not done. Each preset row (preset_row_setup/
+      bind_preset_row, window.py - flat lists and the folder tree) has
+      separate queue (list-add) and playlist (bookmark-new) buttons
+      next to the favorite star. The playlist button already opens a
+      popover (open_add_to_playlist_popover) that can include an "Add
+      to Queue" entry at the top (include_queue=True) above the
+      playlists and "New Playlist…". Likely: one "Add to…" button
+      opening that popover with Queue first, freeing row space (useful
+      in the narrower sidebar). Trade-off: queueing goes from one click
+      to two - decide whether that's acceptable, or keep a quicker way
+      (e.g. middle-click / a shortcut on the selected row).
 - [ ] BUG: with Opaque on Hover on, dragging the window makes it go
       transparent while dragging - reported, not fixed. Likely cause
       (unconfirmed): the click-and-drag-anywhere gesture hands the move
