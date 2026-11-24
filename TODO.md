@@ -1106,6 +1106,19 @@
       Done 2026-11-24 (sidebar branch): one "+" Add to… button per
       preset row opens the menu with Add to Queue first, then the
       playlists and New Playlist…. Queueing is now two clicks.
+- [ ] BUG: mini visualizer settings popovers don't close when clicking
+      outside them - reported ("have to use Esc every time"), not
+      investigated. Odd, because aux_window.py already has two
+      mechanisms: Gtk.Popover's default autohide, plus a CAPTURE-phase
+      Gtk.GestureClick on the whole window (on_window_pressed) meant to
+      popdown() on any press elsewhere. Things to check: whether
+      autohide got turned off or a nested popup (the Gtk.DropDown /
+      Gtk.ColorDialogButton popups inside the settings box) leaves the
+      popover unable to dismiss; whether clicks on the drawing area are
+      claimed by its drag gesture before the window-level gesture sees
+      them; and clicks in *other* windows (the main window) - a
+      popover's autohide only covers its own window. Test on a real
+      desktop.
 - [ ] BUG: with Opaque on Hover on, dragging the window makes it go
       transparent while dragging - reported, not fixed. Likely cause
       (unconfirmed): the click-and-drag-anywhere gesture hands the move
