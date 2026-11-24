@@ -32,11 +32,17 @@ from pathlib import Path
 
 from gi.repository import Gtk, GLib
 
-# Bundled starter presets (data/projectm-presets, installed next to this
-# module's own directory) - overridable for running from a source tree.
+# projectM's "Cream of the Crop" collection (Category/Subfolder/*.milk)
+# and the MilkDrop texture pack, both installed by flatpak modules into
+# pkgdatadir next to this module's own directory (see
+# com.cameronlp.Melange.json). Overridable for running from a source tree.
 PRESET_DIR = Path(os.environ.get(
     "MELANGE_PROJECTM_PRESETS",
     Path(__file__).resolve().parent.parent / "projectm-presets"
+))
+TEXTURE_DIR = Path(os.environ.get(
+    "MELANGE_PROJECTM_TEXTURES",
+    Path(__file__).resolve().parent.parent / "projectm-textures"
 ))
 
 LIBRARY_NAME = os.environ.get("MELANGE_PROJECTM_LIB", "libprojectM-4.so.4")
@@ -88,6 +94,9 @@ def _load_libraries():
     ]
     lib.projectm_set_preset_locked.argtypes = [ctypes.c_void_p, ctypes.c_bool]
     lib.projectm_set_soft_cut_duration.argtypes = [ctypes.c_void_p, ctypes.c_double]
+    lib.projectm_set_texture_search_paths.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(ctypes.c_char_p), ctypes.c_size_t
+    ]
     lib.projectm_set_preset_switch_failed_event_callback.argtypes = [
         ctypes.c_void_p, _PresetFailedCallback, ctypes.c_void_p
     ]
@@ -126,13 +135,19 @@ def find_presets():
     if not PRESET_DIR.is_dir():
         return []
 
-    return sorted(PRESET_DIR.rglob("*.milk"))
+    # Folders starting with "!" (e.g. "! Transition") hold presets meant
+    # for transitions, not for showing on their own.
+    return sorted(
+        path for path in PRESET_DIR.rglob("*.milk")
+        if not any(part.startswith("!") for part in path.relative_to(PRESET_DIR).parts)
+    )
 
 
 def preset_catalog():
     """{display name: path} for the bundled presets. Names are file
-    stems; a stem used in more than one category gets the category
-    appended so every name stays unique."""
+    stems (unique across the whole Cream of the Crop collection); should
+    a stem ever repeat, its folder path is appended to keep names
+    unique."""
 
     paths = find_presets()
     stems = {}
@@ -146,11 +161,21 @@ def preset_catalog():
         name = path.stem
 
         if stems[name] > 1:
-            name = f"{name} ({path.parent.name})"
+            name = f"{name} ({'/'.join(preset_folders(path))})"
 
         catalog[name] = path
 
     return catalog
+
+
+def preset_folders(path):
+    """The folder names between PRESET_DIR and this preset, e.g.
+    ("Dancer", "Whirl"); () for a file outside it (a loaded preset)."""
+
+    try:
+        return Path(path).relative_to(PRESET_DIR).parts[:-1]
+    except ValueError:
+        return ()
 
 
 class ProjectMView(Gtk.GLArea):
@@ -209,6 +234,10 @@ class ProjectMView(Gtk.GLArea):
             self.handle, self._failed_callback, None
         )
         _lib.projectm_set_soft_cut_duration(self.handle, self.transition_seconds)
+
+        if TEXTURE_DIR.is_dir():
+            paths = (ctypes.c_char_p * 1)(str(TEXTURE_DIR).encode())
+            _lib.projectm_set_texture_search_paths(self.handle, paths, 1)
 
         # Melange decides when to switch presets (cycle interval,
         # next/previous), not projectM's own timer/hard cuts.

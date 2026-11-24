@@ -73,6 +73,20 @@ Gst.init(None)
 
 RENDERERS = ("butterchurn", "projectm")
 
+
+class PresetTreeNode(GObject.Object):
+    """A folder or a preset in the preset browser's folder tree."""
+
+    __gtype_name__ = "MelangePresetTreeNode"
+
+    def __init__(self, title, preset_name=None, children=None):
+
+        super().__init__()
+
+        self.title = title
+        self.preset_name = preset_name  # None for a folder
+        self.children = children or []
+
 # Defaults shared by both renderers' PresetManagers - must match the
 # Preferences controls' own defaults (Cycle Interval 30s, no jitter,
 # Shuffle on, Transition Blend Time 3s).
@@ -3542,7 +3556,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     # Shared by the Presets and Favorites tabs - same search/filter/
     # row-rendering behavior, only the backing Gtk.StringList differs.
-    def build_preset_search_list(self, list_store):
+    def build_preset_search_list(self, list_store, with_tree=False):
 
         expression = Gtk.PropertyExpression.new(
             Gtk.StringObject,
@@ -3580,6 +3594,26 @@ class MelangeWindow(Adw.ApplicationWindow):
             lambda entry: string_filter.set_search(entry.get_text())
         )
 
+        # The Presets tab can also show the active renderer's presets
+        # as a folder tree (projectM's collection is organised in
+        # Category/Subfolder folders); the flat list is still used for
+        # searching and for renderers without folders.
+        if with_tree:
+            page_stack = Gtk.Stack()
+            page_stack.add_named(scrolled, "flat")
+            page_stack.add_named(self.build_preset_tree_view(), "tree")
+            page_stack.set_vexpand(True)
+
+            self.preset_page_stack = page_stack
+            self.preset_search_entry = search_entry
+
+            search_entry.connect(
+                "search-changed",
+                lambda entry: self.update_preset_browser_page()
+            )
+
+            scrolled = page_stack
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_start(12)
         box.set_margin_end(12)
@@ -3595,7 +3629,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.preset_list_store = Gtk.StringList.new(self.preset_names)
 
-        box = self.build_preset_search_list(self.preset_list_store)
+        box = self.build_preset_search_list(self.preset_list_store, with_tree=True)
+        self.refresh_preset_tree()
 
         # Moved here from the hamburger menu on request ("Load preset
         # should be in the preset tab") - same win.load-preset action,
@@ -3613,6 +3648,146 @@ class MelangeWindow(Adw.ApplicationWindow):
         box.append(load_button)
 
         return box
+
+    def build_preset_tree_view(self):
+
+        self.preset_tree_root = Gio.ListStore(item_type=PresetTreeNode)
+
+        def create_children(node):
+
+            if not node.children:
+                return None
+
+            store = Gio.ListStore(item_type=PresetTreeNode)
+            store.splice(0, 0, node.children)
+
+            return store
+
+        tree_model = Gtk.TreeListModel.new(
+            self.preset_tree_root, False, False, create_children
+        )
+
+        factory = Gtk.SignalListItemFactory()
+        factory.connect("setup", self.preset_tree_row_setup)
+        factory.connect("bind", self.preset_tree_row_bind)
+
+        list_view = Gtk.ListView.new(Gtk.SingleSelection.new(tree_model), factory)
+        list_view.connect("activate", self.preset_tree_row_activated)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_child(list_view)
+        scrolled.set_vexpand(True)
+
+        return scrolled
+
+    def preset_tree_row_setup(self, factory, list_item):
+
+        # Same row as the flat lists, inside a TreeExpander.
+        self.preset_row_setup(factory, list_item)
+
+        row_box = list_item.get_child()
+        list_item.set_child(None)
+
+        expander = Gtk.TreeExpander()
+        expander.set_child(row_box)
+
+        list_item.set_child(expander)
+        list_item.tree_expander = expander
+
+    def preset_tree_row_bind(self, factory, list_item):
+
+        tree_row = list_item.get_item()
+        node = tree_row.get_item()
+
+        list_item.tree_expander.set_list_row(tree_row)
+
+        is_preset = node.preset_name is not None
+
+        for button in (
+            list_item.favorite_button,
+            list_item.queue_button,
+            list_item.playlist_button,
+        ):
+            button.set_visible(is_preset)
+
+        if is_preset:
+            self.bind_preset_row(list_item, node.preset_name)
+        else:
+            list_item.preset_label.set_label(node.title)
+
+    def preset_tree_row_activated(self, list_view, position):
+
+        tree_row = list_view.get_model().get_item(position)
+        node = tree_row.get_item()
+
+        if node.preset_name is None:
+            tree_row.set_expanded(not tree_row.get_expanded())
+            return
+
+        self.presets.go_to(node.preset_name)
+        self.preset_browser_dialog.close()
+
+    # Folder tree for the active renderer, or None if it has no folders
+    # (Butterchurn's packs are flat).
+    def build_preset_tree_nodes(self):
+
+        if not self.projectm_active:
+            return None
+
+        root = {}
+
+        for name in self.projectm_presets.catalog:
+            folders = projectm_view.preset_folders(self.projectm_paths[name]) or ("Loaded",)
+            level = root
+
+            for folder in folders:
+                level = level.setdefault(folder, {})
+
+            level.setdefault(None, []).append(name)
+
+        def to_nodes(level):
+
+            folders = sorted(key for key in level if key is not None)
+            nodes = []
+
+            for folder in folders:
+                children = to_nodes(level[folder])
+                count = count_presets(level[folder])
+                nodes.append(PresetTreeNode(f"{folder} ({count})", children=children))
+
+            for name in sorted(level.get(None, []), key=str.casefold):
+                nodes.append(PresetTreeNode(name, preset_name=name))
+
+            return nodes
+
+        def count_presets(level):
+
+            return len(level.get(None, [])) + sum(
+                count_presets(sub) for key, sub in level.items() if key is not None
+            )
+
+        return to_nodes(root)
+
+    def refresh_preset_tree(self):
+
+        if getattr(self, "preset_tree_root", None) is None:
+            return
+
+        nodes = self.build_preset_tree_nodes() or []
+        self.preset_tree_root.splice(0, self.preset_tree_root.get_n_items(), nodes)
+        self.update_preset_browser_page()
+
+    def update_preset_browser_page(self):
+
+        stack = getattr(self, "preset_page_stack", None)
+
+        if stack is None:
+            return
+
+        searching = bool(self.preset_search_entry.get_text())
+        has_tree = self.preset_tree_root.get_n_items() > 0
+
+        stack.set_visible_child_name("tree" if has_tree and not searching else "flat")
 
     def build_favorites_tab(self):
 
@@ -3687,8 +3862,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def preset_row_bind(self, factory, list_item):
 
-        string_object = list_item.get_item()
-        name = string_object.get_string()
+        self.bind_preset_row(list_item, list_item.get_item().get_string())
+
+    # Shared by the flat lists and the folder tree's preset rows.
+    def bind_preset_row(self, list_item, name):
 
         list_item.preset_label.set_label(name)
 
@@ -4716,6 +4893,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             if store is not None:
                 store.splice(0, store.get_n_items(), items)
 
+        self.refresh_preset_tree()
         self.refresh_playlists_list()
         self.update_favorite_button_icon()
 
