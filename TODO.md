@@ -938,6 +938,21 @@
       undisturbed, and in both cases the label's actual rendered
       content is the full, untruncated (no "…") expected-length window
       on the very next tick.
+- [ ] POSSIBLE: Combine Lock Preset with Cycle Interval - suggested
+      ("combine preset lock with cycle interval?"), not designed. Today
+      they overlap but aren't the same: Cycle Interval at 0 ("Off")
+      only stops the auto-cycle timer, while Lock Preset (win.lock-
+      preset, lock_preset_changed) also blocks manual next/previous
+      (with a "Preset is locked" toast) and beat/drop-driven changes,
+      and greys out the whole Cycling group in Preferences. Options:
+      fold Lock into the Cycling settings (e.g. a single "Preset
+      changes: Auto every N s / Manual only / Locked" choice); make
+      Cycle Interval "Off" and Lock one control and drop the separate
+      menu toggle; or keep both but present them together. Decide
+      whether "lock" should keep blocking manual navigation - that's
+      the main behaviour that has no equivalent in the interval
+      slider. PresetManager (preset_manager.py) already treats lock as
+      a cycle pause, so either way it's a UI change, not a logic one.
 - [ ] Rendering settings for the projectM renderer - requested
       ("rendering settings for projectm"), not done. Preferences >
       Rendering's Mesh Size, Frame Rate, Render Scale and Anti-Aliasing
