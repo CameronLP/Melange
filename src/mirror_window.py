@@ -27,28 +27,16 @@ from gi.repository import Gtk, Adw, Gdk, Gio, GLib
 
 class MirrorWindow(Adw.ApplicationWindow):
 
-    # A true pixel mirror of the primary window's webview - not a
-    # second Butterchurn/WebKit instance. Gtk.WidgetPaintable tracks a
-    # live GTK widget and can be displayed anywhere else via
-    # Gtk.Picture, GPU-composited by GTK itself, with no manual frame
-    # capture/streaming code needed - exactly the mechanism this
-    # calls for, and confirmed working against a real WebKit.WebView
-    # before building this (paintable intrinsic size correctly
-    # tracked the live webview, both widgets realized/mapped with no
-    # errors). This means a mirror costs one extra GTK window and a
-    # Picture widget - no extra WebKitWebProcess, no extra JS engine,
-    # no audio/preset-sync bridge to build or keep correct - the
-    # multi-hundred-MB-per-window cost a second real WebKit instance
-    # would add (see the RAM investigation elsewhere in this history)
-    # just doesn't apply here.
-    #
-    # Since this displays the primary's actual live webview - not a
-    # copy - anything the primary's page renders (including the
-    # on-canvas preset-nav arrows) shows up here too; there's only one
-    # underlying DOM. Gtk.Picture doesn't forward input back to a
-    # paintable's source widget, though, so those arrows (and
-    # anything else in the page) are inert here - purely visual, same
-    # as everything else in the mirror.
+    # A true pixel mirror of the primary window's visualizer (the
+    # projectM GLArea, see primary.visualizer_widget()) - not a second
+    # renderer instance. Gtk.WidgetPaintable tracks a live GTK widget
+    # and can be displayed anywhere else via Gtk.Picture, GPU-composited
+    # by GTK itself, with no frame capture/streaming code and no
+    # audio/preset-sync to keep correct - a mirror costs one extra GTK
+    # window and a Picture widget. Gtk.Picture doesn't forward input
+    # back to the source widget, so the mirror is purely visual; the
+    # nav arrows etc. are separate overlays on the main window and
+    # don't appear here.
     def __init__(self, primary, mirror_number, **kwargs):
 
         super().__init__(

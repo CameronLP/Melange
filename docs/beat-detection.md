@@ -1,5 +1,10 @@
 # Beat-driven auto-cycle: two beat modes plus drop detection
 
+> **Historical (2026-11-24):** Melange no longer uses Butterchurn - it renders with
+> projectM (see `docs/projectm-exploration.md`). This describes code that has been
+> removed and is kept for reference only.
+> Beat-Driven Cycle now uses projectM's own beat detection (hard cuts).
+
 **Status: experimental.** Every claim of correctness in this document
 (the tempo estimator's BPM accuracy, the "cut false positives by
 roughly half to two-thirds" figures, the drop detector's clean

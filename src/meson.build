@@ -34,14 +34,8 @@ melange_sources = [
   'now_playing.py',
   'preset_manager.py',
   'projectm_view.py',
-  'webview.py',
   'window.py',
   'style.css'
 ]
 
 install_data(melange_sources, install_dir: moduledir)
-
-install_subdir(
-  'web',
-  install_dir: moduledir
-)

@@ -192,10 +192,42 @@ class MelangeApplication(Adw.Application):
         about.add_credit_section(
             _("Powered By"),
             [
-                "Jordan Berg (Butterchurn) https://github.com/jberg/butterchurn",
-                "Jordan Berg (MilkDrop preset conversion) https://github.com/jberg/milkdrop-preset-converter",
-                "baron (Butterchurn preset pack) https://github.com/uvmain/butterchurn-presets-baron",
+                "projectM https://github.com/projectM-visualizer/projectm",
             ]
+        )
+
+        about.add_credit_section(
+            _("Presets & Textures"),
+            [
+                "Cream of the Crop presets, curated by ISOSCELES https://github.com/projectM-visualizer/presets-cream-of-the-crop",
+                "MilkDrop texture pack https://github.com/projectM-visualizer/presets-milkdrop-texture-pack",
+            ]
+        )
+
+        about.add_acknowledgement_section(
+            _("Inspired By"),
+            [
+                "MilkDrop, by Ryan Geiss https://www.geisswerks.com/milkdrop/",
+            ]
+        )
+
+        about.add_legal_section(
+            "libprojectM",
+            "Copyright © the projectM developers",
+            Gtk.License.LGPL_2_1,
+            None
+        )
+
+        about.add_legal_section(
+            _("MilkDrop presets"),
+            None,
+            Gtk.License.CUSTOM,
+            _(
+                "MilkDrop presets were, in almost all cases, released without "
+                "a specific licence; each remains the work of its author. If "
+                "you're a preset author and want yours removed from the "
+                "collection, contact the projectM team."
+            )
         )
 
         about.present(self.get_active_window())

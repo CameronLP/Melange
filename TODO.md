@@ -51,7 +51,14 @@
       surface specifically in fullscreen. Not yet reproduced or
       root-caused in this environment.
 - [ ] Look for any remaining audio-visual latency/lag - the PCM AudioWorklet's unbounded sample queue (main.js) was found and fixed (capped at 50ms, see Done), which was the most likely source of the originally reported ~0.5s pause/resume delay. Not yet re-verified end-to-end, and there are other unexamined points earlier in the pipeline that could still add lag: GStreamer buffer/latency-time on the capture pipeline (start_system_audio, window.py), GLib.idle_add scheduling in on_audio_sample, and WebKit's evaluate_javascript IPC round-trip for each chunk.
+      Update 2026-11-24: the JS/AudioWorklet path is gone (Butterchurn
+      removed); audio now goes GStreamer -> one bounded buffer ->
+      projectm_pcm_add_int16 on the next frame. Re-check latency against
+      that path.
 - [ ] Some presets still don't seem to react much to audio - real bugs affecting reactivity have already been found and fixed (mono/stereo interleaving corruption, PCM worklet chunk truncation, unbounded queue latency - see Done), but the complaint has resurfaced since. Worth checking again whether this is a genuine remaining bug or just preset-design diversity (many community MilkDrop/Butterchurn presets are deliberately more ambient/subtle than others) - not yet determined which.
+      Update 2026-11-24: now on native projectM with the original .milk
+      presets - the Butterchurn converter is no longer a possible cause.
+      Re-check with projectM.
 - [ ] **UNRESOLVED**: mirror window (mirror_window.py, see Done for
       the feature itself) shows broken/frozen content when maximized
       on a specific real setup - a 1080p secondary monitor rotated 90
@@ -953,7 +960,7 @@
       the main behaviour that has no equivalent in the interval
       slider. PresetManager (preset_manager.py) already treats lock as
       a cycle pause, so either way it's a UI change, not a logic one.
-- [ ] Rendering settings for the projectM renderer - requested
+- [x] Rendering settings for the projectM renderer - requested
       ("rendering settings for projectm"), not done. Preferences >
       Rendering's Mesh Size, Frame Rate, Render Scale and Anti-Aliasing
       only reach Butterchurn (run_js setMeshSize/setFramerate/
@@ -971,6 +978,10 @@
       durations and sensitivity (its own beat-triggered preset
       changes - Melange currently locks them off), aspect correction,
       easter egg. Part of Stage 3 in docs/projectm-exploration.md.
+      Done 2026-11-24 (remove-butterchurn): Mesh Size, Framerate cap,
+      Render Resolution Scale (offscreen buffer + scaled blit) and
+      Sensitivity (PCM gain) drive projectM; Anti-Aliasing was dropped
+      by decision; beat cuts via projectM hard cuts. Verified headless.
 - [ ] POSSIBLE: Move the preset browser (and maybe settings) into a
       sidebar - suggested ("maybe move presets selector and settings to
       a sidebar or something"), not designed. Today the preset browser
@@ -984,7 +995,7 @@
       fullscreen/immersive/transparency modes and the auto-hiding
       header bar; whether the mirror windows are affected (they mirror
       only the visualizer widget, so shouldn't be).
-- [ ] About dialog: credit projectM and its preset/texture collections -
+- [x] About dialog: credit projectM and its preset/texture collections -
       requested ("in the about page please add contributions and link
       to projectm, cream of the crop, etc"), not done. The About dialog
       (main.py, Adw.AboutDialog) only has a "Powered By" credit section
@@ -1000,6 +1011,10 @@
       notice) rather than only Powered By. Also check the Butterchurn
       core preset pack (butterchurn-presets) is credited, and update
       the README's credits to match.
+      Done 2026-11-24: About now credits projectM, Cream of the Crop
+      (ISOSCELES), the texture pack and MilkDrop, with an LGPL-2.1 legal
+      section for libprojectM and a note on preset authorship; README
+      credits updated.
 - [ ] Now Playing window size settings - requested ("now playing window
       size settings"), not implemented; exact intent to clarify. What
       exists now: the card's size comes from the Scale slider (text
@@ -1012,6 +1027,30 @@
       how it scales with the window size (e.g. a percentage of the
       window). Probably best designed together with the font size
       entry below, since both currently hang off the single Scale.
+- [ ] BUG: Now Playing title keeps scrolling after Scale is changed even
+      though the full title fits - reported ("now playing title scrolls
+      if scale is changed and there is still space for full text"), not
+      investigated. Likely causes from the code (unconfirmed):
+      (1) update_now_playing_title only decides scroll vs. static when
+      the title changes - recompute_now_playing_scale (Scale slider /
+      Lock to Window Size) recomputes now_playing_width but never
+      re-runs that decision, so a title that started scrolling keeps
+      scrolling at a larger scale; (2) the decision is
+      len(title) > now_playing_width, a character count against a
+      width in "chars", not the label's real pixel width, so with a
+      proportional font a title can be judged too long when it
+      actually fits (or the reverse). Fix probably: re-evaluate in
+      recompute_now_playing_scale, and decide from the measured label
+      width vs. the available width (the scroll code already measures
+      the label - see start_now_playing_title_scroll).
+- [ ] Scrolling Now Playing text - requested ("scrolling now playing
+      text"), intent to clarify. Today only the title scrolls (Scroll
+      Long Titles, start_now_playing_title_scroll: a 300ms character
+      ticker with a "   •   " separator); artist/album are
+      ellipsized. Possibly wanted: artist/album scrolling too, smoother
+      (pixel-based rather than per-character) scrolling, speed/pause
+      settings, or scrolling only on hover - ask. Related to the bug
+      entry above.
 - [ ] Now Playing font size - requested ("now playing font size"), not
       implemented. Current state: there's no size control of its own.
       The Scale slider (build_now_playing_scale_control,
@@ -1309,13 +1348,15 @@
       (prepend) to below the list (append) - out of the way of the
       tab's main job (browsing/searching) instead of competing with it
       for top-of-tab attention.
-- [ ] Reference for a possible Butterchurn -> MilkDrop transition,
+- [x] Reference for a possible Butterchurn -> MilkDrop transition,
       requested to be recorded ("record this as a possible exam[ple]
       to look at"): https://silkdrop.vercel.app/ - not yet looked into
       (what it actually is, how it renders, license, whether it's
       still a WebGL/JS engine like Butterchurn or something closer to
       native MilkDrop) or evaluated against this codebase. Purely a
       pointer for later, nothing investigated or decided.
+      Obsolete 2026-11-24: Melange now renders with projectM;
+      Butterchurn was removed.
 - [x] Real bug found and fixed while investigating "why does it not
       load '.../deepseek_json_20260904_de78cf.json'": that specific
       file is syntactically valid JSON but not a real Butterchurn
@@ -2401,7 +2442,7 @@
       mirror_window.py (also all-Python) isn't in POTFILES.in or
       gettext-wrapped either. Real translation support means auditing
       and wrapping those strings, not just adding language files.
-- [ ] Reduce audio-bridge overhead further - `send_audio_to_webview`
+- [x] Reduce audio-bridge overhead further - `send_audio_to_webview`
       (window.py) calls `webview.evaluate_javascript()` with a fresh
       JS source string (`receiveAudio('<base64>')`) built fresh for
       every audio chunk (tens of times/sec while audio is playing).
@@ -2414,6 +2455,8 @@
       this one would need a different transport (e.g. a local
       WebSocket from Python to a JS-side listener) to actually avoid,
       which is a bigger change than fits alongside the other two.
+      Obsolete 2026-11-24: the WebKit audio bridge no longer exists -
+      audio goes straight to libprojectM.
 - [ ] A larger preset browser window - the dialog itself is still a
       fixed 560x560 even now that it holds three tabs (Presets/
       Favorites/Queue, see Done) rather than just one list; worth
@@ -2422,7 +2465,13 @@
 - [ ] Frequency-range control for what feeds the visualizer (so presets that only react to bass, etc. can be tuned)
 - [ ] Logo + symbolic icon polish - the scalable app icon was replaced (Bottles-based, data/icons/hicolor/scalable/apps), but the symbolic icon at data/icons/hicolor/symbolic/apps/com.cameronlp.Melange-symbolic.svg is still the original template placeholder and doesn't match
 - [ ] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
+      Update 2026-11-24: WebKit is gone - the visualizer is a Gtk.GLArea
+      now, so GtkWidget.set_cursor should simply work.
 - [ ] Reduce memory usage further - real measurement (not guessing) already found and fixed several things: eager loading of the whole baron preset pack at startup, GC churn in the audio hot path, and some unused WebKit persistence/features (see Done). What's left is WebKitGTK's own multi-process baseline itself (UI + network + web-content processes, each a full engine instance) - measured at roughly 500-650MB total for a single window even after the above fixes. Trimming that further means either the WebSocket audio-bridge change above, or the native-rendering direction below; see that for the real lever.
+      Update 2026-11-24: with WebKit removed, Melange measured ~195 MB
+      RSS in a single process (was ~700 MB across Python + two WebKit
+      processes) and ~26% of one core (was ~56%), headless with audio
+      playing.
 
 ### Visualizer settings ideas
 
@@ -2512,7 +2561,7 @@
          without that cost.
       No direction chosen yet - this is a planning note, not a
       decision.
-- [ ] A fractal Butterchurn preset - requested, not yet built. A
+- [x] A fractal Butterchurn preset - requested, not yet built. A
       native Butterchurn (`.json`) preset (Butterchurn presets are
       HLSL/GLSL-ish shader expressions under the hood, per-pixel/per-
       vertex equations, not baked images) rendering something
@@ -2526,6 +2575,9 @@
       section). Would live alongside the existing bundled packs
       (src/web, per the Building section of README) rather than
       needing any Python/GTK-side changes at all.
+      Obsolete 2026-11-24: Butterchurn presets no longer apply; the
+      bundled Cream of the Crop collection has a Fractal category (1,354
+      presets).
 - [ ] Slide-in sidebar for the Queue/Playlist - a panel that slides in
       over the visualizer (edge-anchored, like the on-canvas nav-arrow/
       favorite overlays) showing the current queue or loaded playlist,
@@ -3131,7 +3183,7 @@
 - [ ] MIDI controller support - map physical knobs/pads to sensitivity, blend time, next/prev preset
 - [ ] D-Bus remote control - expose next/prev/lock/shuffle over D-Bus for external tools (Stream Deck, macros, scripts) to drive without focus
 - [ ] System tray / background mode - stay running and controllable when the window is closed/unfocused
-- [ ] Native rendering via libprojectM instead of Butterchurn/WebKitGTK -
+- [x] Native rendering via libprojectM instead of Butterchurn/WebKitGTK -
       the big lever for memory, not an incremental one: WebKitGTK's
       multi-process browser-engine architecture (UI + network +
       web-content processes) is the dominant remaining memory cost
@@ -3168,15 +3220,21 @@
       dropped. Also relevant to the "some visualizers don't react to
       music" item above - native .milk rendering removes the converter
       as a possible cause.
+      Done 2026-11-24: Stage 1 (experimental switch), Stage 2 (preset
+      logic in Python, full collection, folder browser) and the remove-
+      butterchurn branch (projectM only; WebKit, the web layer and the
+      audio bridge removed). See docs/projectm-exploration.md.
 
 ## Paused
 
-- [ ] MilkDrop (.milk) preset converter compatibility - `repairBadShader()` fixes the
+- [x] MilkDrop (.milk) preset converter compatibility - `repairBadShader()` fixes the
       most common converter bug (see `docs/milkdrop-preset-converter-shader-bug.md`),
       but some presets still fail or hang the converter itself. Put on
       hold in favor of feature work; possible future direction is a
       projectM-based foundation instead of `milkdrop-preset-converter`.
-- [ ] Beat detection (Energy Threshold + Tempo Tracking modes, plus
+      Obsolete 2026-11-24: projectM loads .milk presets natively; no
+      converter.
+- [x] Beat detection (Energy Threshold + Tempo Tracking modes, plus
       drop detection) - **experimental, partially implemented**. Built
       and unit-tested against synthetic signals only (see
       docs/beat-detection.md, now marked experimental there and in the
@@ -3187,8 +3245,31 @@
       expect more tuning is needed before this is trustworthy. Picking
       this back up means listening across real tracks/genres and
       tuning from there, not just re-running the synthetic tests.
+      Replaced 2026-11-24: Beat-Driven Cycle now uses projectM's own
+      beat detection (hard cuts) with Beat Threshold and Minimum Time
+      Between Cuts; the experimental JS detectors and drop detection
+      were removed with Butterchurn.
 
 ## Done
+
+- [x] Removed Butterchurn and WebKitGTK - projectM is now Melange's
+      only renderer (remove-butterchurn branch, 2026-11-24). Removed: the
+      WebView and src/webview.py (incl. its local HTTP server), the whole
+      src/web layer (Butterchurn, preset packs, Vite build, ~5,900
+      vendored node_modules files), the base64/evaluate_javascript audio
+      bridge, the page-message protocol, the renderer switch and the
+      Experimental preferences page. Microphone input moved from the
+      page's getUserMedia to the GStreamer pipeline (pipewiresrc on the
+      default source). Settings now drive projectM: Mesh Size, Framerate
+      cap, Render Resolution Scale, Sensitivity; Beat-Driven Cycle uses
+      projectM's beat cuts (Beat Threshold, Minimum Time Between Cuts);
+      Anti-Aliasing removed. Favorites/playlists are projectm-*.json;
+      the old Butterchurn favorites.json/playlists.json are left on disk
+      untouched. Installed app: ~36 MB. Headless end-to-end test (21/21,
+      isolated config): startup, nav, queue, favorites, drop, render
+      scale, framerate cap, beat cuts + lock, transparency, mirror,
+      microphone/None sources; ~26% of one core and ~195 MB RSS in one
+      process (was ~56% and ~700 MB across three).
 
 - [x] Fixed a second round of memory leaks, found by a soak test:
       presets cycling every 2s, 8 aux windows + a mirror open, a
