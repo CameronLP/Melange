@@ -1,7 +1,9 @@
 # Exploring a switch from Butterchurn/WebKitGTK to libprojectM
 
-Status: **feasibility spike done (2026-11-24); no app code changed yet.**
-Prototype: `tools/projectm-spike/` (standalone, not used by Melange).
+Status: **done (2026-11-24).** projectM is now Melange's only renderer;
+Butterchurn and WebKitGTK were removed. This document records the
+original feasibility spike and its findings. Prototype:
+`tools/projectm-spike/` (standalone, not used by Melange).
 
 ## Summary
 

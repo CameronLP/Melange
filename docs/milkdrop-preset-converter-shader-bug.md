@@ -1,5 +1,8 @@
 # milkdrop-preset-converter: chained addition mistranslated as invalid GLSL
 
+> **Historical (2026-11-24):** Melange no longer uses Butterchurn - it renders with
+> projectM (see `docs/projectm-exploration.md`). This describes code that has been
+> removed and is kept for reference only.
 **Package:** [`milkdrop-preset-converter`](https://github.com/jberg/milkdrop-preset-converter) (v0.1.2)
 **Likely origin:** the HLSL→AST step via [`hlslparser-js`](https://github.com/jberg/hlslparser-js), or the GLSL codegen in `milkdrop-preset-converter` that walks that AST
 **Impact:** high — hit ~67% of a random sample of ~10k real-world `.milk` presets (see "Scope" below)
