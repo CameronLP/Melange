@@ -112,6 +112,18 @@
 
 ## In progress / not started
 
+- [ ] NEXT (after the now-playing branch): Updated README for GitHub with
+      new screenshots and the app logo - requested ("make an updated
+      README for the git including screenshots and displaying the
+      logo"). The current screenshots/ (preset-1/2, menu, preferences-
+      audio/playback/rendering) predate projectM and the newer UI
+      (folder-tree preset browser, Playback page with Beat-Driven Cycle,
+      Now Playing card). Show the scalable app icon
+      (data/icons/hicolor/scalable/apps/com.cameronlp.Melange.svg) at
+      the top. Screenshots can be taken from a headless mutter session
+      (see the GUI-test notes) so nothing appears on the desktop, but a
+      few real-desktop ones may look better - ask.
+
 - [x] **BUG**: Drop-down menu is sometimes extremely wide - reported
       ("the drop down menu is sometimes extremely wide, fix"; it's the
       Audio Source submenu). Cause: PipeWire sink descriptions are
@@ -275,7 +287,7 @@
       it hides when enabled already exists (see the Now Playing
       settings consolidation above) - just the default value needs
       flipping, not a new control.
-- [ ] Now Playing artwork missing for sandboxed (flatpak) players -
+- [x] Now Playing artwork missing for sandboxed (flatpak) players -
       cause found, not fixed. Rufin (app.rufin.rufin, a flatpak) sends
       mpris:artUrl = file:///home/cameron/.var/app/app.rufin.rufin/
       cache/rufin/covers/<hash>/<hash>/512.image - a valid JPEG on the
@@ -301,6 +313,10 @@
       - Upstream: ask players to send an https:// or data: artUrl.
         Also check whether Melange's loader (Gio.File) handles data:
         URIs at all.
+      Done 2026-11-24 with the per-player grant:
+      --filesystem=~/.var/app/app.rufin.rufin/cache:ro in the manifest
+      (verified visible in the sandbox). Other sandboxed players still
+      need their own grant or the folder-picker idea below.
 - [ ] POSSIBLE: In-app per-player artwork access via the folder picker
       portal - only worth it if Melange gets distributed (e.g.
       Flathub) or several sandboxed players are in regular use; for
@@ -325,7 +341,7 @@
       Won't cover players that put art in /tmp (Melange's /tmp is
       private) or inside another sandbox's private /tmp, nor players
       that send no artUrl.
-- [ ] TODO: Option to hide artwork in Now Playing - requested ("option
+- [x] TODO: Option to hide artwork in Now Playing - requested ("option
       to hide artwork in now playing"). Note: a Show Artwork switch
       already exists in Now Playing's Preferences
       (build_now_playing_show_artwork_control, window.py) and turning
@@ -336,7 +352,11 @@
       can't be read - see the sandboxed-players entry above - show
       text only), or a quicker way to toggle it than Preferences (a
       hamburger-menu item like Now Playing itself has).
-- [ ] TODO: Now Playing artwork should have a minimum size, equal to
+      Done 2026-11-24 as the likely intended variant: new Show
+      Placeholder switch (Displayed Fields) - off hides the art frame
+      when a track has no usable artwork instead of showing the generic
+      icon. Show Artwork still hides artwork entirely.
+- [x] TODO: Now Playing artwork should have a minimum size, equal to
       the size it would be if title/artist/album/time were displayed -
       requested, not implemented. Currently apply_now_playing_art_size's
       Auto mode measures now_playing_text_box's own real natural height
@@ -349,6 +369,8 @@
       value) and clamp Auto sizing to never go below it, rather than
       just following the text box's actual current (possibly empty)
       height unconditionally.
+      Done 2026-11-24: Auto art size never goes below the text column's
+      height with all four lines showing at the current text size.
 - [ ] TODO: If title/artist are unknown (e.g. a bare stream/browser tab
       with no MPRIS metadata), show the player source name and maybe
       "Unknown Artist"/"Unknown Title" instead of just hiding those
@@ -995,6 +1017,13 @@
       fullscreen/immersive/transparency modes and the auto-hiding
       header bar; whether the mirror windows are affected (they mirror
       only the visualizer widget, so shouldn't be).
+      Requested again ("make presets a different window or a
+      sidebar?"), now also as an option: a separate, non-modal preset
+      window (an Adw.ApplicationWindow like the mirror/aux windows) that
+      can sit next to or on another monitor from the visualizer, instead
+      of today's modal-ish dialog. Window vs. sidebar is the first
+      decision; either way the browser content (Presets tree/Favorites/
+      Queue/Loaded tabs from build_preset_browser_dialog) can be reused.
 - [x] About dialog: credit projectM and its preset/texture collections -
       requested ("in the about page please add contributions and link
       to projectm, cream of the crop, etc"), not done. The About dialog
@@ -1015,7 +1044,7 @@
       (ISOSCELES), the texture pack and MilkDrop, with an LGPL-2.1 legal
       section for libprojectM and a note on preset authorship; README
       credits updated.
-- [ ] Now Playing window size settings - requested ("now playing window
+- [x] Now Playing window size settings - requested ("now playing window
       size settings"), not implemented; exact intent to clarify. What
       exists now: the card's size comes from the Scale slider (text
       size x box width, NOW_PLAYING_BASE_WIDTH 28 chars) or, with Lock
@@ -1027,7 +1056,16 @@
       how it scales with the window size (e.g. a percentage of the
       window). Probably best designed together with the font size
       entry below, since both currently hang off the single Scale.
-- [ ] BUG: Now Playing title keeps scrolling after Scale is changed even
+      Done 2026-11-24 with the font size entry: Max Width (on top of
+      Scale) sets how wide the card's text can get.
+- [ ] Option to mute the "Beat detected - next preset" message -
+      requested ("I want a mute for the beat detected message"), not
+      done. on_projectm_beat (window.py) shows that toast on every beat
+      cut, which with Beat-Driven Cycle on can be every few seconds.
+      Likely: a "Show Beat Notifications" switch in the Beat-Driven
+      Cycle group (Preferences > Playback), on by default to keep
+      today's behaviour, plus its key in profile_fields.
+- [x] BUG: Now Playing title keeps scrolling after Scale is changed even
       though the full title fits - reported ("now playing title scrolls
       if scale is changed and there is still space for full text"), not
       investigated. Likely causes from the code (unconfirmed):
@@ -1043,6 +1081,12 @@
       recompute_now_playing_scale, and decide from the measured label
       width vs. the available width (the scroll code already measures
       the label - see start_now_playing_title_scroll).
+      Fixed 2026-11-24 (now-playing branch): scroll vs. static is
+      decided from the title's real rendered width against the card's
+      allowed width (now_playing_title_fits) instead of a character
+      count, and is re-decided whenever Scale, Lock to Window Size, Text
+      Size, Max Width or Font change (refresh_now_playing_title),
+      restarting a running ticker at the new size. Verified headless.
 - [ ] Scrolling Now Playing text - requested ("scrolling now playing
       text"), intent to clarify. Today only the title scrolls (Scroll
       Long Titles, start_now_playing_title_scroll: a 300ms character
@@ -1051,7 +1095,7 @@
       (pixel-based rather than per-character) scrolling, speed/pause
       settings, or scrolling only on hover - ask. Related to the bug
       entry above.
-- [ ] Now Playing font size - requested ("now playing font size"), not
+- [x] Now Playing font size - requested ("now playing font size"), not
       implemented. Current state: there's no size control of its own.
       The Scale slider (build_now_playing_scale_control,
       recompute_now_playing_scale) multiplies text size
@@ -1064,7 +1108,12 @@
       apply. Check how it should interact with Lock to Window Size
       (which also derives text size) and Album Art's Auto sizing
       (follows the text column height).
-- [ ] Periodic Fade with a hidden period and a shown period - requested
+      Done 2026-11-24: new Text Size and Max Width sliders (percentages
+      on top of Scale / Lock to Window Size). Note: max width is
+      measured in characters of the current font, so a bigger Text Size
+      widens the card proportionally; Max Width changes how many
+      characters fit.
+- [x] Periodic Fade with a hidden period and a shown period - requested
       ("make fade interval have period of time before appearing and
       period of time it is shown between fades"), not implemented.
       Today restart_now_playing_periodic_fade (window.py) fades the
@@ -1077,6 +1126,10 @@
       reuse a fixed short one). Ties in with item (1) of the next
       entry (much longer periods, e.g. once a minute) - both are
       really about this same timing model.
+      Done 2026-11-24: Periodic Fade is now a cycle of Hidden For (0-5
+      min) -> fade in -> Shown For (1 s-5 min) -> fade out, with a Fade
+      Duration slider; it starts hidden, and only ticks during fades.
+      Also covers item (1) of the next entry (much longer periods).
 - [ ] Now Playing display follow-ups, both requested (TODO-only, not
       implemented):
       (1) Widen the Fade Interval (Periodic Fade) slider's range -
