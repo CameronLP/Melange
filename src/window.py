@@ -3631,12 +3631,12 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.preset_browser, "presets", "Presets", "view-list-symbolic"
         )
         sections.add_titled_with_icon(
-            self.build_settings_section(), "settings", "Settings",
-            "preferences-system-symbolic"
-        )
-        sections.add_titled_with_icon(
             self.build_visualizers_section(), "visualizers", "Visualizers",
             "utilities-system-monitor-symbolic"
+        )
+        sections.add_titled_with_icon(
+            self.build_settings_section(), "settings", "Settings",
+            "preferences-system-symbolic"
         )
         self.sidebar_sections = sections
 
@@ -4158,6 +4158,23 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         list_item.preset_label.set_label(name)
 
+        # Favorites (and playlists) can name presets that aren't in the
+        # collection any more - presets loaded from files only last for
+        # the session they were loaded in.
+        available = self.presets.contains(name)
+
+        if available:
+            list_item.preset_label.remove_css_class("dim-label")
+            list_item.preset_label.set_tooltip_text(None)
+        else:
+            list_item.preset_label.add_css_class("dim-label")
+            list_item.preset_label.set_tooltip_text(
+                "Not available - presets loaded from files only last for the "
+                "session; load the file again to use it"
+            )
+
+        list_item.add_button.set_sensitive(available)
+
         if list_item.favorite_button_handler is not None:
             list_item.favorite_button.disconnect(list_item.favorite_button_handler)
 
@@ -4197,11 +4214,19 @@ class MelangeWindow(Adw.ApplicationWindow):
         string_object = list_view.get_model().get_item(position)
         name = string_object.get_string()
 
-        self.presets.go_to(name)
+        if not self.presets.go_to(name):
+            self.show_toast(f"Not available: {name}")
 
     def enqueue_preset(self, name):
 
-        self.presets.enqueue(name)
+        # Only presets in the current collection can be queued - a
+        # favorite/playlist entry for a preset loaded from a file in an
+        # earlier session no longer exists (it used to fail silently
+        # behind an "Added to queue" toast).
+        if not self.presets.enqueue(name):
+            self.show_toast(f"Not available: {name}")
+            return
+
         self.show_toast(f"Added to queue: {name}")
 
     def show_queue_clicked(self, action, param):
@@ -4985,8 +5010,20 @@ class MelangeWindow(Adw.ApplicationWindow):
             return False
 
         name = Path(basename).stem
+        existing = self.preset_paths.get(name)
 
-        if self.preset_paths.get(name) not in (None, Path(path)):
+        # Same file as the bundled preset of that name (e.g. a copy of a
+        # Cream of the Crop preset): just use the bundled one, rather
+        # than adding a session-only "(loaded)" duplicate.
+        if (
+            isinstance(existing, projectm_view.ZipPreset)
+            and projectm_view.read_preset_bytes(existing) == projectm_view.read_preset_bytes(path)
+        ):
+            self.presets.go_to(name)
+            self.show_toast(f"Already in the collection: {name}")
+            return True
+
+        if existing not in (None, Path(path)):
             name = f"{name} (loaded)"
 
         self.preset_paths[name] = Path(path)

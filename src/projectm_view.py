@@ -262,6 +262,18 @@ def preset_catalog():
     return catalog
 
 
+def read_preset_bytes(preset):
+    """The .milk file contents of a bundled ZipPreset or a file Path, or
+    None if it can't be read."""
+
+    try:
+        if isinstance(preset, ZipPreset):
+            return _open_archive().read(preset.member)
+        return Path(preset).read_bytes()
+    except (OSError, KeyError, zipfile.BadZipFile):
+        return None
+
+
 def preset_folders(preset):
     """The folder names above a bundled preset, e.g. ("Dancer", "Whirl");
     () for a file loaded from elsewhere."""
