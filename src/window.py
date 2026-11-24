@@ -3241,16 +3241,9 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def build_settings_pages(self):
 
-        audio_group = Adw.PreferencesGroup()
+        audio_group = Adw.PreferencesGroup(title="Audio")
         audio_group.add(self.build_audio_source_control())
         audio_group.add(self.build_sensitivity_control())
-
-        audio_page = Adw.PreferencesPage(
-            title="Audio",
-            icon_name="audio-speakers-symbolic"
-        )
-
-        audio_page.add(audio_group)
 
         cycling_group = Adw.PreferencesGroup(title="Cycling")
         cycling_group.add(self.build_cycle_interval_control())
@@ -3326,17 +3319,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         appearance_page.add(transparency_group)
         appearance_page.add(now_playing_group)
 
-        rendering_group = Adw.PreferencesGroup()
+        rendering_group = Adw.PreferencesGroup(title="Rendering")
         rendering_group.add(self.build_mesh_size_control())
         rendering_group.add(self.build_framerate_control())
         rendering_group.add(self.build_render_scale_control())
 
-        rendering_page = Adw.PreferencesPage(
-            title="Rendering",
-            icon_name="preferences-desktop-display-symbolic"
+        # What drives and draws the visuals - Audio and Rendering used to
+        # be two separate, very short pages.
+        visualizer_page = Adw.PreferencesPage(
+            title="Visualizer",
+            icon_name="audio-speakers-symbolic"
         )
 
-        rendering_page.add(rendering_group)
+        visualizer_page.add(audio_group)
+        visualizer_page.add(rendering_group)
 
         profiles_page = self.build_profiles_page()
 
@@ -3348,10 +3344,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         # than a dialog, so the visualizer stays visible while changing
         # things.
         self.settings_pages = [
-            ("audio", audio_page),
+            ("visualizer", visualizer_page),
             ("playback", playback_page),
             ("appearance", appearance_page),
-            ("rendering", rendering_page),
             ("profiles", profiles_page),
         ]
 
@@ -3640,20 +3635,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
         self.sidebar_sections = sections
 
-        # Three labelled sections don't fit in the header next to the
-        # close button and window controls, so they're a full-width tab
-        # row at the top of the sidebar instead.
+        # Top-level sections in a bottom switcher bar (icons + labels),
+        # the usual GNOME pattern for narrow views; the tabs *within* a
+        # section (Presets/Favorites/Queue/Playlists, settings pages)
+        # stay at the top.
         header = Adw.HeaderBar()
         header.set_show_title(False)
 
-        section_switcher = Adw.InlineViewSwitcher(stack=sections)
-        section_switcher.set_display_mode(Adw.InlineViewSwitcherDisplayMode.LABELS)
-        # Not homogeneous: "Visualizers" needs more room than the others
-        # at the sidebar's narrowest width.
-        section_switcher.set_homogeneous(False)
-        section_switcher.set_margin_start(12)
-        section_switcher.set_margin_end(12)
-        section_switcher.set_margin_bottom(6)
+        section_switcher = Adw.ViewSwitcherBar(stack=sections)
+        section_switcher.set_reveal(True)
 
         close_button = Gtk.Button(icon_name="sidebar-show-right-symbolic")
         close_button.set_tooltip_text("Hide Sidebar")
@@ -3671,7 +3661,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         sidebar = Adw.ToolbarView()
         sidebar.add_top_bar(header)
-        sidebar.add_top_bar(section_switcher)
+        sidebar.add_bottom_bar(section_switcher)
         sidebar.set_content(sections)
         split.set_sidebar(sidebar)
 
