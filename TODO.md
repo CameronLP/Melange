@@ -938,6 +938,44 @@
       undisturbed, and in both cases the label's actual rendered
       content is the full, untruncated (no "…") expected-length window
       on the very next tick.
+- [ ] Now Playing window size settings - requested ("now playing window
+      size settings"), not implemented; exact intent to clarify. What
+      exists now: the card's size comes from the Scale slider (text
+      size x box width, NOW_PLAYING_BASE_WIDTH 28 chars) or, with Lock
+      to Window Size on (now_playing_lock_to_window), from the main
+      window's width relative to NOW_PLAYING_REFERENCE_WIDTH (800px);
+      Album Art sizing follows the text column. Possible meanings: an
+      explicit width/height (or max width) for the card independent of
+      text size, separate width and height controls, or settings for
+      how it scales with the window size (e.g. a percentage of the
+      window). Probably best designed together with the font size
+      entry below, since both currently hang off the single Scale.
+- [ ] Now Playing font size - requested ("now playing font size"), not
+      implemented. Current state: there's no size control of its own.
+      The Scale slider (build_now_playing_scale_control,
+      recompute_now_playing_scale) multiplies text size
+      (NOW_PLAYING_BASE_TEXT_SIZE, 13) and box width together - it
+      replaced the old separate Text Size / Text Box Width sliders -
+      and the Font button (build_now_playing_font_control) is a
+      Gtk.FontDialogButton at FACE level, so it picks family/style but
+      not size. Likely wanted: a text size (or "Text Size" multiplier)
+      independent of Scale, or letting the Font button's chosen size
+      apply. Check how it should interact with Lock to Window Size
+      (which also derives text size) and Album Art's Auto sizing
+      (follows the text column height).
+- [ ] Periodic Fade with a hidden period and a shown period - requested
+      ("make fade interval have period of time before appearing and
+      period of time it is shown between fades"), not implemented.
+      Today restart_now_playing_periodic_fade (window.py) fades the
+      Now Playing card continuously on a cosine wave over one Fade
+      Interval (1-15s), so it's never fully hidden or fully shown for
+      any length of time. Wanted instead: a cycle of hidden for N
+      seconds -> fade in -> fully shown for M seconds -> fade out ->
+      repeat, i.e. Periodic Fade's single Fade Interval slider becomes
+      e.g. "Hidden For", "Shown For" (and probably a fade duration, or
+      reuse a fixed short one). Ties in with item (1) of the next
+      entry (much longer periods, e.g. once a minute) - both are
+      really about this same timing model.
 - [ ] Now Playing display follow-ups, both requested (TODO-only, not
       implemented):
       (1) Widen the Fade Interval (Periodic Fade) slider's range -
