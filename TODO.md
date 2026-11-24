@@ -287,7 +287,7 @@
       it hides when enabled already exists (see the Now Playing
       settings consolidation above) - just the default value needs
       flipping, not a new control.
-- [x] Now Playing artwork missing for sandboxed (flatpak) players -
+- [ ] Now Playing artwork missing for sandboxed (flatpak) players -
       cause found, not fixed. Rufin (app.rufin.rufin, a flatpak) sends
       mpris:artUrl = file:///home/cameron/.var/app/app.rufin.rufin/
       cache/rufin/covers/<hash>/<hash>/512.image - a valid JPEG on the
@@ -313,10 +313,10 @@
       - Upstream: ask players to send an https:// or data: artUrl.
         Also check whether Melange's loader (Gio.File) handles data:
         URIs at all.
-      Done 2026-11-24 with the per-player grant:
-      --filesystem=~/.var/app/app.rufin.rufin/cache:ro in the manifest
-      (verified visible in the sandbox). Other sandboxed players still
-      need their own grant or the folder-picker idea below.
+      Update 2026-11-24: a per-player grant for Rufin was tried and
+      worked, but was taken out again - no new filesystem permission for
+      now. Still open; options as above (folder picker, per-machine
+      flatpak override, manifest grant).
 - [ ] POSSIBLE: In-app per-player artwork access via the folder picker
       portal - only worth it if Melange gets distributed (e.g.
       Flathub) or several sandboxed players are in regular use; for

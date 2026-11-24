@@ -14,7 +14,6 @@
         "--filesystem=xdg-run/gvfs",
         "--filesystem=xdg-run/pipewire-0",
         "--filesystem=home:ro",
-        "--filesystem=~/.var/app/app.rufin.rufin/cache:ro",
         "--talk-name=org.freedesktop.portal.Desktop",
 	"--talk-name=org.freedesktop.portal.PermissionStore",
 	"--talk-name=org.mpris.MediaPlayer2.*",
