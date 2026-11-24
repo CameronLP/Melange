@@ -938,6 +938,53 @@
       undisturbed, and in both cases the label's actual rendered
       content is the full, untruncated (no "…") expected-length window
       on the very next tick.
+- [ ] Rendering settings for the projectM renderer - requested
+      ("rendering settings for projectm"), not done. Preferences >
+      Rendering's Mesh Size, Frame Rate, Render Scale and Anti-Aliasing
+      only reach Butterchurn (run_js setMeshSize/setFramerate/
+      setRenderScale/setAntiAliasing); projectM ignores them, and so
+      does Sensitivity. Mapping for projectM: Mesh Size ->
+      projectm_set_mesh_size; Frame Rate cap -> throttle
+      ProjectMView.on_tick/queue_render (and projectm_set_fps so its
+      timing matches); Render Scale -> render into an offscreen
+      framebuffer at the scaled size and blit/scale up into the
+      GLArea's (projectM renders at whatever window size it's given);
+      Anti-Aliasing -> a multisampled offscreen framebuffer, or drop it
+      for projectM; Sensitivity -> scale the PCM samples before
+      projectm_pcm_add_* (and/or projectm_set_beat_sensitivity).
+      projectM also has settings Butterchurn didn't: hard/soft cut
+      durations and sensitivity (its own beat-triggered preset
+      changes - Melange currently locks them off), aspect correction,
+      easter egg. Part of Stage 3 in docs/projectm-exploration.md.
+- [ ] POSSIBLE: Move the preset browser (and maybe settings) into a
+      sidebar - suggested ("maybe move presets selector and settings to
+      a sidebar or something"), not designed. Today the preset browser
+      is a separate 560x560 dialog (Presets/Favorites/Queue/Loaded tabs)
+      and Preferences is an Adw.PreferencesDialog - both cover the
+      visualizer. A sidebar (e.g. Adw.OverlaySplitView, collapsible,
+      overlaying in fullscreen) would let presets be browsed while the
+      visualizer keeps playing, and suits the much larger, foldered
+      projectM collection. Questions: browser only or settings too;
+      overlay vs. resizing the visualizer; how it coexists with
+      fullscreen/immersive/transparency modes and the auto-hiding
+      header bar; whether the mirror windows are affected (they mirror
+      only the visualizer widget, so shouldn't be).
+- [ ] About dialog: credit projectM and its preset/texture collections -
+      requested ("in the about page please add contributions and link
+      to projectm, cream of the crop, etc"), not done. The About dialog
+      (main.py, Adw.AboutDialog) only has a "Powered By" credit section
+      for Butterchurn, the MilkDrop preset converter and the baron
+      pack. Add: libprojectM (https://github.com/projectM-visualizer/
+      projectm, LGPL-2.1), "Cream of the Crop" presets curated by
+      ISOSCELES (https://github.com/projectM-visualizer/presets-cream-
+      of-the-crop, plus a note that MilkDrop presets belong to their
+      authors - see its LICENSE.md), the MilkDrop texture pack
+      (https://github.com/projectM-visualizer/presets-milkdrop-texture-
+      pack), and the original MilkDrop (Ryan Geiss). Possibly via
+      add_acknowledgement_section / add_legal_section (for the LGPL
+      notice) rather than only Powered By. Also check the Butterchurn
+      core preset pack (butterchurn-presets) is credited, and update
+      the README's credits to match.
 - [ ] Now Playing window size settings - requested ("now playing window
       size settings"), not implemented; exact intent to clarify. What
       exists now: the card's size comes from the Scale slider (text
