@@ -39,7 +39,7 @@
             <child type="end">
               <object class="GtkToggleButton" id="sidebar_button">
                 <property name="icon-name">sidebar-show-right-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Presets and Settings</property>
+                <property name="tooltip-text" translatable="yes">Presets and Preferences</property>
               </object>
             </child>
           </object>

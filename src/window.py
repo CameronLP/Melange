@@ -3340,7 +3340,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         # view-switcher (rather than a single flat list) for free.
         # Theme (light/dark/system) lives in the hamburger menu itself
         # instead - see build_theme_selector.
-        # Shown in the sidebar's Settings section (build_sidebar) rather
+        # Shown in the sidebar's Preferences section (build_sidebar) rather
         # than a dialog, so the visualizer stays visible while changing
         # things.
         self.settings_pages = [
@@ -3620,7 +3620,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.set_content(split)
         self.sidebar_split = split
 
-        # Presets | Settings
+        # Presets | Visualizers | Preferences
         sections = Adw.ViewStack()
         sections.add_titled_with_icon(
             self.preset_browser, "presets", "Presets", "view-list-symbolic"
@@ -3630,7 +3630,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             "utilities-system-monitor-symbolic"
         )
         sections.add_titled_with_icon(
-            self.build_settings_section(), "settings", "Settings",
+            self.build_settings_section(), "settings", "Preferences",
             "preferences-system-symbolic"
         )
         self.sidebar_sections = sections
@@ -3645,15 +3645,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         section_switcher = Adw.ViewSwitcherBar(stack=sections)
         section_switcher.set_reveal(True)
 
-        close_button = Gtk.Button(icon_name="sidebar-show-right-symbolic")
-        close_button.set_tooltip_text("Hide Sidebar")
-        close_button.connect("clicked", lambda button: split.set_show_sidebar(False))
-        header.pack_start(close_button)
-
-        # The main header's sidebar toggle shows it pressed while the
-        # sidebar is open; it reopens on whichever section was last used
-        # (Presets the first time). Ctrl+F / Q / Ctrl+, jump straight to
-        # a section instead.
+        # The sidebar toggle shows pressed while the sidebar is open; it
+        # reopens on whichever section was last used (Presets the first
+        # time). Ctrl+F / Q / Ctrl+, jump straight to a section instead.
         split.bind_property(
             "show-sidebar", self.sidebar_button, "active",
             GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
@@ -3665,16 +3659,36 @@ class MelangeWindow(Adw.ApplicationWindow):
         sidebar.set_content(sections)
         split.set_sidebar(sidebar)
 
-        # Only the rightmost header shows the window buttons, so they
-        # don't appear twice while the sidebar is open.
-        def update_title_buttons(*args):
-            open_inline = split.get_show_sidebar() and not split.get_collapsed()
-            self.headerbar.set_show_end_title_buttons(not open_inline)
-            header.set_show_end_title_buttons(open_inline or split.get_collapsed())
+        # While the sidebar is open, the header's end buttons (sidebar
+        # toggle, main menu, fullscreen) move into the sidebar's header -
+        # the same widgets, in the same order - and the window buttons
+        # are only shown there; closing it moves them back. So there's
+        # one of each, always next to the window buttons, and the toggle
+        # doubles as the sidebar's close button.
+        self.sidebar_header = header
+        moved_buttons = (self.fullscreen_button, self.menu_button, self.sidebar_button)
 
-        split.connect("notify::show-sidebar", update_title_buttons)
-        split.connect("notify::collapsed", update_title_buttons)
-        update_title_buttons()
+        def place_header_buttons(*args):
+            open_ = split.get_show_sidebar()
+            source, target = (
+                (self.headerbar, header) if open_ else (header, self.headerbar)
+            )
+
+            for button in moved_buttons:
+                if button.get_parent() is not None and button.get_ancestor(Adw.HeaderBar) is target:
+                    continue
+                source.remove(button)
+                target.pack_end(button)
+
+            self.headerbar.set_show_end_title_buttons(not open_)
+            header.set_show_end_title_buttons(open_)
+
+        # Deferred: the toggle can be the button that was just clicked.
+        split.connect(
+            "notify::show-sidebar",
+            lambda *args: GLib.idle_add(lambda: (place_header_buttons(), False)[1])
+        )
+        place_header_buttons()
 
         breakpoint = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(
             f"max-width: {self.SIDEBAR_COLLAPSE_WIDTH}sp"
