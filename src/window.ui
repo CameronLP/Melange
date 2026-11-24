@@ -26,7 +26,7 @@
                  it top-level prominence. Still reachable from the
                  hamburger menu (win.load-preset). -->
 
-            <child type="end">
+            <child type="start">
               <object class="GtkButton" id="fullscreen_button">
                 <property name="icon-name">view-fullscreen-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Toggle Fullscreen</property>

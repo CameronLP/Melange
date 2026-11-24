@@ -710,7 +710,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             action_name="win.toggle-fullscreen"
         )
 
-        self.header.pack_end(self.fullscreen_button)
+        # Far left, same as the main window: fullscreen is about the
+        # content, kept apart from the window buttons.
+        self.header.pack_start(self.fullscreen_button)
 
         self.toolbar_view.set_content(content_overlay)
 

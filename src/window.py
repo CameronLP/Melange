@@ -3659,16 +3659,17 @@ class MelangeWindow(Adw.ApplicationWindow):
         sidebar.set_content(sections)
         split.set_sidebar(sidebar)
 
-        # While the sidebar is open, the header's end buttons (sidebar
-        # toggle, main menu, fullscreen) move into the sidebar's header -
-        # the same widgets - on its left, in the same left-to-right order,
-        # with the window buttons alone on its right; closing it moves
-        # them back. So there's one of each, and the toggle doubles as
-        # the sidebar's close button.
+        # While the sidebar is open, the sidebar toggle and main menu move
+        # into the sidebar's header - the same widgets - on its left, in
+        # the same order, with the window buttons alone on its right;
+        # closing it moves them back. So there's one of each, and the
+        # toggle doubles as the sidebar's close button. Fullscreen stays
+        # at the far left of the visualizer's header: it's about the
+        # visualizer, not the sidebar.
         self.sidebar_header = header
-        # Left to right: sidebar toggle, fullscreen, main menu (GNOME puts
-        # the main menu last, before the window buttons).
-        right_to_left = (self.menu_button, self.fullscreen_button, self.sidebar_button)
+        # Left to right: sidebar toggle, main menu (GNOME puts the main
+        # menu last, before the window buttons).
+        right_to_left = (self.menu_button, self.sidebar_button)
 
         def place_header_buttons(*args):
             open_ = split.get_show_sidebar()
