@@ -103,7 +103,7 @@ class PresetManager:
     def go_to(self, name, show=True):
         """Switch to `name` and start a new history branch there. With
         show=False it's only recorded - for when the renderer already
-        switched by itself (e.g. Butterchurn after loading a file)."""
+        switched by itself."""
 
         if name not in self.catalog_set:
             return False
