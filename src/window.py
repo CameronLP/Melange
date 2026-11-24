@@ -492,7 +492,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pactl_event_timer = None
         self.preset_locked = False
         self.preset_list_store = None
-        self.preset_browser_dialog = None
+        self.preset_browser = None
         self.browser_view_stack = None
         self.favorites = self.load_favorites()
         self.favorites_list_store = None
@@ -946,7 +946,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.add_action(preferences_action)
 
         self.profiles = self.load_profiles()
-        self.build_preferences_dialog()
+        self.build_settings_pages()
+        self.build_preset_browser()
+        self.build_sidebar()
 
         self.menu_button.get_popover().add_child(
             self.build_theme_selector(),
@@ -3168,9 +3170,9 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def preferences_clicked(self, action, param):
 
-        self.preferences_dialog.present(self)
+        self.show_sidebar_section("settings")
 
-    def build_preferences_dialog(self):
+    def build_settings_pages(self):
 
         audio_group = Adw.PreferencesGroup()
         audio_group.add(self.build_sensitivity_control())
@@ -3281,14 +3283,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         # view-switcher (rather than a single flat list) for free.
         # Theme (light/dark/system) lives in the hamburger menu itself
         # instead - see build_theme_selector.
-        dialog = Adw.PreferencesDialog()
-        dialog.add(audio_page)
-        dialog.add(playback_page)
-        dialog.add(appearance_page)
-        dialog.add(rendering_page)
-        dialog.add(profiles_page)
-
-        self.preferences_dialog = dialog
+        # Shown in the sidebar's Settings section (build_sidebar) rather
+        # than a dialog, so the visualizer stays visible while changing
+        # things.
+        self.settings_pages = [
+            ("audio", audio_page),
+            ("playback", playback_page),
+            ("appearance", appearance_page),
+            ("rendering", rendering_page),
+            ("profiles", profiles_page),
+        ]
 
     # The (key, getter, setter) triples that make up a settings
     # profile. A single list here rather than scattering profile
@@ -3528,13 +3532,133 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def browse_presets_clicked(self, action, param):
 
-        if self.preset_browser_dialog is None:
-            self.build_preset_browser_dialog()
+        self.show_sidebar_section("presets", tab="presets")
 
-        self.browser_view_stack.set_visible_child_name("presets")
-        self.preset_browser_dialog.present(self)
+    # --- sidebar: presets and settings beside the visualizer -------------
 
-    def build_preset_browser_dialog(self):
+    # The window's content (the toolbar view with the visualizer) moves
+    # into an Adw.OverlaySplitView with this sidebar on the right. It
+    # pushes the visualizer aside rather than covering it; windows
+    # narrower than SIDEBAR_COLLAPSE_WIDTH fall back to overlaying it.
+    SIDEBAR_COLLAPSE_WIDTH = 720
+
+    def build_sidebar(self):
+
+        content = self.get_content()
+        self.set_content(None)
+
+        split = Adw.OverlaySplitView()
+        split.set_sidebar_position(Gtk.PackType.END)
+        split.set_show_sidebar(False)
+        split.set_min_sidebar_width(300)
+        split.set_max_sidebar_width(420)
+        split.set_sidebar_width_fraction(0.35)
+        split.set_content(content)
+        self.set_content(split)
+        self.sidebar_split = split
+
+        # Presets | Settings
+        sections = Adw.ViewStack()
+        sections.add_titled_with_icon(
+            self.preset_browser, "presets", "Presets", "view-list-symbolic"
+        )
+        sections.add_titled_with_icon(
+            self.build_settings_section(), "settings", "Settings",
+            "preferences-system-symbolic"
+        )
+        self.sidebar_sections = sections
+
+        header = Adw.HeaderBar()
+        header.set_title_widget(Adw.ViewSwitcher(
+            stack=sections, policy=Adw.ViewSwitcherPolicy.WIDE
+        ))
+
+        close_button = Gtk.Button(icon_name="sidebar-show-right-symbolic")
+        close_button.set_tooltip_text("Hide Sidebar")
+        close_button.connect("clicked", lambda button: split.set_show_sidebar(False))
+        header.pack_start(close_button)
+
+        sidebar = Adw.ToolbarView()
+        sidebar.add_top_bar(header)
+        sidebar.set_content(sections)
+        split.set_sidebar(sidebar)
+
+        # Only the rightmost header shows the window buttons, so they
+        # don't appear twice while the sidebar is open.
+        def update_title_buttons(*args):
+            open_inline = split.get_show_sidebar() and not split.get_collapsed()
+            self.headerbar.set_show_end_title_buttons(not open_inline)
+            header.set_show_end_title_buttons(open_inline or split.get_collapsed())
+
+        split.connect("notify::show-sidebar", update_title_buttons)
+        split.connect("notify::collapsed", update_title_buttons)
+        update_title_buttons()
+
+        breakpoint = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(
+            f"max-width: {self.SIDEBAR_COLLAPSE_WIDTH}sp"
+        ))
+        breakpoint.add_setter(split, "collapsed", True)
+        self.add_breakpoint(breakpoint)
+
+    def build_settings_section(self):
+
+        stack = Adw.ViewStack()
+
+        for name, page in self.settings_pages:
+            stack.add_titled_with_icon(page, name, page.get_title(), page.get_icon_name())
+
+        switcher = Adw.InlineViewSwitcher(stack=stack)
+        switcher.set_display_mode(Adw.InlineViewSwitcherDisplayMode.ICONS)
+        switcher.set_homogeneous(True)
+        switcher.set_margin_start(12)
+        switcher.set_margin_end(12)
+        switcher.set_margin_top(6)
+
+        # Icons only fit the sidebar's width, so the current page's name
+        # is shown underneath.
+        title = Gtk.Label(css_classes=["heading"], margin_top=6)
+
+        def update_title(*args):
+            page = stack.get_page(stack.get_visible_child())
+            title.set_label(page.get_title() if page else "")
+
+        stack.connect("notify::visible-child", update_title)
+        update_title()
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(switcher)
+        box.append(title)
+        box.append(stack)
+        stack.set_vexpand(True)
+
+        self.settings_stack = stack
+
+        return box
+
+    # Opens the sidebar on a section (and preset tab); asking for the
+    # section that's already showing closes it again, so the header's
+    # Presets button and the shortcuts work as toggles.
+    def show_sidebar_section(self, section, tab=None):
+
+        split = self.sidebar_split
+        already_showing = (
+            split.get_show_sidebar()
+            and self.sidebar_sections.get_visible_child_name() == section
+            and (tab is None or self.browser_view_stack.get_visible_child_name() == tab)
+        )
+
+        if already_showing:
+            split.set_show_sidebar(False)
+            return
+
+        self.sidebar_sections.set_visible_child_name(section)
+
+        if tab is not None:
+            self.browser_view_stack.set_visible_child_name(tab)
+
+        split.set_show_sidebar(True)
+
+    def build_preset_browser(self):
 
         view_stack = Adw.ViewStack()
 
@@ -3542,44 +3666,34 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.build_presets_tab(),
             "presets", "Presets", "view-list-symbolic"
         )
-
         view_stack.add_titled_with_icon(
             self.build_favorites_tab(),
             "favorites", "Favorites", "starred-symbolic"
         )
-
         view_stack.add_titled_with_icon(
             self.build_loaded_presets_tab(),
             "loaded", "Loaded", "document-open-symbolic"
         )
-
         view_stack.add_titled_with_icon(
             self.build_queue_tab(),
             "queue", "Queue", "view-continuous-symbolic"
         )
 
-        switcher = Adw.ViewSwitcher()
-        switcher.set_stack(view_stack)
-        switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
+        switcher = Adw.InlineViewSwitcher(stack=view_stack)
+        switcher.set_display_mode(Adw.InlineViewSwitcherDisplayMode.LABELS)
+        switcher.set_homogeneous(True)
+        switcher.set_margin_start(12)
+        switcher.set_margin_end(12)
+        switcher.set_margin_top(6)
 
-        header = Adw.HeaderBar()
-        header.set_title_widget(switcher)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(switcher)
+        box.append(view_stack)
+        view_stack.set_vexpand(True)
 
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(header)
-        toolbar_view.set_content(view_stack)
-
-        dialog = Adw.Dialog()
-        dialog.set_title("Presets")
-        dialog.set_content_width(560)
-        dialog.set_content_height(560)
-        dialog.set_child(toolbar_view)
-
-        self.preset_browser_dialog = dialog
+        self.preset_browser = box
         self.browser_view_stack = view_stack
 
-    # Shared by the Presets and Favorites tabs - same search/filter/
-    # row-rendering behavior, only the backing Gtk.StringList differs.
     def build_preset_search_list(self, list_store, with_tree=False):
 
         expression = Gtk.PropertyExpression.new(
@@ -3749,7 +3863,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             return
 
         self.presets.go_to(node.preset_name)
-        self.preset_browser_dialog.close()
 
     # The preset collection as a Category > Subfolder > preset tree;
     # presets loaded from files go under "Loaded".
@@ -3937,8 +4050,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.presets.go_to(name)
 
-        self.preset_browser_dialog.close()
-
     def enqueue_preset(self, name):
 
         self.presets.enqueue(name)
@@ -3946,19 +4057,11 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def show_queue_clicked(self, action, param):
 
-        if self.preset_browser_dialog is None:
-            self.build_preset_browser_dialog()
-
-        self.browser_view_stack.set_visible_child_name("queue")
-        self.preset_browser_dialog.present(self)
+        self.show_sidebar_section("presets", tab="queue")
 
     def show_favorites_clicked(self, action, param):
 
-        if self.preset_browser_dialog is None:
-            self.build_preset_browser_dialog()
-
-        self.browser_view_stack.set_visible_child_name("favorites")
-        self.preset_browser_dialog.present(self)
+        self.show_sidebar_section("presets", tab="favorites")
 
     def build_queue_tab(self):
 
