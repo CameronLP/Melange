@@ -268,6 +268,56 @@
       it hides when enabled already exists (see the Now Playing
       settings consolidation above) - just the default value needs
       flipping, not a new control.
+- [ ] Now Playing artwork missing for sandboxed (flatpak) players -
+      cause found, not fixed. Rufin (app.rufin.rufin, a flatpak) sends
+      mpris:artUrl = file:///home/cameron/.var/app/app.rufin.rufin/
+      cache/rufin/covers/<hash>/<hash>/512.image - a valid JPEG on the
+      host, but flatpak hides other apps' ~/.var/app folders even with
+      --filesystem=home:ro, so inside Melange's sandbox the file
+      doesn't exist and load_contents_async fails (placeholder shown).
+      GNOME's own media controls show it only because gnome-shell
+      isn't sandboxed. Confirmed with one-off `flatpak run
+      --filesystem=...` tests: both `~/.var/app/app.rufin.rufin/
+      cache:ro` and `~/.var/app:ro` make the file readable.
+      Options considered:
+      - Quick fix: add `--filesystem=~/.var/app/app.rufin.rufin/
+        cache:ro` to the manifest (one line, Rufin's cache only).
+      - Not recommended: `~/.var/app:ro` (every flatpak app's private
+        data - mail, chats, browser profiles - becomes readable, and
+        Melange also has network access); `flatpak-spawn --host`
+        (sandbox escape).
+      - Per machine: `flatpak override --user --filesystem=~/.var/app/
+        <player-id>/cache:ro com.cameronlp.Melange` (or Flatseal).
+      - Opt-in online cover lookup (e.g. Cover Art Archive by artist/
+        album) as a fallback for art that can't be reached at all -
+        sends listening history to a third party, so off by default.
+      - Upstream: ask players to send an https:// or data: artUrl.
+        Also check whether Melange's loader (Gio.File) handles data:
+        URIs at all.
+- [ ] POSSIBLE: In-app per-player artwork access via the folder picker
+      portal - only worth it if Melange gets distributed (e.g.
+      Flathub) or several sandboxed players are in regular use; for
+      just Rufin the one-line manifest grant above does the same job.
+      Idea: when art fails to load and the artUrl path is inside
+      another app's ~/.var/app/<id>/<cache|data|config>/, derive that
+      folder (e.g. ~/.var/app/app.rufin.rufin/cache - narrow, and
+      stable unlike the per-album hash folders), show "Artwork from
+      <player> isn't accessible" with an Allow Access... button that
+      opens Gtk.FileDialog.select_folder() at that folder. Check the
+      picked folder really contains the current art (relative path
+      resolves under the returned /run/user/.../doc/... path), then
+      remember host-prefix -> granted-path and rewrite art paths
+      through it. If the portal route fails, the same folder detection
+      can show the exact `flatpak override` command instead.
+      Unverified, needs a real click-through (can't be done headless):
+      1. whether the document portal will export a folder inside
+         another app's ~/.var/app at all (decides if this works);
+      2. whether the picker honours an initial folder Melange's own
+         sandbox can't see;
+      3. whether the grant persists across Melange restarts.
+      Won't cover players that put art in /tmp (Melange's /tmp is
+      private) or inside another sandbox's private /tmp, nor players
+      that send no artUrl.
 - [ ] TODO: Now Playing artwork should have a minimum size, equal to
       the size it would be if title/artist/album/time were displayed -
       requested, not implemented. Currently apply_now_playing_art_size's
