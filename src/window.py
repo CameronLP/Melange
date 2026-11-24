@@ -106,6 +106,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     headerbar = Gtk.Template.Child()
     menu_button = Gtk.Template.Child()
     fullscreen_button = Gtk.Template.Child()
+    sidebar_button = Gtk.Template.Child()
 
     # Now Playing's Scale slider is a single multiplier applied to
     # both of these base values (see recompute_now_playing_scale) -
@@ -638,10 +639,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_controller(escape_controller)
 
-        # Same CAPTURE-phase reasoning as the drag gesture and motion
-        # controller above - WebKit's own hit testing can otherwise
-        # consume the event before a default BUBBLE-phase controller
-        # on an ancestor widget ever sees it.
+        # Scrolling over the visualizer changes preset. Attached to the
+        # visualizer area only (not the whole window), so scrolling in
+        # the sidebar's lists and settings scrolls them instead. CAPTURE
+        # so the overlaid buttons/Now Playing card don't swallow it.
         scroll_controller = Gtk.EventControllerScroll.new(
             Gtk.EventControllerScrollFlags.VERTICAL
         )
@@ -655,7 +656,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.on_scroll
         )
 
-        self.add_controller(scroll_controller)
+        webview_overlay.add_controller(scroll_controller)
 
 
 
@@ -3539,8 +3540,10 @@ class MelangeWindow(Adw.ApplicationWindow):
     # The window's content (the toolbar view with the visualizer) moves
     # into an Adw.OverlaySplitView with this sidebar on the right. It
     # pushes the visualizer aside rather than covering it; windows
-    # narrower than SIDEBAR_COLLAPSE_WIDTH fall back to overlaying it.
+    # narrower than SIDEBAR_COLLAPSE_WIDTH fall back to overlaying it,
+    # and below SIDEBAR_FULL_WIDTH it fills the window.
     SIDEBAR_COLLAPSE_WIDTH = 720
+    SIDEBAR_FULL_WIDTH = 500
 
     def build_sidebar(self):
 
@@ -3550,6 +3553,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         split = Adw.OverlaySplitView()
         split.set_sidebar_position(Gtk.PackType.END)
         split.set_show_sidebar(False)
+        # By default the split view hides the sidebar when it collapses
+        # (and shows it on uncollapsing) - so shrinking the window made
+        # an open sidebar vanish. Pinned, only the toggle/shortcuts/
+        # close button show or hide it.
+        split.set_pin_sidebar(True)
         split.set_min_sidebar_width(300)
         split.set_max_sidebar_width(420)
         split.set_sidebar_width_fraction(0.35)
@@ -3578,6 +3586,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         close_button.connect("clicked", lambda button: split.set_show_sidebar(False))
         header.pack_start(close_button)
 
+        # The main header's sidebar toggle shows it pressed while the
+        # sidebar is open; it reopens on whichever section was last used
+        # (Presets the first time). Ctrl+F / Q / Ctrl+, jump straight to
+        # a section instead.
+        split.bind_property(
+            "show-sidebar", self.sidebar_button, "active",
+            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
+        )
+
         sidebar = Adw.ToolbarView()
         sidebar.add_top_bar(header)
         sidebar.set_content(sections)
@@ -3599,6 +3616,18 @@ class MelangeWindow(Adw.ApplicationWindow):
         ))
         breakpoint.add_setter(split, "collapsed", True)
         self.add_breakpoint(breakpoint)
+
+        # Very small windows: the sidebar takes the whole window, like a
+        # page (its close button / the toggle goes back). Added last, so
+        # it wins over the one above when both match.
+        full_width = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(
+            f"max-width: {self.SIDEBAR_FULL_WIDTH}sp"
+        ))
+        full_width.add_setter(split, "collapsed", True)
+        full_width.add_setter(split, "min-sidebar-width", 0.0)
+        full_width.add_setter(split, "max-sidebar-width", 100000.0)
+        full_width.add_setter(split, "sidebar-width-fraction", 1.0)
+        self.add_breakpoint(full_width)
 
     def build_settings_section(self):
 
