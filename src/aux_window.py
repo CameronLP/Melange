@@ -143,7 +143,7 @@ DVD_ICON_CHOICES = [
     (TUX_ICON, "Tux"),
     ("com.cameronlp.Melange", "Melange Logo"),
     ("starred-symbolic", "Star"),
-    ("emblem-favorite-symbolic", "Heart"),
+    ("emote-love-symbolic", "Heart"),
     ("weather-clear-symbolic", "Sun"),
     ("face-smile-symbolic", "Smiley"),
     ("network-wireless-symbolic", "Wireless"),
@@ -687,7 +687,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # the end of this method instead, once every kind's state is
         # guaranteed to exist.
         self.settings_button = Gtk.MenuButton(
-            icon_name="emblem-system-symbolic",
+            icon_name="preferences-system-symbolic",
             tooltip_text="Settings"
         )
         self.settings_button.add_css_class("nav-arrow-button")

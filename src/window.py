@@ -3627,7 +3627,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
         sections.add_titled_with_icon(
             self.build_visualizers_section(), "visualizers", "Visualizers",
-            "utilities-system-monitor-symbolic"
+            "video-display-symbolic"
         )
         sections.add_titled_with_icon(
             self.build_settings_section(), "settings", "Preferences",
