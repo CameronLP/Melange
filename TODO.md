@@ -1090,7 +1090,7 @@
       default): with it on, the content fades to fully opaque while the
       pointer is over the visualizer and back to Opacity Level when it
       leaves, using Fade Speed. Verified headless (9/9).
-- [ ] POSSIBLE: Combine the "Add to Queue" and "Add to Playlist…" row
+- [x] POSSIBLE: Combine the "Add to Queue" and "Add to Playlist…" row
       buttons - suggested ("combine the add to queue and add to playlist
       buttons?"), not done. Each preset row (preset_row_setup/
       bind_preset_row, window.py - flat lists and the folder tree) has
@@ -1103,6 +1103,9 @@
       in the narrower sidebar). Trade-off: queueing goes from one click
       to two - decide whether that's acceptable, or keep a quicker way
       (e.g. middle-click / a shortcut on the selected row).
+      Done 2026-11-24 (sidebar branch): one "+" Add to… button per
+      preset row opens the menu with Add to Queue first, then the
+      playlists and New Playlist…. Queueing is now two clicks.
 - [ ] BUG: with Opaque on Hover on, dragging the window makes it go
       transparent while dragging - reported, not fixed. Likely cause
       (unconfirmed): the click-and-drag-anywhere gesture hands the move
@@ -1143,7 +1146,7 @@
       count, and is re-decided whenever Scale, Lock to Window Size, Text
       Size, Max Width or Font change (refresh_now_playing_title),
       restarting a running ticker at the new size. Verified headless.
-- [ ] Scrolling Now Playing text - requested ("scrolling now playing
+- [x] Scrolling Now Playing text - requested ("scrolling now playing
       text"), intent to clarify. Today only the title scrolls (Scroll
       Long Titles, start_now_playing_title_scroll: a 300ms character
       ticker with a "   •   " separator); artist/album are
@@ -1151,6 +1154,11 @@
       (pixel-based rather than per-character) scrolling, speed/pause
       settings, or scrolling only on hover - ask. Related to the bug
       entry above.
+      Done 2026-11-24: the artist and album lines now scroll too when
+      too long (setting renamed Scroll Long Text), using the same real-
+      width fit test as the title; each scrolling line's width is fixed
+      to the widest stretch it will show so the card doesn't change
+      width while ticking.
 - [x] Now Playing font size - requested ("now playing font size"), not
       implemented. Current state: there's no size control of its own.
       The Scale slider (build_now_playing_scale_control,

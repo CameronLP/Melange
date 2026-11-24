@@ -69,6 +69,73 @@ AUX_WINDOW_ACTIONS = {
 
 Gst.init(None)
 
+class LineTicker:
+    """Scrolls one Now Playing text line (artist/album) that's too long
+    to fit: a character ticker like the title's, with the label's width
+    fixed while it runs (and the overflow clipped) so the card doesn't
+    change width on every tick."""
+
+    SEPARATOR = "   •   "
+
+    def __init__(self, label, get_width_chars, tick_ms):
+
+        self.label = label
+        self.get_width_chars = get_width_chars
+        self.tick_ms = tick_ms
+        self.text = None
+        self.timer = None
+
+    def start(self, text):
+
+        self.stop()
+        self.text = text
+
+        width = self.get_width_chars()
+        scroll_text = text + self.SEPARATOR
+        doubled = scroll_text + scroll_text
+        offset = [0]
+
+        self.label.set_max_width_chars(-1)
+        self.label.set_ellipsize(Pango.EllipsizeMode.NONE)
+        self.label.set_overflow(Gtk.Overflow.HIDDEN)
+
+        def tick():
+            start = offset[0] % len(scroll_text)
+            self.label.set_label(doubled[start:start + width])
+            offset[0] += 1
+            return True
+
+        # Fix the width to the widest stretch the ticker will ever show,
+        # so no later tick can grow the card (a size request is only a
+        # minimum).
+        attributes = self.label.get_attributes()
+        widest = 0
+
+        for start in range(len(scroll_text)):
+            layout = self.label.create_pango_layout(doubled[start:start + width])
+            layout.set_attributes(attributes)
+            widest = max(widest, layout.get_pixel_size()[0])
+
+        self.label.set_size_request(widest, -1)
+
+        tick()
+
+        self.timer = GLib.timeout_add(self.tick_ms, tick)
+
+    def stop(self):
+
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.timer = None
+
+        if self.text is not None:
+            self.label.set_size_request(-1, -1)
+            self.label.set_overflow(Gtk.Overflow.VISIBLE)
+            self.label.set_max_width_chars(self.get_width_chars())
+            self.label.set_ellipsize(Pango.EllipsizeMode.END)
+            self.text = None
+
+
 class PresetTreeNode(GObject.Object):
     """A folder or a preset in the preset browser's folder tree."""
 
@@ -416,6 +483,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_album_label.set_visible(False)
         self.now_playing_text_box.append(self.now_playing_album_label)
 
+        self.now_playing_artist_ticker = LineTicker(
+            self.now_playing_artist_label, lambda: self.now_playing_width,
+            self.NOW_PLAYING_SCROLL_TICK_MS
+        )
+        self.now_playing_album_ticker = LineTicker(
+            self.now_playing_album_label, lambda: self.now_playing_width,
+            self.NOW_PLAYING_SCROLL_TICK_MS
+        )
+
         self.now_playing_time_label = Gtk.Label(xalign=0.0)
         self.now_playing_time_label.add_css_class("now-playing-artist")
         self.now_playing_time_label.set_visible(False)
@@ -500,10 +576,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Presets loaded from files (Load Preset…/drag and drop) - for
         # this session only, like before; the files may move or vanish.
         self.user_loaded_presets = []
-        self.user_preset_list_store = None
         self.queue_list_store = None
         self.playlists = self.load_playlists()
-        self.playlists_dialog = None
         self.mirror_windows = []
         self.aux_windows = {}
         self.current_preset_name = None
@@ -1246,11 +1320,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         if info is None:
             self.stop_now_playing_position_timer()
             self.stop_now_playing_title_scroll()
+            self.now_playing_artist_ticker.stop()
+            self.now_playing_album_ticker.stop()
             return
 
         self.update_now_playing_title(info["title"])
-        self.now_playing_artist_label.set_label(info["artist"])
-        self.now_playing_album_label.set_label(info["album"])
+        self.update_now_playing_line(self.now_playing_artist_ticker, info["artist"])
+        self.update_now_playing_line(self.now_playing_album_ticker, info["album"])
 
         self.apply_now_playing_field_visibility()
         self.load_now_playing_art(info["art_url"])
@@ -1452,12 +1528,14 @@ class MelangeWindow(Adw.ApplicationWindow):
     # them the way a fixed pixel width would.
     def apply_now_playing_width(self):
 
-        for label in (
-            self.now_playing_artist_label,
-            self.now_playing_album_label,
-            self.now_playing_time_label
-        ):
-            label.set_max_width_chars(self.now_playing_width)
+        self.now_playing_time_label.set_max_width_chars(self.now_playing_width)
+
+        # Like the title below: a line that's currently scrolling keeps
+        # its ticker's unlimited width (refresh_now_playing_lines
+        # restarts it at the new size).
+        for ticker in (self.now_playing_artist_ticker, self.now_playing_album_ticker):
+            if ticker.text is None:
+                ticker.label.set_max_width_chars(self.now_playing_width)
 
         # The title label is skipped here while it's actively
         # scrolling (part of the "scroll long titles does not work
@@ -1530,6 +1608,33 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if self.now_playing_info is not None:
             self.update_now_playing_title(self.now_playing_info["title"])
+            self.refresh_now_playing_lines()
+
+    # Artist/album: scroll when too long (same Scroll Long Text setting
+    # and fit test as the title), otherwise show statically, shortened
+    # with "…" if needed.
+    def update_now_playing_line(self, ticker, text):
+
+        text = text or ""
+
+        if self.now_playing_scroll_long_titles and text and not self.now_playing_title_fits(text):
+            if text != ticker.text:
+                ticker.start(text)
+        else:
+            ticker.stop()
+            ticker.label.set_label(text)
+
+    def refresh_now_playing_lines(self):
+
+        if self.now_playing_info is None:
+            return
+
+        for ticker, key in (
+            (self.now_playing_artist_ticker, "artist"),
+            (self.now_playing_album_ticker, "album"),
+        ):
+            ticker.stop()
+            self.update_now_playing_line(ticker, self.now_playing_info[key])
 
     # Only (re)starts the scroll if the title actually changed from
     # whatever's currently scrolling - on_now_playing_changed can fire
@@ -1596,6 +1701,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.stop_now_playing_title_scroll()
         self.update_now_playing_title(self.now_playing_info["title"])
+        self.refresh_now_playing_lines()
 
     NOW_PLAYING_SCROLL_TICK_MS = 300
     NOW_PLAYING_SCROLL_SEPARATOR = "   •   "
@@ -2997,7 +3103,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     def build_now_playing_scroll_long_titles_control(self):
 
         return self.build_toggle_row(
-            "Scroll Long Titles",
+            "Scroll Long Text",
             True,
             self.now_playing_scroll_long_titles_changed
         )
@@ -3700,12 +3806,14 @@ class MelangeWindow(Adw.ApplicationWindow):
             "favorites", "Favorites", "starred-symbolic"
         )
         view_stack.add_titled_with_icon(
-            self.build_loaded_presets_tab(),
-            "loaded", "Loaded", "document-open-symbolic"
-        )
-        view_stack.add_titled_with_icon(
             self.build_queue_tab(),
             "queue", "Queue", "view-continuous-symbolic"
+        )
+        # Replaced the Loaded tab: presets loaded from files already
+        # appear in the Presets tree's "Loaded" folder and in search.
+        view_stack.add_titled_with_icon(
+            self.build_playlists_tab(),
+            "playlists", "Playlists", "view-list-bullet-symbolic"
         )
 
         switcher = Adw.InlineViewSwitcher(stack=view_stack)
@@ -3872,8 +3980,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         for button in (
             list_item.favorite_button,
-            list_item.queue_button,
-            list_item.playlist_button,
+            list_item.add_button,
         ):
             button.set_visible(is_preset)
 
@@ -3958,16 +4065,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.build_preset_search_list(self.favorites_list_store)
 
-    # Only presets loaded via win.load-preset (the file picker), not
-    # the bundled packs - session-scoped, see the comment on
-    # self.user_loaded_presets in __init__ for why this deliberately
-    # isn't persisted to disk the way Favorites is.
-    def build_loaded_presets_tab(self):
-
-        self.user_preset_list_store = Gtk.StringList.new(self.user_loaded_presets)
-
-        return self.build_preset_search_list(self.user_preset_list_store)
-
     def preset_row_setup(self, factory, list_item):
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
@@ -3995,19 +4092,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         box.append(favorite_button)
 
-        queue_button = Gtk.Button(icon_name="list-add-symbolic")
+        # One "Add to…" button (was separate Add to Queue and Add to
+        # Playlist… buttons): its menu has Add to Queue first, then the
+        # playlists and New Playlist….
+        add_button = Gtk.Button(icon_name="list-add-symbolic")
 
-        queue_button.add_css_class("flat")
-        queue_button.set_tooltip_text("Add to Queue")
+        add_button.add_css_class("flat")
+        add_button.set_tooltip_text("Add to Queue or Playlist…")
 
-        box.append(queue_button)
-
-        playlist_button = Gtk.Button(icon_name="bookmark-new-symbolic")
-
-        playlist_button.add_css_class("flat")
-        playlist_button.set_tooltip_text("Add to Playlist…")
-
-        box.append(playlist_button)
+        box.append(add_button)
 
         list_item.set_child(box)
 
@@ -4018,10 +4111,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         list_item.preset_label = label
         list_item.favorite_button = favorite_button
         list_item.favorite_button_handler = None
-        list_item.queue_button = queue_button
-        list_item.queue_button_handler = None
-        list_item.playlist_button = playlist_button
-        list_item.playlist_button_handler = None
+        list_item.add_button = add_button
+        list_item.add_button_handler = None
 
     def preset_row_bind(self, factory, list_item):
 
@@ -4044,20 +4135,14 @@ class MelangeWindow(Adw.ApplicationWindow):
             lambda button, n=name: self.favorite_row_clicked(button, n)
         )
 
-        if list_item.queue_button_handler is not None:
-            list_item.queue_button.disconnect(list_item.queue_button_handler)
+        if list_item.add_button_handler is not None:
+            list_item.add_button.disconnect(list_item.add_button_handler)
 
-        list_item.queue_button_handler = list_item.queue_button.connect(
+        list_item.add_button_handler = list_item.add_button.connect(
             "clicked",
-            lambda button: self.enqueue_preset(name)
-        )
-
-        if list_item.playlist_button_handler is not None:
-            list_item.playlist_button.disconnect(list_item.playlist_button_handler)
-
-        list_item.playlist_button_handler = list_item.playlist_button.connect(
-            "clicked",
-            lambda button, n=name: self.open_add_to_playlist_popover(button, n)
+            lambda button, n=name: self.open_add_to_playlist_popover(
+                button, n, include_queue=True
+            )
         )
 
     def favorite_row_clicked(self, button, name):
@@ -4432,12 +4517,9 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def show_playlists_clicked(self, action, param):
 
-        if self.playlists_dialog is None:
-            self.build_playlists_dialog()
+        self.show_sidebar_section("presets", tab="playlists")
 
-        self.playlists_dialog.present(self)
-
-    def build_playlists_dialog(self):
+    def build_playlists_tab(self):
 
         self.playlists_group = Adw.PreferencesGroup()
 
@@ -4445,7 +4527,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             title="Save Current Queue as Playlist…",
             activatable=True
         )
-
         save_row.connect("activated", self.save_playlist_clicked)
         save_row.add_suffix(
             Gtk.Image.new_from_icon_name("document-save-symbolic")
@@ -4453,10 +4534,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.playlists_group.add(save_row)
 
-        # Tracked separately from save_row, same reasoning as
-        # profile_rows in build_profiles_page - a refresh needs to
-        # remove exactly the playlist rows, not the always-present
-        # save row above them.
         self.playlist_rows = []
         self.refresh_playlists_list()
 
@@ -4471,17 +4548,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         scrolled.set_child(clamp)
         scrolled.set_vexpand(True)
 
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(Adw.HeaderBar())
-        toolbar_view.set_content(scrolled)
-
-        dialog = Adw.Dialog()
-        dialog.set_title("Playlists")
-        dialog.set_content_width(420)
-        dialog.set_content_height(480)
-        dialog.set_child(toolbar_view)
-
-        self.playlists_dialog = dialog
+        return scrolled
 
     def build_playlist_row(self, playlist):
 
@@ -4778,10 +4845,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def refresh_playlists_list(self):
 
-        # May be called before the Playlists dialog has ever been
-        # built (e.g. from the new per-row "add to playlist" button) -
-        # nothing to refresh yet in that case.
-        if self.playlists_dialog is None:
+        # May be called before the Playlists tab has been built.
+        if getattr(self, "playlists_group", None) is None:
             return
 
         for row in self.playlist_rows:
@@ -4958,7 +5023,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         for store, items in (
             (self.preset_list_store, self.preset_names),
             (self.favorites_list_store, self.favorites),
-            (self.user_preset_list_store, self.user_loaded_presets),
             (self.queue_list_store, self.preset_queue),
         ):
             if store is not None:
