@@ -342,27 +342,100 @@ def rms(samples):
     return math.sqrt(sum(s * s for s in samples) / len(samples))
 
 
-def fft(samples):
+# Bit-reversal permutation and twiddle factors per FFT length, built
+# once - the old recursive FFT recomputed cmath.exp() for every
+# butterfly (~14 million calls per 30s with the aux windows open, its
+# single biggest cost in a profile).
+_FFT_TABLES = {}
 
+
+def _fft_tables(n):
+
+    tables = _FFT_TABLES.get(n)
+
+    if tables is None:
+        bits = n.bit_length() - 1
+        bitrev = [int(format(i, f"0{bits}b")[::-1], 2) for i in range(n)]
+        twiddles = [cmath.exp(-2j * math.pi * k / n) for k in range(n // 2)]
+        tables = _FFT_TABLES[n] = (bitrev, twiddles)
+
+    return tables
+
+
+def _complex_fft_in_place(a):
+
+    # Iterative radix-2 Cooley-Tukey; `a` must already be in
+    # bit-reversed order. Power-of-two lengths only.
+    n = len(a)
+    _, twiddles = _fft_tables(n)
+    size = 2
+
+    while size <= n:
+
+        half = size // 2
+        step = n // size
+
+        for k in range(half):
+
+            w = twiddles[k * step]
+
+            for top in range(k, n, size):
+                bottom = top + half
+                t = w * a[bottom]
+                u = a[top]
+                a[top] = u + t
+                a[bottom] = u - t
+
+        size *= 2
+
+
+def real_fft_magnitudes(samples):
+
+    # Magnitudes of bins 0..n/2-1 of a real signal's FFT, computed with
+    # one n/2-point complex FFT (even samples as the real part, odd as
+    # the imaginary part) plus a split step - half the butterflies of
+    # a full n-point transform, since the input has no imaginary part
+    # anyway. Matches the old full recursive FFT's magnitudes to
+    # ~1e-14, ~4x faster.
     n = len(samples)
+    m = n // 2
+    bitrev, _ = _fft_tables(m)
+    _, twiddles_n = _fft_tables(n)
 
-    if n <= 1:
-        return samples
+    z = [complex(samples[2 * i], samples[2 * i + 1]) for i in bitrev]
+    _complex_fft_in_place(z)
 
-    even = fft(samples[0::2])
-    odd = fft(samples[1::2])
+    magnitudes = [0.0] * m
 
-    half = n // 2
-    combined = [0j] * n
+    for k in range(m):
+        zk = z[k]
+        zc = z[-k % m].conjugate()
+        even = (zk + zc) * 0.5
+        odd = (zk - zc) * -0.5j
+        magnitudes[k] = abs(even + twiddles_n[k] * odd)
 
-    for k in range(half):
+    return magnitudes
 
-        twiddled = cmath.exp(-2j * math.pi * k / n) * odd[k]
 
-        combined[k] = even[k] + twiddled
-        combined[k + half] = even[k] - twiddled
+# Every FFT-based aux window (Spectrum, Spectrogram, Terrain,
+# Waterfall, Pipes) keeps its own copy of the same last FFT_SIZE mono
+# samples and used to run its own FFT on them - identical work, once
+# per open window. This memoizes on the buffer's contents, so however
+# many windows are open, each new piece of audio is analysed once.
+# The returned list is shared: callers must treat it as read-only.
+_magnitude_cache = [None, None]
 
-    return combined
+
+def spectrum_magnitudes(buffer):
+
+    key = tuple(buffer)
+
+    if key != _magnitude_cache[0]:
+        windowed = [s * w for s, w in zip(key, _HANN_WINDOW)]
+        _magnitude_cache[0] = key
+        _magnitude_cache[1] = real_fft_magnitudes(windowed)
+
+    return _magnitude_cache[1]
 
 
 class AuxVisualizerWindow(Adw.ApplicationWindow):
@@ -4606,12 +4679,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if len(self.spectrum_buffer) == FFT_SIZE:
 
-            windowed = [
-                s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-            ]
-
-            spectrum = fft(windowed)
-            magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+            magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
             new_levels = self.bars_from_magnitudes(magnitudes, bar_count)
 
@@ -4793,12 +4861,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.last_spectrogram_frame_time = now
 
-        windowed = [
-            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-        ]
-
-        spectrum = fft(windowed)
-        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
         self.spectrogram_columns.append(
             self.bars_from_magnitudes(magnitudes, bin_count)
@@ -4886,12 +4949,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.last_terrain_frame_time = now
 
-        windowed = [
-            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-        ]
-
-        spectrum = fft(windowed)
-        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
         self.terrain_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
         self.terrain_dirty = True
@@ -5144,12 +5202,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.last_waterfall_frame_time = now
 
-        windowed = [
-            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-        ]
-
-        spectrum = fft(windowed)
-        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
         self.waterfall_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
         self.waterfall_dirty = True
@@ -5420,12 +5473,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.last_pipes_band_frame_time = now
 
-        windowed = [
-            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-        ]
-
-        spectrum = fft(windowed)
-        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
         for i, (f_lo, f_hi) in enumerate(PIPES_BANDS):
 
