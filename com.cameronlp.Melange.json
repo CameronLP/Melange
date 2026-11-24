@@ -55,6 +55,42 @@
             ]
         },
         {
+            "name" : "projectm-presets",
+            "buildsystem" : "simple",
+            "build-commands" : [
+                "python3 pack_presets.py . /app/share/melange/projectm-presets.zip",
+                "install -Dm644 LICENSE.md /app/share/melange/projectm-presets-LICENSE.md",
+                "install -Dm644 README.md /app/share/melange/projectm-presets-README.md"
+            ],
+            "sources" : [
+                {
+                    "type" : "archive",
+                    "url" : "https://github.com/projectM-visualizer/presets-cream-of-the-crop/archive/0180df21f5e0bd39b9060cc5de420ed2f1f9e509.tar.gz",
+                    "sha256" : "77ef8e527fb00343afdfb267f5a2e8d3d00430c563ca9f5ab2104fc306f5c674"
+                },
+                {
+                    "type" : "file",
+                    "path" : "flatpak/pack_presets.py"
+                }
+            ]
+        },
+        {
+            "name" : "projectm-textures",
+            "buildsystem" : "simple",
+            "build-commands" : [
+                "install -d /app/share/melange/projectm-textures",
+                "cp -r textures/. /app/share/melange/projectm-textures/",
+                "install -m644 README.md /app/share/melange/projectm-textures/"
+            ],
+            "sources" : [
+                {
+                    "type" : "archive",
+                    "url" : "https://github.com/projectM-visualizer/presets-milkdrop-texture-pack/archive/6368812f27bc747b517218fbf89d21d59afce4d9.tar.gz",
+                    "sha256" : "6e6ea0a0363334a79cf15e5c79115e1b99a24993c4238f14d222d9eea91c52b7"
+                }
+            ]
+        },
+        {
             "name" : "melange",
             "builddir" : true,
             "buildsystem" : "meson",

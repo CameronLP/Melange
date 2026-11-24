@@ -38,6 +38,7 @@ from melange.mirror_window import MirrorWindow
 from melange.aux_window import AuxVisualizerWindow
 from melange.now_playing import NowPlayingWatcher
 from melange import projectm_view
+from melange.preset_manager import PresetManager
 
 # key -> (halign, valign) - "top-*"/"bottom-*" pick valign, the second
 # word picks halign, same convention as the label text.
@@ -69,6 +70,28 @@ AUX_WINDOW_ACTIONS = {
 }
 
 Gst.init(None)
+
+RENDERERS = ("butterchurn", "projectm")
+
+
+class PresetTreeNode(GObject.Object):
+    """A folder or a preset in the preset browser's folder tree."""
+
+    __gtype_name__ = "MelangePresetTreeNode"
+
+    def __init__(self, title, preset_name=None, children=None):
+
+        super().__init__()
+
+        self.title = title
+        self.preset_name = preset_name  # None for a folder
+        self.children = children or []
+
+# Defaults shared by both renderers' PresetManagers - must match the
+# Preferences controls' own defaults (Cycle Interval 30s, no jitter,
+# Shuffle on, Transition Blend Time 3s).
+DEFAULT_CYCLE_SECONDS = 30.0
+DEFAULT_BLEND_SECONDS = 3.0
 
 # Upper bound on captured audio waiting for the main thread: 0.25s of
 # 44.1kHz stereo S16. Anything older is dropped - the visualizers only
@@ -189,6 +212,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.visualizer_stack = Gtk.Stack()
         self.visualizer_stack.add_named(self.webview, "butterchurn")
         webview_overlay.set_child(self.visualizer_stack)
+
+        # Dropping .milk/.json files onto the visualizer loads them,
+        # same as Load Preset…. Capture phase so the drop reaches this
+        # before the webview, which would otherwise try to open the
+        # file as a page.
+        drop_target = Gtk.DropTarget.new(Gdk.FileList, Gdk.DragAction.COPY)
+        drop_target.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        drop_target.connect("drop", self.on_files_dropped)
+        webview_overlay.add_controller(drop_target)
 
         self.projectm_view = None
         self.projectm_active = False
@@ -435,28 +467,52 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pactl_event_timer = None
         self.webview_ready = False
         self.preset_locked = False
-        self.preset_names = []
         self.preset_list_store = None
         self.preset_browser_dialog = None
         self.browser_view_stack = None
-        self.favorites = self.load_favorites()
+        # Favorites, playlists and loaded presets are kept per renderer
+        # (projectM's presets are different files with different names),
+        # each in its own file - see favorites/playlists properties.
+        self.renderer_favorites = {r: self.load_favorites(r) for r in RENDERERS}
         self.favorites_list_store = None
         # Session-scoped only, unlike favorites - a loaded preset's
         # actual content only ever lives in the webview's own runtime
         # state (JS's resolvedPresets Map), never written to disk, so
         # persisting just the *name* here across restarts would list
         # entries that fail to resolve/load the moment they're picked.
-        self.user_loaded_presets = []
+        self.renderer_user_presets = {r: [] for r in RENDERERS}
         self.user_preset_list_store = None
-        self.pending_loaded_preset_name = None
-        self.preset_queue = []
+        # Butterchurn file loads still waiting for the page to confirm
+        # them (PRESET_LIST:) - several at once when files are dropped.
+        self.pending_loaded_preset_names = set()
         self.queue_list_store = None
-        self.playlists = self.load_playlists()
+        self.renderer_playlists = {r: self.load_playlists(r) for r in RENDERERS}
         self.playlists_dialog = None
         self.mirror_windows = []
         self.aux_windows = {}
         self.current_preset_name = None
         self.current_playlist_name = None
+
+        # Preset navigation (history, queue, shuffle, auto-cycle) for
+        # each renderer - see preset_manager.py. Butterchurn's catalog
+        # comes from the page (PRESET_LIST:), projectM's from the
+        # bundled .milk files when it's first enabled.
+        self.butterchurn_presets = PresetManager(
+            show=self.show_butterchurn_preset,
+            on_queue_changed=lambda queue: self.on_preset_queue_changed(
+                self.butterchurn_presets
+            )
+        )
+        self.projectm_presets = PresetManager(
+            show=self.show_projectm_preset,
+            on_queue_changed=lambda queue: self.on_preset_queue_changed(
+                self.projectm_presets
+            )
+        )
+        self.projectm_paths = {}
+
+        for manager in (self.butterchurn_presets, self.projectm_presets):
+            manager.set_cycle_interval(DEFAULT_CYCLE_SECONDS)
 
         # Never reused, even as mirrors close - so "Mirror 2" still
         # means the same window it always did rather than shifting
@@ -905,10 +961,17 @@ class MelangeWindow(Adw.ApplicationWindow):
     def on_webview_debug_message(self, text):
 
         if text.startswith("PRESET_NAME:"):
+            name = text[len("PRESET_NAME:"):]
+
+            # The page's own startup preset becomes the start of
+            # Butterchurn's history.
+            if self.butterchurn_presets.current is None:
+                self.butterchurn_presets.set_current_without_showing(name)
+
             # Butterchurn keeps running hidden while projectM is shown;
             # its preset changes mustn't overwrite projectM's title.
             if not self.projectm_active:
-                self.set_current_preset_name(text[len("PRESET_NAME:"):])
+                self.set_current_preset_name(name)
             return
 
         # A failed Load Preset (bad MilkDrop conversion, invalid
@@ -918,7 +981,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         if text.startswith("LOAD_PRESET_ERROR:"):
             reason = text[len("LOAD_PRESET_ERROR:"):]
             self.show_toast(f"Couldn't load preset: {reason}")
-            self.pending_loaded_preset_name = None
             return
 
         # The actual preset names only exist in JS (from
@@ -936,48 +998,33 @@ class MelangeWindow(Adw.ApplicationWindow):
             # PRESET_LIST: re-announcement) via that one success path
             # in loadPresetFile, so genuinely new + previously pending
             # is enough to confirm it rather than guess.
-            if (
-                self.pending_loaded_preset_name
-                and self.pending_loaded_preset_name not in self.preset_names
-                and self.pending_loaded_preset_name in new_names
-                and self.pending_loaded_preset_name not in self.user_loaded_presets
-            ):
-                self.user_loaded_presets.append(self.pending_loaded_preset_name)
+            butterchurn_loaded = self.renderer_user_presets["butterchurn"]
+            confirmed = [
+                name for name in self.pending_loaded_preset_names
+                if name in new_names and not self.butterchurn_presets.contains(name)
+            ]
 
-                if self.user_preset_list_store is not None:
-                    self.user_preset_list_store.splice(
-                        0,
-                        self.user_preset_list_store.get_n_items(),
-                        self.user_loaded_presets
-                    )
+            for name in confirmed:
+                self.pending_loaded_preset_names.discard(name)
 
-            self.pending_loaded_preset_name = None
-            self.preset_names = new_names
+                if name not in butterchurn_loaded:
+                    butterchurn_loaded.append(name)
 
-            if self.preset_list_store is not None:
-                self.preset_list_store.splice(
-                    0,
-                    self.preset_list_store.get_n_items(),
-                    self.preset_names
-                )
+            self.butterchurn_presets.set_catalog(new_names)
+
+            # The page already switched to the loaded preset itself -
+            # just record it in history.
+            for name in confirmed:
+                self.butterchurn_presets.go_to(name, show=False)
+
+            if not self.projectm_active:
+                self.refresh_preset_lists()
 
             return
 
-        # JS owns presetQueue - this is Python's copy, used to build
-        # the queue dialog's list. Python never mutates it directly,
-        # only calls enqueuePreset/removeQueueItem/moveQueueItem and
-        # reflects back whatever announceQueue() reports here, same
-        # pattern as PRESET_LIST: above.
+        # The queue lives in Python now (PresetManager); the page's own
+        # queue is unused, so its announcements are ignored.
         if text.startswith("QUEUE:"):
-            self.preset_queue = json.loads(text[len("QUEUE:"):])
-
-            if self.queue_list_store is not None:
-                self.queue_list_store.splice(
-                    0,
-                    self.queue_list_store.get_n_items(),
-                    self.preset_queue
-                )
-
             return
 
         # Sent by the cycle timer (main.js scheduleCycleTick) instead
@@ -985,9 +1032,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         # native toast it shows) lives in one place regardless of
         # whether a change was requested via auto-cycling or the
         # win.next-preset keyboard shortcut/GTK nav arrow.
+        # Auto-cycling is driven by PresetManager now; the page's own
+        # cycle timer is switched off at APP_READY.
         if text == "NAV_NEXT":
-            if not self.projectm_active:
-                self.next_preset(None)
             return
 
         # Distinct from NAV_NEXT so a beat-triggered advance is
@@ -1015,6 +1062,10 @@ class MelangeWindow(Adw.ApplicationWindow):
             return
 
         self.webview_ready = True
+
+        # The page starts its own cycle timer; cycling is Python's job.
+        self.run_js("setCycleInterval(0);")
+        self.butterchurn_presets.set_active(not self.projectm_active)
 
         # Setting the action's initial state in new_stateful() only
         # sets its internal value - it does not fire "change-state"
@@ -2338,9 +2389,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         # a preset *change* actually happening.
         self.cycling_group.set_sensitive(not self.preset_locked)
 
-        self.run_js(
-            f"setCyclePaused({'true' if self.preset_locked else 'false'});"
-        )
+        for manager in (self.butterchurn_presets, self.projectm_presets):
+            manager.set_cycle_paused(self.preset_locked)
 
         self.show_toast(
             "Preset locked" if self.preset_locked else "Preset unlocked"
@@ -2352,7 +2402,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         enabled = value.get_boolean()
 
-        self.run_js(f"setShuffle({'true' if enabled else 'false'});")
+        for manager in (self.butterchurn_presets, self.projectm_presets):
+            manager.set_shuffle(enabled)
 
         self.show_toast(
             "Shuffle on" if enabled else "Shuffle off"
@@ -2364,7 +2415,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         enabled = value.get_boolean()
 
-        self.run_js(f"setQueueLoop({'true' if enabled else 'false'});")
+        for manager in (self.butterchurn_presets, self.projectm_presets):
+            manager.set_queue_loop(enabled)
 
         self.show_toast(
             "Queue loop on" if enabled else "Queue loop off"
@@ -2376,7 +2428,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         enabled = value.get_boolean()
 
-        self.run_js(f"setQueueShuffle({'true' if enabled else 'false'});")
+        for manager in (self.butterchurn_presets, self.projectm_presets):
+            manager.set_queue_shuffle(enabled)
 
         self.show_toast(
             "Queue shuffle on" if enabled else "Queue shuffle off"
@@ -2434,7 +2487,10 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Cycle Interval",
             0.0, 120.0, 1.0, 30.0,
             format_cycle_interval,
-            lambda value: self.run_js(f"setCycleInterval({value});"),
+            lambda value: [
+                m.set_cycle_interval(value)
+                for m in (self.butterchurn_presets, self.projectm_presets)
+            ],
             store_as="cycle_interval_scale"
         )
 
@@ -2447,7 +2503,10 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Cycle Interval Jitter",
             0.0, 50.0, 5.0, 0.0,
             format_cycle_jitter,
-            lambda value: self.run_js(f"setCycleJitter({value});"),
+            lambda value: [
+                m.set_cycle_jitter(value)
+                for m in (self.butterchurn_presets, self.projectm_presets)
+            ],
             store_as="cycle_jitter_scale"
         )
 
@@ -2460,7 +2519,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Transition Blend Time",
             0.0, 10.0, 0.5, 3.0,
             format_blend_time,
-            lambda value: self.run_js(f"setBlendTime({value});"),
+            self.set_blend_time,
             store_as="blend_time_scale"
         )
 
@@ -3154,8 +3213,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             title="Renderer",
             description=(
                 "Native MilkDrop rendering with libprojectM instead of "
-                "Butterchurn. Uses a starter set of 100 presets. The "
-                "preset browser, favorites, queue, playlists, beat-driven "
+                "Butterchurn, using a starter set of 100 presets. It has "
+                "its own favorites, queue and playlists. Beat-driven "
                 "cycling and most Rendering settings don't apply to it yet."
             )
         )
@@ -3497,7 +3556,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     # Shared by the Presets and Favorites tabs - same search/filter/
     # row-rendering behavior, only the backing Gtk.StringList differs.
-    def build_preset_search_list(self, list_store):
+    def build_preset_search_list(self, list_store, with_tree=False):
 
         expression = Gtk.PropertyExpression.new(
             Gtk.StringObject,
@@ -3535,6 +3594,26 @@ class MelangeWindow(Adw.ApplicationWindow):
             lambda entry: string_filter.set_search(entry.get_text())
         )
 
+        # The Presets tab can also show the active renderer's presets
+        # as a folder tree (projectM's collection is organised in
+        # Category/Subfolder folders); the flat list is still used for
+        # searching and for renderers without folders.
+        if with_tree:
+            page_stack = Gtk.Stack()
+            page_stack.add_named(scrolled, "flat")
+            page_stack.add_named(self.build_preset_tree_view(), "tree")
+            page_stack.set_vexpand(True)
+
+            self.preset_page_stack = page_stack
+            self.preset_search_entry = search_entry
+
+            search_entry.connect(
+                "search-changed",
+                lambda entry: self.update_preset_browser_page()
+            )
+
+            scrolled = page_stack
+
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.set_margin_start(12)
         box.set_margin_end(12)
@@ -3550,7 +3629,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.preset_list_store = Gtk.StringList.new(self.preset_names)
 
-        box = self.build_preset_search_list(self.preset_list_store)
+        box = self.build_preset_search_list(self.preset_list_store, with_tree=True)
+        self.refresh_preset_tree()
 
         # Moved here from the hamburger menu on request ("Load preset
         # should be in the preset tab") - same win.load-preset action,
@@ -3568,6 +3648,146 @@ class MelangeWindow(Adw.ApplicationWindow):
         box.append(load_button)
 
         return box
+
+    def build_preset_tree_view(self):
+
+        self.preset_tree_root = Gio.ListStore(item_type=PresetTreeNode)
+
+        def create_children(node):
+
+            if not node.children:
+                return None
+
+            store = Gio.ListStore(item_type=PresetTreeNode)
+            store.splice(0, 0, node.children)
+
+            return store
+
+        tree_model = Gtk.TreeListModel.new(
+            self.preset_tree_root, False, False, create_children
+        )
+
+        factory = Gtk.SignalListItemFactory()
+        factory.connect("setup", self.preset_tree_row_setup)
+        factory.connect("bind", self.preset_tree_row_bind)
+
+        list_view = Gtk.ListView.new(Gtk.SingleSelection.new(tree_model), factory)
+        list_view.connect("activate", self.preset_tree_row_activated)
+
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.set_child(list_view)
+        scrolled.set_vexpand(True)
+
+        return scrolled
+
+    def preset_tree_row_setup(self, factory, list_item):
+
+        # Same row as the flat lists, inside a TreeExpander.
+        self.preset_row_setup(factory, list_item)
+
+        row_box = list_item.get_child()
+        list_item.set_child(None)
+
+        expander = Gtk.TreeExpander()
+        expander.set_child(row_box)
+
+        list_item.set_child(expander)
+        list_item.tree_expander = expander
+
+    def preset_tree_row_bind(self, factory, list_item):
+
+        tree_row = list_item.get_item()
+        node = tree_row.get_item()
+
+        list_item.tree_expander.set_list_row(tree_row)
+
+        is_preset = node.preset_name is not None
+
+        for button in (
+            list_item.favorite_button,
+            list_item.queue_button,
+            list_item.playlist_button,
+        ):
+            button.set_visible(is_preset)
+
+        if is_preset:
+            self.bind_preset_row(list_item, node.preset_name)
+        else:
+            list_item.preset_label.set_label(node.title)
+
+    def preset_tree_row_activated(self, list_view, position):
+
+        tree_row = list_view.get_model().get_item(position)
+        node = tree_row.get_item()
+
+        if node.preset_name is None:
+            tree_row.set_expanded(not tree_row.get_expanded())
+            return
+
+        self.presets.go_to(node.preset_name)
+        self.preset_browser_dialog.close()
+
+    # Folder tree for the active renderer, or None if it has no folders
+    # (Butterchurn's packs are flat).
+    def build_preset_tree_nodes(self):
+
+        if not self.projectm_active:
+            return None
+
+        root = {}
+
+        for name in self.projectm_presets.catalog:
+            folders = projectm_view.preset_folders(self.projectm_paths[name]) or ("Loaded",)
+            level = root
+
+            for folder in folders:
+                level = level.setdefault(folder, {})
+
+            level.setdefault(None, []).append(name)
+
+        def to_nodes(level):
+
+            folders = sorted(key for key in level if key is not None)
+            nodes = []
+
+            for folder in folders:
+                children = to_nodes(level[folder])
+                count = count_presets(level[folder])
+                nodes.append(PresetTreeNode(f"{folder} ({count})", children=children))
+
+            for name in sorted(level.get(None, []), key=str.casefold):
+                nodes.append(PresetTreeNode(name, preset_name=name))
+
+            return nodes
+
+        def count_presets(level):
+
+            return len(level.get(None, [])) + sum(
+                count_presets(sub) for key, sub in level.items() if key is not None
+            )
+
+        return to_nodes(root)
+
+    def refresh_preset_tree(self):
+
+        if getattr(self, "preset_tree_root", None) is None:
+            return
+
+        nodes = self.build_preset_tree_nodes() or []
+        self.preset_tree_root.splice(0, self.preset_tree_root.get_n_items(), nodes)
+        self.update_preset_browser_page()
+
+    def update_preset_browser_page(self):
+
+        stack = getattr(self, "preset_page_stack", None)
+
+        if stack is None:
+            return
+
+        searching = bool(self.preset_search_entry.get_text())
+        has_tree = self.preset_tree_root.get_n_items() > 0
+
+        stack.set_visible_child_name("tree" if has_tree and not searching else "flat")
 
     def build_favorites_tab(self):
 
@@ -3642,8 +3862,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def preset_row_bind(self, factory, list_item):
 
-        string_object = list_item.get_item()
-        name = string_object.get_string()
+        self.bind_preset_row(list_item, list_item.get_item().get_string())
+
+    # Shared by the flat lists and the folder tree's preset rows.
+    def bind_preset_row(self, list_item, name):
 
         list_item.preset_label.set_label(name)
 
@@ -3692,17 +3914,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         string_object = list_view.get_model().get_item(position)
         name = string_object.get_string()
 
-        if self.projectm_active:
-            self.show_toast("The preset browser doesn't work with the projectM renderer yet")
-            return
-
-        self.run_js(f"loadPresetByName({json.dumps(name)});")
+        self.presets.go_to(name)
 
         self.preset_browser_dialog.close()
 
     def enqueue_preset(self, name):
 
-        self.run_js(f"enqueuePreset({json.dumps(name)});")
+        self.presets.enqueue(name)
         self.show_toast(f"Added to queue: {name}")
 
     def show_queue_clicked(self, action, param):
@@ -3908,31 +4126,34 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def move_queue_item(self, position, delta):
 
-        self.run_js(f"moveQueueItem({position}, {delta});")
+        self.presets.move_queue_item(position, delta)
 
     def reorder_queue_item(self, from_position, to_position):
 
         if from_position == to_position:
             return True
 
-        self.run_js(f"moveQueueItemTo({from_position}, {to_position});")
+        self.presets.move_queue_item_to(from_position, to_position)
 
         return True
 
     def remove_queue_item(self, position):
 
-        self.run_js(f"removeQueueItem({position});")
+        self.presets.remove_queue_item(position)
 
-    def playlists_file_path(self):
+    def playlists_file_path(self, renderer=None):
 
         config_dir = Path(GLib.get_user_config_dir()) / "melange"
         config_dir.mkdir(parents=True, exist_ok=True)
 
-        return config_dir / "playlists.json"
+        renderer = renderer or self.active_renderer
+        prefix = "" if renderer == "butterchurn" else f"{renderer}-"
 
-    def load_playlists(self):
+        return config_dir / f"{prefix}playlists.json"
 
-        path = self.playlists_file_path()
+    def load_playlists(self, renderer):
+
+        path = self.playlists_file_path(renderer)
 
         if not path.exists():
             return []
@@ -3952,16 +4173,19 @@ class MelangeWindow(Adw.ApplicationWindow):
         except OSError as e:
             print("Failed to save playlists:", e)
 
-    def favorites_file_path(self):
+    def favorites_file_path(self, renderer=None):
 
         config_dir = Path(GLib.get_user_config_dir()) / "melange"
         config_dir.mkdir(parents=True, exist_ok=True)
 
-        return config_dir / "favorites.json"
+        renderer = renderer or self.active_renderer
+        prefix = "" if renderer == "butterchurn" else f"{renderer}-"
 
-    def load_favorites(self):
+        return config_dir / f"{prefix}favorites.json"
 
-        path = self.favorites_file_path()
+    def load_favorites(self, renderer):
+
+        path = self.favorites_file_path(renderer)
 
         if not path.exists():
             return []
@@ -4207,11 +4431,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         if playlist is None:
             return
 
-        # setQueue (JS) replaces the queue wholesale, then reports back
-        # via announceQueue()/QUEUE: same as every other queue mutation
-        # - Python's self.preset_queue and queue_list_store update from
-        # that round trip, not directly here.
-        self.run_js(f"setQueue({json.dumps(playlist['presets'])});")
+        # Replaces the queue wholesale (names not in the active
+        # renderer's catalog are dropped); the queue dialog updates via
+        # on_preset_queue_changed.
+        self.presets.set_queue(playlist["presets"])
 
         self.current_playlist_name = name
         self.set_title(self.build_window_title())
@@ -4447,27 +4670,94 @@ class MelangeWindow(Adw.ApplicationWindow):
             print("Load preset cancelled/failed:", e)
             return
 
-        ok, contents, etag = gfile.load_contents(None)
+        self.load_preset_file(gfile)
+
+    # Shared by Load Preset… and dropping files onto the window.
+    def load_preset_file(self, gfile):
+
+        name = gfile.get_basename() or "preset"
+
+        if self.projectm_active:
+            return self.load_projectm_preset_file(gfile)
+
+        try:
+            ok, contents, etag = gfile.load_contents(None)
+        except GLib.Error as e:
+            print("Failed to read preset file:", e)
+            ok = False
 
         if not ok:
-            print("Failed to read preset file:", gfile.get_path())
-            return
+            self.show_toast(f"Couldn't read {name}")
+            return False
 
         # Base64, not a plain string substitution - MilkDrop preset
         # text is full of quotes/backslashes/newlines that aren't safe
         # to embed directly in a JS string literal.
         encoded = base64.b64encode(contents).decode("ascii")
-        name = gfile.get_basename()
 
         # Confirmed successful (or not) in on_webview_debug_message's
         # own PRESET_LIST:/LOAD_PRESET_ERROR: handling - this call
         # site only knows the load was *dispatched*, not that it
         # actually parsed/converted successfully on the JS side.
-        self.pending_loaded_preset_name = name
+        self.pending_loaded_preset_names.add(name)
 
         self.run_js(
             f"loadPresetFile({json.dumps(encoded)}, {json.dumps(name)});"
         )
+
+        return True
+
+    # projectM loads .milk files directly from their path; a load that
+    # fails is reported through on_projectm_preset_failed. Like
+    # Butterchurn's, loaded presets last for the session only.
+    def load_projectm_preset_file(self, gfile):
+
+        path = gfile.get_path()
+        basename = gfile.get_basename() or "preset"
+
+        if path is None or not basename.lower().endswith(".milk"):
+            self.show_toast("The projectM renderer can only load .milk presets")
+            return False
+
+        name = Path(basename).stem
+
+        if self.projectm_paths.get(name) not in (None, Path(path)):
+            name = f"{name} (loaded)"
+
+        self.projectm_paths[name] = Path(path)
+
+        if not self.projectm_presets.contains(name):
+            self.projectm_presets.set_catalog(
+                self.projectm_presets.catalog + [name]
+            )
+
+        loaded = self.renderer_user_presets["projectm"]
+
+        if name not in loaded:
+            loaded.append(name)
+
+        self.refresh_preset_lists()
+        self.projectm_presets.go_to(name)
+
+        return True
+
+    def on_files_dropped(self, drop_target, value, x, y):
+
+        files = [
+            f for f in value.get_files()
+            if (f.get_basename() or "").lower().endswith((".milk", ".json"))
+        ]
+
+        if not files:
+            self.show_toast("Drop .milk or .json preset files to load them")
+            return False
+
+        loaded = sum(1 for f in files if self.load_preset_file(f))
+
+        if loaded > 1:
+            self.show_toast(f"Loading {loaded} presets")
+
+        return loaded > 0
 
     def next_preset(self, button):
 
@@ -4475,11 +4765,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.show_toast("Preset is locked")
             return
 
-        if self.projectm_active:
-            self.projectm_view.next_preset()
-            return
-
-        self.run_js("nextPreset();")
+        self.presets.next()
 
     def previous_preset(self, button):
 
@@ -4487,11 +4773,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.show_toast("Preset is locked")
             return
 
-        if self.projectm_active:
-            self.projectm_view.previous_preset()
-            return
-
-        self.run_js("previousPreset();")
+        self.presets.previous()
 
     def set_current_preset_name(self, name):
 
@@ -4509,14 +4791,111 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.webview
 
-    def projectm_cycle_seconds(self):
+    # --- renderers --------------------------------------------------------
 
-        if self.preset_locked:
-            return 0
+    @property
+    def active_renderer(self):
 
-        scale = getattr(self, "cycle_interval_scale", None)
+        return "projectm" if self.projectm_active else "butterchurn"
 
-        return scale.get_value() if scale is not None else 30.0
+    # The active renderer's PresetManager - everything that navigates or
+    # edits the queue goes through this.
+    @property
+    def presets(self):
+
+        return self.projectm_presets if self.projectm_active else self.butterchurn_presets
+
+    @property
+    def preset_names(self):
+
+        return self.presets.catalog
+
+    @property
+    def preset_queue(self):
+
+        return self.presets.queue
+
+    @property
+    def favorites(self):
+
+        return self.renderer_favorites[self.active_renderer]
+
+    @favorites.setter
+    def favorites(self, value):
+
+        self.renderer_favorites[self.active_renderer] = value
+
+    @property
+    def playlists(self):
+
+        return self.renderer_playlists[self.active_renderer]
+
+    @playlists.setter
+    def playlists(self, value):
+
+        self.renderer_playlists[self.active_renderer] = value
+
+    @property
+    def user_loaded_presets(self):
+
+        return self.renderer_user_presets[self.active_renderer]
+
+    def show_butterchurn_preset(self, name):
+
+        self.run_js(f"loadPresetByName({json.dumps(name)});")
+
+    def show_projectm_preset(self, name):
+
+        path = self.projectm_paths.get(name)
+
+        if path is None:
+            return
+
+        self.projectm_view.load_preset(path)
+        self.set_current_preset_name(name)
+
+    def on_projectm_preset_failed(self, preset, reason):
+
+        name = next(
+            (n for n, p in self.projectm_paths.items() if p == preset),
+            getattr(preset, "stem", str(preset))
+        )
+
+        self.show_toast(f"Couldn't load preset: {name}")
+
+        if self.projectm_active and not self.preset_locked:
+            self.projectm_presets.next()
+
+    def set_blend_time(self, seconds):
+
+        self.run_js(f"setBlendTime({seconds});")
+
+        if self.projectm_view is not None:
+            self.projectm_view.set_transition_seconds(seconds)
+
+    def on_preset_queue_changed(self, manager):
+
+        if manager is self.presets and self.queue_list_store is not None:
+            self.queue_list_store.splice(
+                0, self.queue_list_store.get_n_items(), manager.queue
+            )
+
+    # Re-fill every preset list UI from the active renderer's data -
+    # after a renderer switch or a catalog change.
+    def refresh_preset_lists(self):
+
+        for store, items in (
+            (self.preset_list_store, self.preset_names),
+            (self.favorites_list_store, self.favorites),
+            (self.user_preset_list_store, self.user_loaded_presets),
+            (self.queue_list_store, self.preset_queue),
+        ):
+            if store is not None:
+                store.splice(0, store.get_n_items(), items)
+
+        self.refresh_preset_tree()
+        self.refresh_playlists_list()
+        self.update_favorite_button_icon()
 
     def set_projectm_renderer(self, enabled):
 
@@ -4535,32 +4914,44 @@ class MelangeWindow(Adw.ApplicationWindow):
 
             if self.projectm_view is None:
                 self.projectm_view = projectm_view.ProjectMView(
-                    on_preset_changed=self.set_current_preset_name,
-                    get_cycle_seconds=self.projectm_cycle_seconds
+                    on_preset_failed=self.on_projectm_preset_failed
+                )
+                self.projectm_view.set_transition_seconds(
+                    self.blend_time_scale.get_value()
+                    if hasattr(self, "blend_time_scale") else DEFAULT_BLEND_SECONDS
                 )
                 self.visualizer_stack.add_named(self.projectm_view, "projectm")
+
+                self.projectm_paths = projectm_view.preset_catalog()
+                self.projectm_presets.set_catalog(sorted(self.projectm_paths))
 
             self.projectm_active = True
             self.visualizer_stack.set_visible_child_name("projectm")
 
             # Butterchurn stays loaded but idle: no audio is sent to it
-            # (flush_pending_audio) and its own cycle timer is paused.
-            self.run_js("setCycleInterval(0);")
+            # (flush_pending_audio) and its manager stops cycling.
+            self.butterchurn_presets.set_active(False)
+            self.projectm_presets.set_active(True)
 
-            name = self.projectm_view.current_preset_name()
-
-            if name:
-                self.set_current_preset_name(name)
+            if self.projectm_presets.current is None:
+                self.projectm_presets.next()
+            else:
+                self.set_current_preset_name(self.projectm_presets.current)
 
         else:
 
             self.projectm_active = False
             self.visualizer_stack.set_visible_child_name("butterchurn")
-            self.run_js(f"setCycleInterval({self.projectm_cycle_seconds()});")
 
-        # Favorites are keyed on Butterchurn preset names - not
-        # supported for projectM presets yet.
-        self.favorite_button.set_visible(not self.projectm_active)
+            self.projectm_presets.set_active(False)
+            self.butterchurn_presets.set_active(self.webview_ready)
+            self.set_current_preset_name(self.butterchurn_presets.current)
+
+        # Each renderer has its own queue, favorites and playlists; a
+        # loaded playlist belongs to the renderer it was loaded for.
+        self.current_playlist_name = None
+        self.set_title(self.build_window_title())
+        self.refresh_preset_lists()
 
         for mirror in self.mirror_windows:
             mirror.refresh_paintable()

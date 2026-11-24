@@ -44,9 +44,3 @@ configure_file(
 )
 
 subdir('icons')
-
-# Starter .milk presets for the experimental projectM renderer
-# (src/projectm_view.py) - see projectm-presets/README.md.
-install_subdir('projectm-presets',
-  install_dir: get_option('datadir') / meson.project_name()
-)

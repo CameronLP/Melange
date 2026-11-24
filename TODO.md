@@ -938,6 +938,106 @@
       undisturbed, and in both cases the label's actual rendered
       content is the full, untruncated (no "…") expected-length window
       on the very next tick.
+- [ ] POSSIBLE: Combine Lock Preset with Cycle Interval - suggested
+      ("combine preset lock with cycle interval?"), not designed. Today
+      they overlap but aren't the same: Cycle Interval at 0 ("Off")
+      only stops the auto-cycle timer, while Lock Preset (win.lock-
+      preset, lock_preset_changed) also blocks manual next/previous
+      (with a "Preset is locked" toast) and beat/drop-driven changes,
+      and greys out the whole Cycling group in Preferences. Options:
+      fold Lock into the Cycling settings (e.g. a single "Preset
+      changes: Auto every N s / Manual only / Locked" choice); make
+      Cycle Interval "Off" and Lock one control and drop the separate
+      menu toggle; or keep both but present them together. Decide
+      whether "lock" should keep blocking manual navigation - that's
+      the main behaviour that has no equivalent in the interval
+      slider. PresetManager (preset_manager.py) already treats lock as
+      a cycle pause, so either way it's a UI change, not a logic one.
+- [ ] Rendering settings for the projectM renderer - requested
+      ("rendering settings for projectm"), not done. Preferences >
+      Rendering's Mesh Size, Frame Rate, Render Scale and Anti-Aliasing
+      only reach Butterchurn (run_js setMeshSize/setFramerate/
+      setRenderScale/setAntiAliasing); projectM ignores them, and so
+      does Sensitivity. Mapping for projectM: Mesh Size ->
+      projectm_set_mesh_size; Frame Rate cap -> throttle
+      ProjectMView.on_tick/queue_render (and projectm_set_fps so its
+      timing matches); Render Scale -> render into an offscreen
+      framebuffer at the scaled size and blit/scale up into the
+      GLArea's (projectM renders at whatever window size it's given);
+      Anti-Aliasing -> a multisampled offscreen framebuffer, or drop it
+      for projectM; Sensitivity -> scale the PCM samples before
+      projectm_pcm_add_* (and/or projectm_set_beat_sensitivity).
+      projectM also has settings Butterchurn didn't: hard/soft cut
+      durations and sensitivity (its own beat-triggered preset
+      changes - Melange currently locks them off), aspect correction,
+      easter egg. Part of Stage 3 in docs/projectm-exploration.md.
+- [ ] POSSIBLE: Move the preset browser (and maybe settings) into a
+      sidebar - suggested ("maybe move presets selector and settings to
+      a sidebar or something"), not designed. Today the preset browser
+      is a separate 560x560 dialog (Presets/Favorites/Queue/Loaded tabs)
+      and Preferences is an Adw.PreferencesDialog - both cover the
+      visualizer. A sidebar (e.g. Adw.OverlaySplitView, collapsible,
+      overlaying in fullscreen) would let presets be browsed while the
+      visualizer keeps playing, and suits the much larger, foldered
+      projectM collection. Questions: browser only or settings too;
+      overlay vs. resizing the visualizer; how it coexists with
+      fullscreen/immersive/transparency modes and the auto-hiding
+      header bar; whether the mirror windows are affected (they mirror
+      only the visualizer widget, so shouldn't be).
+- [ ] About dialog: credit projectM and its preset/texture collections -
+      requested ("in the about page please add contributions and link
+      to projectm, cream of the crop, etc"), not done. The About dialog
+      (main.py, Adw.AboutDialog) only has a "Powered By" credit section
+      for Butterchurn, the MilkDrop preset converter and the baron
+      pack. Add: libprojectM (https://github.com/projectM-visualizer/
+      projectm, LGPL-2.1), "Cream of the Crop" presets curated by
+      ISOSCELES (https://github.com/projectM-visualizer/presets-cream-
+      of-the-crop, plus a note that MilkDrop presets belong to their
+      authors - see its LICENSE.md), the MilkDrop texture pack
+      (https://github.com/projectM-visualizer/presets-milkdrop-texture-
+      pack), and the original MilkDrop (Ryan Geiss). Possibly via
+      add_acknowledgement_section / add_legal_section (for the LGPL
+      notice) rather than only Powered By. Also check the Butterchurn
+      core preset pack (butterchurn-presets) is credited, and update
+      the README's credits to match.
+- [ ] Now Playing window size settings - requested ("now playing window
+      size settings"), not implemented; exact intent to clarify. What
+      exists now: the card's size comes from the Scale slider (text
+      size x box width, NOW_PLAYING_BASE_WIDTH 28 chars) or, with Lock
+      to Window Size on (now_playing_lock_to_window), from the main
+      window's width relative to NOW_PLAYING_REFERENCE_WIDTH (800px);
+      Album Art sizing follows the text column. Possible meanings: an
+      explicit width/height (or max width) for the card independent of
+      text size, separate width and height controls, or settings for
+      how it scales with the window size (e.g. a percentage of the
+      window). Probably best designed together with the font size
+      entry below, since both currently hang off the single Scale.
+- [ ] Now Playing font size - requested ("now playing font size"), not
+      implemented. Current state: there's no size control of its own.
+      The Scale slider (build_now_playing_scale_control,
+      recompute_now_playing_scale) multiplies text size
+      (NOW_PLAYING_BASE_TEXT_SIZE, 13) and box width together - it
+      replaced the old separate Text Size / Text Box Width sliders -
+      and the Font button (build_now_playing_font_control) is a
+      Gtk.FontDialogButton at FACE level, so it picks family/style but
+      not size. Likely wanted: a text size (or "Text Size" multiplier)
+      independent of Scale, or letting the Font button's chosen size
+      apply. Check how it should interact with Lock to Window Size
+      (which also derives text size) and Album Art's Auto sizing
+      (follows the text column height).
+- [ ] Periodic Fade with a hidden period and a shown period - requested
+      ("make fade interval have period of time before appearing and
+      period of time it is shown between fades"), not implemented.
+      Today restart_now_playing_periodic_fade (window.py) fades the
+      Now Playing card continuously on a cosine wave over one Fade
+      Interval (1-15s), so it's never fully hidden or fully shown for
+      any length of time. Wanted instead: a cycle of hidden for N
+      seconds -> fade in -> fully shown for M seconds -> fade out ->
+      repeat, i.e. Periodic Fade's single Fade Interval slider becomes
+      e.g. "Hidden For", "Shown For" (and probably a fade duration, or
+      reuse a fixed short one). Ties in with item (1) of the next
+      entry (much longer periods, e.g. once a minute) - both are
+      really about this same timing model.
 - [ ] Now Playing display follow-ups, both requested (TODO-only, not
       implemented):
       (1) Widen the Fade Interval (Periodic Fade) slider's range -
