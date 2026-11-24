@@ -3661,12 +3661,12 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         # While the sidebar is open, the header's end buttons (sidebar
         # toggle, main menu, fullscreen) move into the sidebar's header -
-        # the same widgets, in the same order - and the window buttons
-        # are only shown there; closing it moves them back. So there's
-        # one of each, always next to the window buttons, and the toggle
-        # doubles as the sidebar's close button.
+        # the same widgets - on its left, in the same left-to-right order,
+        # with the window buttons alone on its right; closing it moves
+        # them back. So there's one of each, and the toggle doubles as
+        # the sidebar's close button.
         self.sidebar_header = header
-        moved_buttons = (self.fullscreen_button, self.menu_button, self.sidebar_button)
+        right_to_left = (self.fullscreen_button, self.menu_button, self.sidebar_button)
 
         def place_header_buttons(*args):
             open_ = split.get_show_sidebar()
@@ -3674,11 +3674,16 @@ class MelangeWindow(Adw.ApplicationWindow):
                 (self.headerbar, header) if open_ else (header, self.headerbar)
             )
 
-            for button in moved_buttons:
-                if button.get_parent() is not None and button.get_ancestor(Adw.HeaderBar) is target:
-                    continue
-                source.remove(button)
-                target.pack_end(button)
+            if all(b.get_ancestor(Adw.HeaderBar) is target for b in right_to_left):
+                pass
+            elif open_:
+                for button in reversed(right_to_left):
+                    source.remove(button)
+                    target.pack_start(button)
+            else:
+                for button in right_to_left:
+                    source.remove(button)
+                    target.pack_end(button)
 
             self.headerbar.set_show_end_title_buttons(not open_)
             header.set_show_end_title_buttons(open_)
