@@ -146,6 +146,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_show_artist = True
         self.now_playing_show_album = True
         self.now_playing_show_artwork = True
+        # With this off, a track without usable artwork shows no art
+        # frame at all instead of the generic placeholder icon.
+        self.now_playing_show_art_placeholder = True
         self.now_playing_show_time = True
         self.now_playing_show_background = True
         # now_playing_text_size/now_playing_width are always *derived*
@@ -154,6 +157,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         # is on - never set directly by their own slider anymore, one
         # shared Scale control replaced those alongside Album Art Size.
         self.now_playing_scale = 1.0
+        # Fine-tunes on top of Scale / Lock to Window Size: text size
+        # and card width as separate percentages (1.0 = unchanged).
+        self.now_playing_text_factor = 1.0
+        self.now_playing_width_factor = 1.0
         self.now_playing_lock_to_window = False
         self.now_playing_text_size = self.NOW_PLAYING_BASE_TEXT_SIZE
         self.now_playing_font_desc = "Sans"
@@ -177,7 +184,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         # one, so the two can be combined even though that's a fairly
         # unusual choice.
         self.now_playing_periodic_fade = False
-        self.now_playing_periodic_fade_seconds = 4.0
+        # Periodic Fade cycle: hidden -> fade in -> shown -> fade out.
+        self.now_playing_periodic_hidden_seconds = 4.0
+        self.now_playing_periodic_shown_seconds = 4.0
+        self.now_playing_periodic_fade_duration = 1.0
         self.now_playing_periodic_timer = None
         self.now_playing_fade_timer = None
         self.toolbar_hide_delay = 3
@@ -1266,6 +1276,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_show_artist = enabled
         self.apply_now_playing_field_visibility()
 
+    def now_playing_show_art_placeholder_changed(self, enabled):
+
+        self.now_playing_show_art_placeholder = enabled
+
+        if self.now_playing_info is not None:
+            self.load_now_playing_art(self.now_playing_info["art_url"])
+
     def now_playing_show_artwork_changed(self, enabled):
 
         self.now_playing_show_artwork = enabled
@@ -1306,25 +1323,61 @@ class MelangeWindow(Adw.ApplicationWindow):
         else:
             scale = self.now_playing_scale
 
-        self.now_playing_text_size = self.NOW_PLAYING_BASE_TEXT_SIZE * scale
+        self.now_playing_text_size = (
+            self.NOW_PLAYING_BASE_TEXT_SIZE * scale * self.now_playing_text_factor
+        )
         self.now_playing_width = max(
-            10, round(self.NOW_PLAYING_BASE_WIDTH * scale)
+            10, round(self.NOW_PLAYING_BASE_WIDTH * scale * self.now_playing_width_factor)
         )
 
         self.apply_now_playing_text_style()
         self.apply_now_playing_width()
 
         # The width/size change may have pushed the current title
-        # across the "too long to fit" threshold either way -
-        # re-evaluate rather than leaving a scroll running (or not
-        # running) against a now-stale size.
-        if self.now_playing_info is not None:
-            self.update_now_playing_title(self.now_playing_info["title"])
+        # across the "too long to fit" threshold either way, and a
+        # running ticker's frame/window was sized for the old size.
+        self.refresh_now_playing_title()
 
     def now_playing_scale_changed(self, value):
 
         self.now_playing_scale = value
         self.recompute_now_playing_scale()
+
+    def now_playing_text_factor_changed(self, value):
+
+        self.now_playing_text_factor = value
+        self.recompute_now_playing_scale()
+
+    def now_playing_width_factor_changed(self, value):
+
+        self.now_playing_width_factor = value
+        self.recompute_now_playing_scale()
+
+    def build_now_playing_text_size_control(self):
+
+        row = self.build_slider_row(
+            "Text Size",
+            0.5, 2.0, 0.05, self.now_playing_text_factor,
+            lambda value: f"{round(value * 100)}%",
+            self.now_playing_text_factor_changed,
+            store_as="now_playing_text_size_scale"
+        )
+        row.set_tooltip_text("Text size on top of Scale")
+
+        return row
+
+    def build_now_playing_max_width_control(self):
+
+        row = self.build_slider_row(
+            "Max Width",
+            0.5, 3.0, 0.05, self.now_playing_width_factor,
+            lambda value: f"{round(value * 100)}%",
+            self.now_playing_width_factor_changed,
+            store_as="now_playing_max_width_scale"
+        )
+        row.set_tooltip_text("How wide the text can get before it's shortened or scrolls, on top of Scale")
+
+        return row
 
     def now_playing_lock_to_window_changed(self, active):
 
@@ -1344,6 +1397,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.now_playing_font_desc = font_desc_string
         self.apply_now_playing_text_style()
+        self.refresh_now_playing_title()
 
     # max-width-chars, not a literal pixel width - matches how this
     # card was already sized (set_ellipsize + set_max_width_chars),
@@ -1409,7 +1463,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         _, natural, _, _ = self.now_playing_text_box.measure(
             Gtk.Orientation.VERTICAL, -1
         )
-        size = max(24, natural)
+
+        # Never smaller than the text column would be with all four
+        # lines (title, artist, album, time) showing at the current
+        # text size - otherwise hiding fields shrinks the art with them.
+        line = self.now_playing_title_label.create_pango_layout("Ag")
+        line.set_attributes(self.now_playing_title_label.get_attributes())
+        _, line_height = line.get_pixel_size()
+        minimum = 4 * line_height + 3 * self.now_playing_text_box.get_spacing()
+
+        size = max(24, natural, minimum)
 
         self.now_playing_art_frame.set_size_request(size, size)
         self.now_playing_art_placeholder.set_pixel_size(max(12, int(size * 0.5)))
@@ -1431,7 +1494,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         title = title or "Unknown Title"
 
-        if self.now_playing_scroll_long_titles and len(title) > self.now_playing_width:
+        if self.now_playing_scroll_long_titles and not self.now_playing_title_fits(title):
 
             if title != self.now_playing_scroll_title:
                 self.start_now_playing_title_scroll(title)
@@ -1440,6 +1503,52 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.stop_now_playing_title_scroll()
             self.now_playing_title_label.set_label(title)
             self.apply_now_playing_title_frame_width()
+
+    # Whether the full title fits in the card's text width, judged by
+    # the real rendered width in the current font and size. (It used to
+    # compare len(title) with now_playing_width, a character count -
+    # but the width limit is "N average characters" wide, so titles
+    # with narrow letters scrolled even though they'd fit.) Uses the
+    # same per-character width GTK uses for max-width-chars: the wider
+    # of the font's approximate character and digit widths.
+    def now_playing_title_fits(self, title):
+
+        label = self.now_playing_title_label
+
+        layout = label.create_pango_layout(title)
+        layout.set_attributes(label.get_attributes())
+        text_width, _ = layout.get_pixel_size()
+
+        font_desc = Pango.FontDescription.from_string(self.now_playing_font_desc)
+        font_desc.set_size(int(self.now_playing_text_size * Pango.SCALE))
+        metrics = label.get_pango_context().get_metrics(font_desc, None)
+        char_width = max(
+            metrics.get_approximate_char_width(),
+            metrics.get_approximate_digit_width()
+        ) / Pango.SCALE
+
+        return text_width <= char_width * self.now_playing_width
+
+    # Re-decides scroll vs. static after the text size, card width or
+    # font changes (Scale, Lock to Window Size, Font) - previously only
+    # a new title did, so a title that started scrolling kept scrolling
+    # at a larger size. Only acts when something actually changed, so
+    # window resizes with Lock to Window Size on don't keep restarting
+    # a running ticker.
+    def refresh_now_playing_title(self):
+
+        key = (self.now_playing_width, self.now_playing_text_size, self.now_playing_font_desc)
+
+        if key == getattr(self, "now_playing_title_layout_key", None):
+            return
+
+        self.now_playing_title_layout_key = key
+
+        if self.now_playing_info is None:
+            return
+
+        self.stop_now_playing_title_scroll()
+        self.update_now_playing_title(self.now_playing_info["title"])
 
     NOW_PLAYING_SCROLL_TICK_MS = 300
     NOW_PLAYING_SCROLL_SEPARATOR = "   •   "
@@ -1612,11 +1721,36 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     NOW_PLAYING_PERIODIC_TICK_MS = 33
 
-    # A continuous sine-wave opacity cycle rather than a discrete
-    # show/hold/hide state machine - one formula covers the whole
-    # "periodically fades in and out" cycle with no extra state to
-    # track, and reads as a smooth breathing effect rather than a
-    # sudden blink.
+    # Opacity at `elapsed` seconds into a Periodic Fade cycle:
+    # hidden for H -> fade in over F -> shown for S -> fade out over F,
+    # repeating. Returns (opacity, seconds until the next phase starts).
+    # Starts hidden, so turning it on waits before the card appears.
+    @staticmethod
+    def now_playing_periodic_opacity(elapsed, hidden, shown, fade):
+
+        def ease(t):
+            return t * t * (3 - 2 * t)  # smoothstep: no abrupt start/stop
+
+        phases = (
+            (hidden, lambda t: 0.0),
+            (fade, lambda t: ease(t)),
+            (shown, lambda t: 1.0),
+            (fade, lambda t: 1.0 - ease(t)),
+        )
+        cycle = sum(length for length, _ in phases)
+
+        if cycle <= 0:
+            return 1.0, None
+
+        position = elapsed % cycle
+
+        for length, opacity in phases:
+            if position < length:
+                return opacity(position / length), length - position
+            position -= length
+
+        return 0.0, 0.0
+
     def restart_now_playing_periodic_fade(self):
 
         if self.now_playing_periodic_timer:
@@ -1631,28 +1765,47 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         def tick():
 
-            elapsed = time.monotonic() - start_time
-            period = max(0.5, self.now_playing_periodic_fade_seconds)
-            phase = (elapsed % period) / period
-
-            opacity = 0.5 - 0.5 * math.cos(2 * math.pi * phase)
+            opacity, remaining = self.now_playing_periodic_opacity(
+                time.monotonic() - start_time,
+                self.now_playing_periodic_hidden_seconds,
+                self.now_playing_periodic_shown_seconds,
+                self.now_playing_periodic_fade_duration,
+            )
 
             self.now_playing_box.set_opacity(opacity)
 
-            return True
+            # Smooth steps only while fading; during the hidden/shown
+            # holds (which can last minutes) sleep until the next phase.
+            if 0.0 < opacity < 1.0 or remaining is None:
+                delay = self.NOW_PLAYING_PERIODIC_TICK_MS
+            else:
+                delay = max(self.NOW_PLAYING_PERIODIC_TICK_MS, int(remaining * 1000))
 
-        self.now_playing_periodic_timer = GLib.timeout_add(
-            self.NOW_PLAYING_PERIODIC_TICK_MS, tick
-        )
+            self.now_playing_periodic_timer = GLib.timeout_add(delay, tick)
+
+            return False
+
+        tick()
 
     def now_playing_periodic_fade_changed(self, enabled):
 
         self.now_playing_periodic_fade = enabled
         self.restart_now_playing_periodic_fade()
 
-    def now_playing_periodic_fade_seconds_changed(self, value):
+    def now_playing_periodic_hidden_changed(self, value):
 
-        self.now_playing_periodic_fade_seconds = value
+        self.now_playing_periodic_hidden_seconds = value
+        self.restart_now_playing_periodic_fade()
+
+    def now_playing_periodic_shown_changed(self, value):
+
+        self.now_playing_periodic_shown_seconds = value
+        self.restart_now_playing_periodic_fade()
+
+    def now_playing_periodic_fade_duration_changed(self, value):
+
+        self.now_playing_periodic_fade_duration = value
+        self.restart_now_playing_periodic_fade()
 
     # Title/artist/time all share one size+color+font (family, plus
     # bold/italic - see build_now_playing_font_control's FACE level)
@@ -1773,6 +1926,11 @@ class MelangeWindow(Adw.ApplicationWindow):
     def show_now_playing_art_placeholder(self):
 
         self.now_playing_art.set_paintable(None)
+
+        if not self.now_playing_show_art_placeholder:
+            self.now_playing_art_frame.set_visible(False)
+            return
+
         self.now_playing_art_placeholder.set_visible(True)
         self.now_playing_art_frame.set_visible(True)
 
@@ -2552,6 +2710,17 @@ class MelangeWindow(Adw.ApplicationWindow):
             "Show Album", True, self.now_playing_show_album_changed
         )
 
+    def build_now_playing_show_art_placeholder_control(self):
+
+        row = self.build_toggle_row(
+            "Show Placeholder",
+            self.now_playing_show_art_placeholder,
+            self.now_playing_show_art_placeholder_changed
+        )
+        row.set_subtitle("Show an icon when a track has no artwork")
+
+        return row
+
     def build_now_playing_show_artwork_control(self):
 
         return self.build_toggle_row(
@@ -2583,6 +2752,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.build_now_playing_show_artist_control(),
             self.build_now_playing_show_album_control(),
             self.build_now_playing_show_artwork_control(),
+            self.build_now_playing_show_art_placeholder_control(),
             self.build_now_playing_show_time_control(),
             self.build_now_playing_show_background_control()
         ):
@@ -2663,18 +2833,43 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return row
 
-    def build_now_playing_periodic_fade_seconds_control(self):
+    @staticmethod
+    def format_duration(value):
 
-        def format_periodic_fade_seconds(value):
-            return f"{value:.1f}s"
+        value = int(round(value))
 
-        return self.build_slider_row(
-            "Fade Interval",
-            1.0, 15.0, 0.5, 4.0,
-            format_periodic_fade_seconds,
-            self.now_playing_periodic_fade_seconds_changed,
-            store_as="now_playing_periodic_fade_seconds_scale"
-        )
+        if value < 60:
+            return f"{value}s"
+
+        minutes, seconds = divmod(value, 60)
+
+        return f"{minutes} min {seconds}s" if seconds else f"{minutes} min"
+
+    def build_now_playing_periodic_fade_controls(self):
+
+        return [
+            self.build_slider_row(
+                "Hidden For",
+                0.0, 300.0, 1.0, self.now_playing_periodic_hidden_seconds,
+                self.format_duration,
+                self.now_playing_periodic_hidden_changed,
+                store_as="now_playing_periodic_hidden_scale"
+            ),
+            self.build_slider_row(
+                "Shown For",
+                1.0, 300.0, 1.0, self.now_playing_periodic_shown_seconds,
+                self.format_duration,
+                self.now_playing_periodic_shown_changed,
+                store_as="now_playing_periodic_shown_scale"
+            ),
+            self.build_slider_row(
+                "Fade Duration",
+                0.2, 5.0, 0.1, self.now_playing_periodic_fade_duration,
+                lambda value: f"{value:.1f}s",
+                self.now_playing_periodic_fade_duration_changed,
+                store_as="now_playing_periodic_fade_duration_scale"
+            ),
+        ]
 
     # Same ExpanderRow-with-switch treatment as Auto-Hide above.
     def build_now_playing_periodic_fade_control(self):
@@ -2692,7 +2887,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_periodic_fade_changed(active)
 
         row.connect("notify::enable-expansion", on_enable_changed)
-        row.add_row(self.build_now_playing_periodic_fade_seconds_control())
+        for control in self.build_now_playing_periodic_fade_controls():
+            row.add_row(control)
 
         return row
 
@@ -2968,6 +3164,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         now_playing_group.add(self.build_now_playing_displayed_fields_control())
         now_playing_group.add(self.build_now_playing_lock_to_window_control())
         now_playing_group.add(self.build_now_playing_scale_control())
+        now_playing_group.add(self.build_now_playing_text_size_control())
+        now_playing_group.add(self.build_now_playing_max_width_control())
         now_playing_group.add(self.build_now_playing_auto_hide_control())
         now_playing_group.add(self.build_now_playing_periodic_fade_control())
         now_playing_group.add(self.build_now_playing_scroll_long_titles_control())
