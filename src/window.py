@@ -3666,7 +3666,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         # them back. So there's one of each, and the toggle doubles as
         # the sidebar's close button.
         self.sidebar_header = header
-        right_to_left = (self.fullscreen_button, self.menu_button, self.sidebar_button)
+        # Left to right: sidebar toggle, fullscreen, main menu (GNOME puts
+        # the main menu last, before the window buttons).
+        right_to_left = (self.menu_button, self.fullscreen_button, self.sidebar_button)
 
         def place_header_buttons(*args):
             open_ = split.get_show_sidebar()

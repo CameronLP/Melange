@@ -12,6 +12,15 @@
           <object class="AdwHeaderBar" id="headerbar">
             <property name="show-title">true</property>
 
+            <child type="end">
+              <object class="GtkMenuButton" id="menu_button">
+                <property name="primary">True</property>
+                <property name="icon-name">open-menu-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Main Menu</property>
+                <property name="menu-model">primary_menu</property>
+              </object>
+            </child>
+
             <!-- Load Preset File dropped from the header bar for now -
                  MilkDrop conversion isn't reliable enough yet to give
                  it top-level prominence. Still reachable from the
@@ -22,15 +31,6 @@
                 <property name="icon-name">view-fullscreen-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Toggle Fullscreen</property>
                 <property name="action-name">win.toggle-fullscreen</property>
-              </object>
-            </child>
-
-            <child type="end">
-              <object class="GtkMenuButton" id="menu_button">
-                <property name="primary">True</property>
-                <property name="icon-name">open-menu-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Main Menu</property>
-                <property name="menu-model">primary_menu</property>
               </object>
             </child>
 
