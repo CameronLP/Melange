@@ -12,20 +12,10 @@
           <object class="AdwHeaderBar" id="headerbar">
             <property name="show-title">true</property>
 
-
-
             <!-- Load Preset File dropped from the header bar for now -
                  MilkDrop conversion isn't reliable enough yet to give
                  it top-level prominence. Still reachable from the
                  hamburger menu (win.load-preset). -->
-
-            <child type="start">
-              <object class="GtkButton" id="browse_presets_button">
-                <property name="icon-name">system-search-symbolic</property>
-                <property name="tooltip-text" translatable="yes">Presets</property>
-                <property name="action-name">win.browse-presets</property>
-              </object>
-            </child>
 
             <child type="end">
               <object class="GtkButton" id="fullscreen_button">
@@ -41,6 +31,15 @@
                 <property name="icon-name">open-menu-symbolic</property>
                 <property name="tooltip-text" translatable="yes">Main Menu</property>
                 <property name="menu-model">primary_menu</property>
+              </object>
+            </child>
+
+            <!-- Shows/hides the presets and settings sidebar (window.py
+                 build_sidebar binds it to the split view). -->
+            <child type="end">
+              <object class="GtkToggleButton" id="sidebar_button">
+                <property name="icon-name">sidebar-show-right-symbolic</property>
+                <property name="tooltip-text" translatable="yes">Presets and Settings</property>
               </object>
             </child>
           </object>
@@ -72,37 +71,7 @@
 
     </section>
 
-
     <section>
-
-      <!-- Populated at runtime in window.py (rebuild_audio_source_menu)
-           with the currently connected output devices, since that list
-           changes as devices are plugged/unplugged. -->
-      <submenu id="audio_source_submenu">
-        <attribute name="label">Audio Source</attribute>
-      </submenu>
-
-    </section>
-
-
-    <section>
-
-      <!-- Used to be a submenu (Browse Presets…/Favorites…/Queue…/
-           Playlists…) plus a separate top-level Load Preset… item -
-           collapsed to one entry on request ("I do not want presets
-           submenu. Just open the presets window, and stuff is divided
-           by tabs. simpler"). Everything those used to jump straight
-           to a specific starting tab for is now just a tab inside the
-           one dialog (Presets/Favorites/Queue/Loaded - see
-           build_preset_browser_dialog), and Load Preset… moved to a
-           button inside the Presets tab itself (build_presets_tab).
-           win.show-favorites/-queue/-playlists still exist as actions
-           (the Queue tab's own Playlists… button still uses
-           win.show-playlists) - only their menu entries are gone. -->
-      <item>
-        <attribute name="label" translatable="yes">_Presets…</attribute>
-        <attribute name="action">win.browse-presets</attribute>
-      </item>
 
       <item>
         <attribute name="label" translatable="yes">Lock Preset</attribute>
@@ -116,104 +85,10 @@
 
     </section>
 
-
-    <!-- Split from the preset-behavior section above (Presets…/Lock
-         Preset/Shuffle Presets) - conceptually a different kind of
-         thing (opening/managing secondary windows, not preset
-         behavior), which read as one flat undifferentiated block
-         without this. -->
+    <!-- The quick on/off modes. Presets, settings, the audio source,
+         mirror windows and the mini visualizers live in the sidebar
+         (window.py build_sidebar). -->
     <section>
-
-      <submenu id="mirror_windows_submenu">
-        <attribute name="label" translatable="yes">Mirror Windows</attribute>
-
-        <section>
-
-          <item>
-            <attribute name="label" translatable="yes">_New Mirror Window…</attribute>
-            <attribute name="action">win.new-mirror-window</attribute>
-          </item>
-
-          <item>
-            <attribute name="label" translatable="yes">Close All Mirrors</attribute>
-            <attribute name="action">win.close-all-mirrors</attribute>
-          </item>
-
-        </section>
-
-        <!-- Populated at runtime in window.py (rebuild_mirror_windows_menu)
-             with the currently open mirror windows, since that list
-             changes as mirrors are opened/closed. Its own section
-             (rather than folded into the one above) so rebuilding it
-             doesn't have to touch the static New/Close items. -->
-        <section id="open_mirrors_section">
-        </section>
-
-      </submenu>
-
-      <!-- Experimental (see TODO.md) - each a plain checkable toggle
-           (win.show-vu-meter/win.show-xy-scope) rather than a
-           New Window action, since only one of each makes sense open
-           at a time. -->
-      <submenu id="aux_windows_submenu">
-        <attribute name="label" translatable="yes">Mini Visualizers</attribute>
-
-        <item>
-          <attribute name="label" translatable="yes">VU Meter</attribute>
-          <attribute name="action">win.show-vu-meter</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">Peak Meter</attribute>
-          <attribute name="action">win.show-peak-meter</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">X-Y Scope</attribute>
-          <attribute name="action">win.show-xy-scope</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">Oscilloscope</attribute>
-          <attribute name="action">win.show-oscilloscope</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">Vector Scope</attribute>
-          <attribute name="action">win.show-vectorscope</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">Spectrum</attribute>
-          <attribute name="action">win.show-spectrum</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">Spectrogram</attribute>
-          <attribute name="action">win.show-spectrogram</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">3D Terrain Spectrogram</attribute>
-          <attribute name="action">win.show-terrain</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">3D Waterfall</attribute>
-          <attribute name="action">win.show-waterfall</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">DVD Bounce</attribute>
-          <attribute name="action">win.show-dvd-bounce</attribute>
-        </item>
-
-        <item>
-          <attribute name="label" translatable="yes">Pipes</attribute>
-          <attribute name="action">win.show-pipes</attribute>
-        </item>
-
-      </submenu>
 
       <!-- Checkable, not an action-only item - reflects
            self.immersive_mode_enabled so it reads correctly if somehow
@@ -249,7 +124,6 @@
       </item>
 
     </section>
-
 
     <section>
 
