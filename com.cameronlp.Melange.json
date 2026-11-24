@@ -32,6 +32,29 @@
     ],
     "modules" : [
         {
+            "name" : "libprojectM",
+            "buildsystem" : "cmake-ninja",
+            "config-opts" : [
+                "-DCMAKE_BUILD_TYPE=Release",
+                "-DBUILD_TESTING=OFF",
+                "-DENABLE_PLAYLIST=OFF"
+            ],
+            "cleanup" : [
+                "/lib/cmake"
+            ],
+            "sources" : [
+                {
+                    "type" : "archive",
+                    "url" : "https://github.com/projectM-visualizer/projectm/releases/download/v4.1.8/libprojectM-4.1.8.tar.gz",
+                    "sha256" : "f72135e8b8e5fd807f908537255b41ac7ba4830309265e830cb756535487239e"
+                },
+                {
+                    "type" : "patch",
+                    "path" : "flatpak/projectm-4.1.8-render-to-bound-fbo.patch"
+                }
+            ]
+        },
+        {
             "name" : "melange",
             "builddir" : true,
             "buildsystem" : "meson",
