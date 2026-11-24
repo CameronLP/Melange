@@ -234,12 +234,27 @@ def rainbow_color(level):
     # the old heatmap_color this whole gradient system replaced.
     # Brightness also rises with level (val) so quiet cells read as
     # dim rather than a fully saturated color at any level.
+    #
+    # Looked up from a precomputed table rather than calling colorsys
+    # each time - this runs per cell/dot (1.4 million calls per 30s in a
+    # profile with the aux windows open); 1024 steps is finer than any
+    # visible difference.
     level = max(0.0, min(1.0, level))
 
-    hue = (1.0 - level) * 0.72
-    r, g, b = colorsys.hsv_to_rgb(hue, 0.9, 0.35 + 0.65 * level)
+    return _RAINBOW_LUT[int(level * _RAINBOW_LUT_MAX + 0.5)]
 
-    return (r, g, b)
+
+def _rainbow_color_exact(level):
+
+    hue = (1.0 - level) * 0.72
+    return colorsys.hsv_to_rgb(hue, 0.9, 0.35 + 0.65 * level)
+
+
+_RAINBOW_LUT_MAX = 1023
+_RAINBOW_LUT = [
+    _rainbow_color_exact(i / _RAINBOW_LUT_MAX)
+    for i in range(_RAINBOW_LUT_MAX + 1)
+]
 
 
 def scale_level_for_color(level, ceiling):
@@ -334,35 +349,128 @@ def random_bounce_color():
     return color
 
 
+# Every aux window is handed the very same left/right list objects per
+# audio chunk (window.py forward_audio_to_aux_windows), and VU, DVD and
+# Pipes each took the RMS of both on every draw - so the last few
+# results are remembered by list identity. The list itself is kept in
+# the cache entry, so an id can't be reused while it's cached.
+_rms_cache = {}
+
+
 def rms(samples):
 
     if not samples:
         return 0.0
 
-    return math.sqrt(sum(s * s for s in samples) / len(samples))
+    cached = _rms_cache.get(id(samples))
+
+    if cached is not None and cached[0] is samples:
+        return cached[1]
+
+    value = math.sqrt(sum(s * s for s in samples) / len(samples))
+
+    if len(_rms_cache) >= 8:
+        _rms_cache.clear()
+
+    _rms_cache[id(samples)] = (samples, value)
+
+    return value
 
 
-def fft(samples):
+# Bit-reversal permutation and twiddle factors per FFT length, built
+# once - the old recursive FFT recomputed cmath.exp() for every
+# butterfly (~14 million calls per 30s with the aux windows open, its
+# single biggest cost in a profile).
+_FFT_TABLES = {}
 
+
+def _fft_tables(n):
+
+    tables = _FFT_TABLES.get(n)
+
+    if tables is None:
+        bits = n.bit_length() - 1
+        bitrev = [int(format(i, f"0{bits}b")[::-1], 2) for i in range(n)]
+        twiddles = [cmath.exp(-2j * math.pi * k / n) for k in range(n // 2)]
+        tables = _FFT_TABLES[n] = (bitrev, twiddles)
+
+    return tables
+
+
+def _complex_fft_in_place(a):
+
+    # Iterative radix-2 Cooley-Tukey; `a` must already be in
+    # bit-reversed order. Power-of-two lengths only.
+    n = len(a)
+    _, twiddles = _fft_tables(n)
+    size = 2
+
+    while size <= n:
+
+        half = size // 2
+        step = n // size
+
+        for k in range(half):
+
+            w = twiddles[k * step]
+
+            for top in range(k, n, size):
+                bottom = top + half
+                t = w * a[bottom]
+                u = a[top]
+                a[top] = u + t
+                a[bottom] = u - t
+
+        size *= 2
+
+
+def real_fft_magnitudes(samples):
+
+    # Magnitudes of bins 0..n/2-1 of a real signal's FFT, computed with
+    # one n/2-point complex FFT (even samples as the real part, odd as
+    # the imaginary part) plus a split step - half the butterflies of
+    # a full n-point transform, since the input has no imaginary part
+    # anyway. Matches the old full recursive FFT's magnitudes to
+    # ~1e-14, ~4x faster.
     n = len(samples)
+    m = n // 2
+    bitrev, _ = _fft_tables(m)
+    _, twiddles_n = _fft_tables(n)
 
-    if n <= 1:
-        return samples
+    z = [complex(samples[2 * i], samples[2 * i + 1]) for i in bitrev]
+    _complex_fft_in_place(z)
 
-    even = fft(samples[0::2])
-    odd = fft(samples[1::2])
+    magnitudes = [0.0] * m
 
-    half = n // 2
-    combined = [0j] * n
+    for k in range(m):
+        zk = z[k]
+        zc = z[-k % m].conjugate()
+        even = (zk + zc) * 0.5
+        odd = (zk - zc) * -0.5j
+        magnitudes[k] = abs(even + twiddles_n[k] * odd)
 
-    for k in range(half):
+    return magnitudes
 
-        twiddled = cmath.exp(-2j * math.pi * k / n) * odd[k]
 
-        combined[k] = even[k] + twiddled
-        combined[k + half] = even[k] - twiddled
+# Every FFT-based aux window (Spectrum, Spectrogram, Terrain,
+# Waterfall, Pipes) keeps its own copy of the same last FFT_SIZE mono
+# samples and used to run its own FFT on them - identical work, once
+# per open window. This memoizes on the buffer's contents, so however
+# many windows are open, each new piece of audio is analysed once.
+# The returned list is shared: callers must treat it as read-only.
+_magnitude_cache = [None, None]
 
-    return combined
+
+def spectrum_magnitudes(buffer):
+
+    key = tuple(buffer)
+
+    if key != _magnitude_cache[0]:
+        windowed = [s * w for s, w in zip(key, _HANN_WINDOW)]
+        _magnitude_cache[0] = key
+        _magnitude_cache[1] = real_fft_magnitudes(windowed)
+
+    return _magnitude_cache[1]
 
 
 class AuxVisualizerWindow(Adw.ApplicationWindow):
@@ -525,6 +633,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.dvd_timer = None
         self._icon_cache_key = None
         self._icon_pixbuf = None
+        self._dvd_logo_cache = {}
+        self._projection_trig = (None, None, 1.0, 0.0, 1.0, 0.0)
 
         # Beat pulse state (see dvd_tick) - separate from dvd_level's
         # continuous VU-style ballistics.
@@ -789,6 +899,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # appended at the right edge and drawn there, scrolling left
         # as older ones fall off (see draw_spectrogram).
         self.spectrogram_columns = deque(maxlen=SPECTROGRAM_COLUMNS)
+        # Cached image for render_spectrogram - see update_spectrogram_image.
+        self.spectrogram_append_count = 0
+        self.spectrogram_image = None
+        self.spectrogram_image_key = None
+        self.spectrogram_image_appends = 0
+        self.spectrogram_pixel_table_cache = None
         self.last_spectrogram_frame_time = 0.0
 
         # 3D Terrain Spectrogram - terrain_rows holds the same shape of
@@ -4311,10 +4427,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # ship. Cached the same way load_dvd_icon caches theme lookups
         # - this is called every tick (~60/sec) and size is
         # continuously audio-reactive.
-        cache_key = ("__dvd_logo_resource__", size)
+        #
+        # Because size changes almost every tick, a cache keyed on the
+        # exact size missed nearly every time and re-rasterized the SVG
+        # each frame (~770 times per 30s in a profile). Now it's
+        # rasterized at size rounded *up* to the next 16px step, a few
+        # of those are kept, and draw_dvd_text_logo scales down to the
+        # exact size - same smooth size animation, a handful of
+        # rasterizations instead of one per frame.
+        size = -(-max(1, int(size)) // 16) * 16
 
-        if cache_key == self._icon_cache_key:
-            return self._icon_pixbuf
+        if size in self._dvd_logo_cache:
+            return self._dvd_logo_cache[size]
 
         pixbuf = None
 
@@ -4337,8 +4461,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         except GLib.Error:
             pixbuf = None
 
-        self._icon_cache_key = cache_key
-        self._icon_pixbuf = pixbuf
+        if len(self._dvd_logo_cache) >= 8:
+            self._dvd_logo_cache.pop(next(iter(self._dvd_logo_cache)))
+
+        self._dvd_logo_cache[size] = pixbuf
 
         return pixbuf
 
@@ -4348,10 +4474,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if pixbuf is not None:
 
+            # The cached pixbuf is rasterized at size rounded up to a
+            # 16px step (see load_dvd_logo_pixbuf) - scale it back down
+            # to the exact requested size.
+            scale = size / (-(-max(1, int(size)) // 16) * 16)
+
             cr.save()
             cr.translate(
-                self.dvd_x, self.dvd_y + (size - pixbuf.get_height()) / 2
+                self.dvd_x, self.dvd_y + (size - pixbuf.get_height() * scale) / 2
             )
+            cr.scale(scale, scale)
 
             # Recolored the same way draw_dvd_bounce recolors a
             # symbolic icon - the real logo's path is a plain black
@@ -4606,12 +4738,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if len(self.spectrum_buffer) == FFT_SIZE:
 
-            windowed = [
-                s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-            ]
-
-            spectrum = fft(windowed)
-            magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+            magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
             new_levels = self.bars_from_magnitudes(magnitudes, bar_count)
 
@@ -4793,84 +4920,151 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.last_spectrogram_frame_time = now
 
-        windowed = [
-            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-        ]
+        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
-        spectrum = fft(windowed)
-        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
-
+        self.spectrogram_append_count += 1
         self.spectrogram_columns.append(
             self.bars_from_magnitudes(magnitudes, bin_count)
         )
+
+    def spectrogram_color_key(self):
+
+        lo, hi = self.spectrogram_color_lo, self.spectrogram_color_hi
+
+        return (
+            self.num_bars, self.spectrogram_palette,
+            self.spectrogram_color_ceiling,
+            (lo.red, lo.green, lo.blue), (hi.red, hi.green, hi.blue),
+        )
+
+    def spectrogram_pixel_table(self):
+
+        # 256 precomputed BGRA pixels (cairo ARGB32, little-endian),
+        # one per quantized color level, for the current palette/colors.
+        table = []
+
+        for i in range(256):
+
+            level = i / 255
+
+            if self.spectrogram_palette == "rainbow":
+                r, g, b = rainbow_color(level)
+            else:
+                r, g, b = gradient_color(
+                    level, self.spectrogram_color_lo, self.spectrogram_color_hi
+                )
+
+            table.append(bytes((
+                int(b * 255 + 0.5), int(g * 255 + 0.5), int(r * 255 + 0.5), 255
+            )))
+
+        return table
+
+    def write_spectrogram_column(self, data, stride, x, levels):
+
+        bin_count = self.num_bars
+        ceiling = max(0.05, self.spectrogram_color_ceiling)
+        table = self.spectrogram_pixel_table_cache
+        offset = x * 4
+
+        for row_index in range(min(bin_count, len(levels))):
+
+            scaled = levels[row_index] / ceiling
+            index = 255 if scaled >= 1.0 else (0 if scaled <= 0.0 else int(scaled * 255 + 0.5))
+
+            # Row 0 (lowest frequency) at the bottom of the image.
+            start = (bin_count - 1 - row_index) * stride + offset
+            data[start:start + 4] = table[index]
+
+    def update_spectrogram_image(self):
+
+        # One pixel per (column, frequency bin) cell, in a cached
+        # SPECTROGRAM_COLUMNS x num_bars image (newest column at the
+        # right edge, unfilled columns transparent), scaled up to the
+        # window when drawn. Previously every draw re-filled every
+        # cell as its own Cairo rectangle - ~12,800 fills per frame at
+        # the default 64 bars, even though only one new column had
+        # arrived. Now a new column just scrolls the image left by a
+        # pixel and writes that one column; the full rebuild only
+        # happens when a setting that changes the colors or bar count
+        # does.
+        key = self.spectrogram_color_key()
+        new_columns = self.spectrogram_append_count - self.spectrogram_image_appends
+        surface = self.spectrogram_image
+
+        if surface is None or key != self.spectrogram_image_key:
+
+            surface = cairo.ImageSurface(
+                cairo.FORMAT_ARGB32, SPECTROGRAM_COLUMNS, max(1, self.num_bars)
+            )
+            self.spectrogram_image = surface
+            self.spectrogram_image_key = key
+            self.spectrogram_pixel_table_cache = self.spectrogram_pixel_table()
+            new_columns = len(self.spectrogram_columns)
+
+        if new_columns <= 0:
+            return surface
+
+        new_columns = min(new_columns, SPECTROGRAM_COLUMNS)
+
+        surface.flush()
+        data = surface.get_data()
+        stride = surface.get_stride()
+        row_bytes = SPECTROGRAM_COLUMNS * 4
+        shift = new_columns * 4
+
+        for y in range(surface.get_height()):
+            start = y * stride
+            data[start:start + row_bytes - shift] = data[start + shift:start + row_bytes]
+
+        recent = list(self.spectrogram_columns)[-new_columns:]
+        first_x = SPECTROGRAM_COLUMNS - len(recent)
+
+        for offset, levels in enumerate(recent):
+            self.write_spectrogram_column(data, stride, first_x + offset, levels)
+
+        surface.mark_dirty()
+        self.spectrogram_image_appends = self.spectrogram_append_count
+
+        return surface
 
     def render_spectrogram(self, cr, width, height):
 
         if not self.spectrogram_columns:
             return
 
-        bin_count = self.num_bars
-        column_count = len(self.spectrogram_columns)
+        surface = self.update_spectrogram_image()
+        bin_count = max(1, self.num_bars)
+
+        cr.save()
 
         if self.spectrogram_vertical:
-
-            # Time runs top-to-bottom instead of left-to-right -
-            # newest row at the top, scrolling downward, the usual
-            # convention for a vertically-oriented waterfall (e.g. SDR
-            # receiver software) - and frequency runs left-to-right
-            # instead of bottom-to-top, low frequency at the left.
-            row_height = height / SPECTROGRAM_COLUMNS
+            # Time runs top-to-bottom instead of left-to-right - newest
+            # row at the top, scrolling downward, the usual convention
+            # for a vertically-oriented waterfall (e.g. SDR receiver
+            # software) - and frequency runs left-to-right, low at the
+            # left. Image x (time, newest at the right) maps to screen
+            # y (newest at the top); image y (frequency, low at the
+            # bottom) maps to screen x (low at the left).
             column_width = width / bin_count
-
+            row_height = height / SPECTROGRAM_COLUMNS
+            cr.transform(cairo.Matrix(
+                0, -row_height, -column_width, 0, width, height
+            ))
         else:
+            # Newest column at the right edge, low frequencies at the
+            # bottom - same up-is-higher convention as Spectrum's bars.
+            cr.scale(width / SPECTROGRAM_COLUMNS, height / bin_count)
 
-            column_width = width / SPECTROGRAM_COLUMNS
-            row_height = height / bin_count
+        pattern = cairo.SurfacePattern(surface)
+        # Crisp cell blocks, matching the old per-rectangle look,
+        # rather than blurring between cells.
+        pattern.set_filter(cairo.FILTER_NEAREST)
+        cr.set_source(pattern)
+        cr.rectangle(0, 0, SPECTROGRAM_COLUMNS, bin_count)
+        cr.fill()
 
-        # Newest column nearest the "front" edge (right in horizontal
-        # mode, top in vertical), oldest falls off the far edge - a
-        # live scrolling chart, same convention the X-Y scope and the
-        # main visualizer's own timeline already use for "newest is
-        # closest to now."
-        start_x = width - column_width * column_count
-
-        for column_index, levels in enumerate(self.spectrogram_columns):
-
-            if self.spectrogram_vertical:
-                x = None
-                y = (column_count - 1 - column_index) * row_height
-            else:
-                x = start_x + column_index * column_width
-
-            for row_index, level in enumerate(levels):
-
-                scaled_level = scale_level_for_color(
-                    level, self.spectrogram_color_ceiling
-                )
-
-                if self.spectrogram_palette == "rainbow":
-                    r, g, b = rainbow_color(scaled_level)
-                else:
-                    r, g, b = gradient_color(
-                        scaled_level, self.spectrogram_color_lo,
-                        self.spectrogram_color_hi
-                    )
-                cr.set_source_rgb(r, g, b)
-
-                if self.spectrogram_vertical:
-                    # Low frequencies at the left, same left-to-right
-                    # "increasing pitch" reading as the Spectrum bars.
-                    x = row_index * column_width
-                else:
-                    # Low frequencies at the bottom, same up-is-higher
-                    # convention as the Spectrum bars.
-                    y = height - (row_index + 1) * row_height
-
-                # +0.5 so adjacent cells overlap slightly - without it,
-                # Cairo's antialiasing leaves faint seams between
-                # same-colored neighboring rectangles.
-                cr.rectangle(x, y, column_width + 0.5, row_height + 0.5)
-                cr.fill()
+        cr.restore()
 
     def update_terrain_rows(self):
 
@@ -4886,12 +5080,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.last_terrain_frame_time = now
 
-        windowed = [
-            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-        ]
-
-        spectrum = fft(windowed)
-        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
         self.terrain_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
         self.terrain_dirty = True
@@ -4914,8 +5103,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # projected screen position plus a rotated depth value used
         # purely for back-to-front painter's-algorithm sorting, not
         # for the projection itself.
-        cos_a, sin_a = math.cos(azimuth), math.sin(azimuth)
-        cos_e, sin_e = math.cos(elevation), math.sin(elevation)
+        # Called once per projected point (~1M times per 30s with the
+        # 3D kinds open) but the camera angles only change on drag, so
+        # the trig is remembered for the last angles seen.
+        trig = self._projection_trig
+
+        if trig[0] != azimuth or trig[1] != elevation:
+            trig = self._projection_trig = (
+                azimuth, elevation,
+                math.cos(azimuth), math.sin(azimuth),
+                math.cos(elevation), math.sin(elevation),
+            )
+
+        _, _, cos_a, sin_a, cos_e, sin_e = trig
 
         rx = x * cos_a - y * sin_a
         ry = x * sin_a + y * cos_a
@@ -5144,12 +5344,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.last_waterfall_frame_time = now
 
-        windowed = [
-            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-        ]
-
-        spectrum = fft(windowed)
-        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
         self.waterfall_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
         self.waterfall_dirty = True
@@ -5420,12 +5615,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.last_pipes_band_frame_time = now
 
-        windowed = [
-            s * w for s, w in zip(self.spectrum_buffer, _HANN_WINDOW)
-        ]
-
-        spectrum = fft(windowed)
-        magnitudes = [abs(v) for v in spectrum[:FFT_SIZE // 2]]
+        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
 
         for i, (f_lo, f_hi) in enumerate(PIPES_BANDS):
 
