@@ -1004,7 +1004,7 @@
       Render Resolution Scale (offscreen buffer + scaled blit) and
       Sensitivity (PCM gain) drive projectM; Anti-Aliasing was dropped
       by decision; beat cuts via projectM hard cuts. Verified headless.
-- [ ] POSSIBLE: Move the preset browser (and maybe settings) into a
+- [x] POSSIBLE: Move the preset browser (and maybe settings) into a
       sidebar - suggested ("maybe move presets selector and settings to
       a sidebar or something"), not designed. Today the preset browser
       is a separate 560x560 dialog (Presets/Favorites/Queue/Loaded tabs)
@@ -1024,6 +1024,15 @@
       of today's modal-ish dialog. Window vs. sidebar is the first
       decision; either way the browser content (Presets tree/Favorites/
       Queue/Loaded tabs from build_preset_browser_dialog) can be reused.
+      Done 2026-11-24 (sidebar branch): an Adw.OverlaySplitView sidebar
+      on the right with Presets (Presets tree/Favorites/Loaded/Queue
+      tabs) and Settings (the five former Preferences pages, icon
+      switcher with the page name below). It pushes the visualizer
+      aside; windows narrower than 720sp overlay it instead. Browse
+      Presets / Show Queue / Preferences open it at the right place and
+      close it when already showing; picking a preset keeps it open. The
+      preset and preferences dialogs are gone. Verified headless (12/12)
+      with screenshots.
 - [x] About dialog: credit projectM and its preset/texture collections -
       requested ("in the about page please add contributions and link
       to projectm, cream of the crop, etc"), not done. The About dialog
@@ -1081,6 +1090,46 @@
       default): with it on, the content fades to fully opaque while the
       pointer is over the visualizer and back to Opacity Level when it
       leaves, using Fade Speed. Verified headless (9/9).
+- [x] POSSIBLE: Combine the "Add to Queue" and "Add to Playlist…" row
+      buttons - suggested ("combine the add to queue and add to playlist
+      buttons?"), not done. Each preset row (preset_row_setup/
+      bind_preset_row, window.py - flat lists and the folder tree) has
+      separate queue (list-add) and playlist (bookmark-new) buttons
+      next to the favorite star. The playlist button already opens a
+      popover (open_add_to_playlist_popover) that can include an "Add
+      to Queue" entry at the top (include_queue=True) above the
+      playlists and "New Playlist…". Likely: one "Add to…" button
+      opening that popover with Queue first, freeing row space (useful
+      in the narrower sidebar). Trade-off: queueing goes from one click
+      to two - decide whether that's acceptable, or keep a quicker way
+      (e.g. middle-click / a shortcut on the selected row).
+      Done 2026-11-24 (sidebar branch): one "+" Add to… button per
+      preset row opens the menu with Add to Queue first, then the
+      playlists and New Playlist…. Queueing is now two clicks.
+- [ ] BUG: mini visualizer settings popovers don't close when clicking
+      outside them - reported ("have to use Esc every time"), not
+      investigated. Odd, because aux_window.py already has two
+      mechanisms: Gtk.Popover's default autohide, plus a CAPTURE-phase
+      Gtk.GestureClick on the whole window (on_window_pressed) meant to
+      popdown() on any press elsewhere. Things to check: whether
+      autohide got turned off or a nested popup (the Gtk.DropDown /
+      Gtk.ColorDialogButton popups inside the settings box) leaves the
+      popover unable to dismiss; whether clicks on the drawing area are
+      claimed by its drag gesture before the window-level gesture sees
+      them; and clicks in *other* windows (the main window) - a
+      popover's autohide only covers its own window. Test on a real
+      desktop.
+- [ ] BUG: with Opaque on Hover on, dragging the window makes it go
+      transparent while dragging - reported, not fixed. Likely cause
+      (unconfirmed): the click-and-drag-anywhere gesture hands the move
+      to the compositor (begin_move), which grabs the pointer - GTK
+      then reports a "leave" on the visualizer's motion controller
+      (on_visualizer_pointer_leave, window.py), so it fades to Opacity
+      Level mid-drag. Possible fixes: ignore leave events caused by a
+      grab (the crossing event's mode via controller.get_current_event()
+      - Gdk.CrossingMode.GRAB/UNGRAB), or set a flag when a window drag
+      starts and ignore leaves until the pointer comes back. Needs a
+      real-desktop check - window dragging can't be reproduced headless.
 - [ ] Option to mute the "Beat detected - next preset" message -
       requested ("I want a mute for the beat detected message"), not
       done. on_projectm_beat (window.py) shows that toast on every beat
@@ -1110,7 +1159,7 @@
       count, and is re-decided whenever Scale, Lock to Window Size, Text
       Size, Max Width or Font change (refresh_now_playing_title),
       restarting a running ticker at the new size. Verified headless.
-- [ ] Scrolling Now Playing text - requested ("scrolling now playing
+- [x] Scrolling Now Playing text - requested ("scrolling now playing
       text"), intent to clarify. Today only the title scrolls (Scroll
       Long Titles, start_now_playing_title_scroll: a 300ms character
       ticker with a "   •   " separator); artist/album are
@@ -1118,6 +1167,11 @@
       (pixel-based rather than per-character) scrolling, speed/pause
       settings, or scrolling only on hover - ask. Related to the bug
       entry above.
+      Done 2026-11-24: the artist and album lines now scroll too when
+      too long (setting renamed Scroll Long Text), using the same real-
+      width fit test as the title; each scrolling line's width is fixed
+      to the widest stretch it will show so the card doesn't change
+      width while ticking.
 - [x] Now Playing font size - requested ("now playing font size"), not
       implemented. Current state: there's no size control of its own.
       The Scale slider (build_now_playing_scale_control,

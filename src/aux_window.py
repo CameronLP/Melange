@@ -143,7 +143,7 @@ DVD_ICON_CHOICES = [
     (TUX_ICON, "Tux"),
     ("com.cameronlp.Melange", "Melange Logo"),
     ("starred-symbolic", "Star"),
-    ("emblem-favorite-symbolic", "Heart"),
+    ("emote-love-symbolic", "Heart"),
     ("weather-clear-symbolic", "Sun"),
     ("face-smile-symbolic", "Smiley"),
     ("network-wireless-symbolic", "Wireless"),
@@ -687,7 +687,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # the end of this method instead, once every kind's state is
         # guaranteed to exist.
         self.settings_button = Gtk.MenuButton(
-            icon_name="emblem-system-symbolic",
+            icon_name="preferences-system-symbolic",
             tooltip_text="Settings"
         )
         self.settings_button.add_css_class("nav-arrow-button")
@@ -710,7 +710,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             action_name="win.toggle-fullscreen"
         )
 
-        self.header.pack_end(self.fullscreen_button)
+        # Far left, same as the main window: fullscreen is about the
+        # content, kept apart from the window buttons.
+        self.header.pack_start(self.fullscreen_button)
 
         self.toolbar_view.set_content(content_overlay)
 

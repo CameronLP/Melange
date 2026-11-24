@@ -86,7 +86,9 @@ class MirrorWindow(Adw.ApplicationWindow):
             action_name="win.toggle-fullscreen"
         )
 
-        self.header.pack_end(self.fullscreen_button)
+        # Far left, same as the main window: fullscreen is about the
+        # content, kept apart from the window buttons.
+        self.header.pack_start(self.fullscreen_button)
 
         # Match Main Window Size and Find Main Window are one-off,
         # infrequent actions - moved into this menu (from their own

@@ -69,6 +69,73 @@ AUX_WINDOW_ACTIONS = {
 
 Gst.init(None)
 
+class LineTicker:
+    """Scrolls one Now Playing text line (artist/album) that's too long
+    to fit: a character ticker like the title's, with the label's width
+    fixed while it runs (and the overflow clipped) so the card doesn't
+    change width on every tick."""
+
+    SEPARATOR = "   •   "
+
+    def __init__(self, label, get_width_chars, tick_ms):
+
+        self.label = label
+        self.get_width_chars = get_width_chars
+        self.tick_ms = tick_ms
+        self.text = None
+        self.timer = None
+
+    def start(self, text):
+
+        self.stop()
+        self.text = text
+
+        width = self.get_width_chars()
+        scroll_text = text + self.SEPARATOR
+        doubled = scroll_text + scroll_text
+        offset = [0]
+
+        self.label.set_max_width_chars(-1)
+        self.label.set_ellipsize(Pango.EllipsizeMode.NONE)
+        self.label.set_overflow(Gtk.Overflow.HIDDEN)
+
+        def tick():
+            start = offset[0] % len(scroll_text)
+            self.label.set_label(doubled[start:start + width])
+            offset[0] += 1
+            return True
+
+        # Fix the width to the widest stretch the ticker will ever show,
+        # so no later tick can grow the card (a size request is only a
+        # minimum).
+        attributes = self.label.get_attributes()
+        widest = 0
+
+        for start in range(len(scroll_text)):
+            layout = self.label.create_pango_layout(doubled[start:start + width])
+            layout.set_attributes(attributes)
+            widest = max(widest, layout.get_pixel_size()[0])
+
+        self.label.set_size_request(widest, -1)
+
+        tick()
+
+        self.timer = GLib.timeout_add(self.tick_ms, tick)
+
+    def stop(self):
+
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.timer = None
+
+        if self.text is not None:
+            self.label.set_size_request(-1, -1)
+            self.label.set_overflow(Gtk.Overflow.VISIBLE)
+            self.label.set_max_width_chars(self.get_width_chars())
+            self.label.set_ellipsize(Pango.EllipsizeMode.END)
+            self.text = None
+
+
 class PresetTreeNode(GObject.Object):
     """A folder or a preset in the preset browser's folder tree."""
 
@@ -106,6 +173,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     headerbar = Gtk.Template.Child()
     menu_button = Gtk.Template.Child()
     fullscreen_button = Gtk.Template.Child()
+    sidebar_button = Gtk.Template.Child()
 
     # Now Playing's Scale slider is a single multiplier applied to
     # both of these base values (see recompute_now_playing_scale) -
@@ -415,6 +483,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_album_label.set_visible(False)
         self.now_playing_text_box.append(self.now_playing_album_label)
 
+        self.now_playing_artist_ticker = LineTicker(
+            self.now_playing_artist_label, lambda: self.now_playing_width,
+            self.NOW_PLAYING_SCROLL_TICK_MS
+        )
+        self.now_playing_album_ticker = LineTicker(
+            self.now_playing_album_label, lambda: self.now_playing_width,
+            self.NOW_PLAYING_SCROLL_TICK_MS
+        )
+
         self.now_playing_time_label = Gtk.Label(xalign=0.0)
         self.now_playing_time_label.add_css_class("now-playing-artist")
         self.now_playing_time_label.set_visible(False)
@@ -492,17 +569,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pactl_event_timer = None
         self.preset_locked = False
         self.preset_list_store = None
-        self.preset_browser_dialog = None
+        self.preset_browser = None
         self.browser_view_stack = None
         self.favorites = self.load_favorites()
         self.favorites_list_store = None
         # Presets loaded from files (Load Preset…/drag and drop) - for
         # this session only, like before; the files may move or vanish.
         self.user_loaded_presets = []
-        self.user_preset_list_store = None
         self.queue_list_store = None
         self.playlists = self.load_playlists()
-        self.playlists_dialog = None
         self.mirror_windows = []
         self.aux_windows = {}
         self.current_preset_name = None
@@ -533,52 +608,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.start_system_audio()
 
-        # The "Audio Source" submenu is defined empty in window.ui and
-        # populated here since the list of real output devices changes
-        # at runtime as things get plugged/unplugged. Index 1, not 0:
-        # the theme selector section (window.ui) comes first now.
-        section0 = self.menu_button.get_menu_model().get_item_link(
-            1, Gio.MENU_LINK_SECTION
-        )
-
-        self.audio_source_submenu = section0.get_item_link(
-            0, Gio.MENU_LINK_SUBMENU
-        )
-
-        self.rebuild_audio_source_menu()
-
-        # Same empty-in-window.ui, populated-here pattern as Audio
-        # Source above, for the same reason: the list of open mirror
-        # windows changes at runtime. Top-level section 3 (0=theme
-        # selector, 1=Audio Source, 2=Presets/Lock Preset/Shuffle
-        # Presets, 3=this one - Mirror Windows + Mini Visualizers,
-        # split into its own section from the preset-behavior one
-        # above it since they're a different kind of thing - see
-        # window.ui) - item 0 within it (Mirror Windows submenu comes
-        # before Mini Visualizers), then section 1 *within that
-        # submenu* (New Mirror Window/Close All Mirrors are its own
-        # static section 0 - see window.ui - so rebuilding this one
-        # never touches those).
-        # NOTE: this index is positional and brittle - it's broken
-        # before (three times now: a Transparency Mode item, then
-        # collapsing the old Load Preset item + Presets submenu into
-        # one Browse Presets item, then splitting this section in two)
-        # without updating this. Any future item added/removed before
-        # Mirror Windows, or a new section inserted before this one,
-        # needs this bumped again.
-        section3 = self.menu_button.get_menu_model().get_item_link(
-            3, Gio.MENU_LINK_SECTION
-        )
-
-        mirror_windows_submenu = section3.get_item_link(
-            0, Gio.MENU_LINK_SUBMENU
-        )
-
-        self.open_mirrors_section = mirror_windows_submenu.get_item_link(
-            1, Gio.MENU_LINK_SECTION
-        )
-
-        self.rebuild_mirror_windows_menu()
 
         threading.Thread(
             target=self.watch_audio_changes,
@@ -638,10 +667,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_controller(escape_controller)
 
-        # Same CAPTURE-phase reasoning as the drag gesture and motion
-        # controller above - WebKit's own hit testing can otherwise
-        # consume the event before a default BUBBLE-phase controller
-        # on an ancestor widget ever sees it.
+        # Scrolling over the visualizer changes preset. Attached to the
+        # visualizer area only (not the whole window), so scrolling in
+        # the sidebar's lists and settings scrolls them instead. CAPTURE
+        # so the overlaid buttons/Now Playing card don't swallow it.
         scroll_controller = Gtk.EventControllerScroll.new(
             Gtk.EventControllerScrollFlags.VERTICAL
         )
@@ -655,7 +684,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.on_scroll
         )
 
-        self.add_controller(scroll_controller)
+        webview_overlay.add_controller(scroll_controller)
 
 
 
@@ -946,7 +975,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.add_action(preferences_action)
 
         self.profiles = self.load_profiles()
-        self.build_preferences_dialog()
+        self.build_settings_pages()
+        self.build_preset_browser()
+        self.build_sidebar()
 
         self.menu_button.get_popover().add_child(
             self.build_theme_selector(),
@@ -1243,11 +1274,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         if info is None:
             self.stop_now_playing_position_timer()
             self.stop_now_playing_title_scroll()
+            self.now_playing_artist_ticker.stop()
+            self.now_playing_album_ticker.stop()
             return
 
         self.update_now_playing_title(info["title"])
-        self.now_playing_artist_label.set_label(info["artist"])
-        self.now_playing_album_label.set_label(info["album"])
+        self.update_now_playing_line(self.now_playing_artist_ticker, info["artist"])
+        self.update_now_playing_line(self.now_playing_album_ticker, info["album"])
 
         self.apply_now_playing_field_visibility()
         self.load_now_playing_art(info["art_url"])
@@ -1449,12 +1482,14 @@ class MelangeWindow(Adw.ApplicationWindow):
     # them the way a fixed pixel width would.
     def apply_now_playing_width(self):
 
-        for label in (
-            self.now_playing_artist_label,
-            self.now_playing_album_label,
-            self.now_playing_time_label
-        ):
-            label.set_max_width_chars(self.now_playing_width)
+        self.now_playing_time_label.set_max_width_chars(self.now_playing_width)
+
+        # Like the title below: a line that's currently scrolling keeps
+        # its ticker's unlimited width (refresh_now_playing_lines
+        # restarts it at the new size).
+        for ticker in (self.now_playing_artist_ticker, self.now_playing_album_ticker):
+            if ticker.text is None:
+                ticker.label.set_max_width_chars(self.now_playing_width)
 
         # The title label is skipped here while it's actively
         # scrolling (part of the "scroll long titles does not work
@@ -1527,6 +1562,33 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if self.now_playing_info is not None:
             self.update_now_playing_title(self.now_playing_info["title"])
+            self.refresh_now_playing_lines()
+
+    # Artist/album: scroll when too long (same Scroll Long Text setting
+    # and fit test as the title), otherwise show statically, shortened
+    # with "…" if needed.
+    def update_now_playing_line(self, ticker, text):
+
+        text = text or ""
+
+        if self.now_playing_scroll_long_titles and text and not self.now_playing_title_fits(text):
+            if text != ticker.text:
+                ticker.start(text)
+        else:
+            ticker.stop()
+            ticker.label.set_label(text)
+
+    def refresh_now_playing_lines(self):
+
+        if self.now_playing_info is None:
+            return
+
+        for ticker, key in (
+            (self.now_playing_artist_ticker, "artist"),
+            (self.now_playing_album_ticker, "album"),
+        ):
+            ticker.stop()
+            self.update_now_playing_line(ticker, self.now_playing_info[key])
 
     # Only (re)starts the scroll if the title actually changed from
     # whatever's currently scrolling - on_now_playing_changed can fire
@@ -1593,6 +1655,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.stop_now_playing_title_scroll()
         self.update_now_playing_title(self.now_playing_info["title"])
+        self.refresh_now_playing_lines()
 
     NOW_PLAYING_SCROLL_TICK_MS = 300
     NOW_PLAYING_SCROLL_SEPARATOR = "   •   "
@@ -2371,35 +2434,47 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return False
 
+    # Mirror Windows group in the sidebar's Visualizers section (was a
+    # submenu of the main menu). Called whenever mirrors open or close.
     def rebuild_mirror_windows_menu(self):
 
-        self.open_mirrors_section.remove_all()
+        group = getattr(self, "mirror_group", None)
 
-        if not self.mirror_windows:
-
-            # No bound action, so GTK shows this as an inert label
-            # rather than a clickable-but-broken item - same reasoning
-            # as leaving an Audio Source entry unbound when there's
-            # nothing to select there.
-            self.open_mirrors_section.append_item(
-                Gio.MenuItem.new("No mirror windows open", None)
-            )
-
+        if group is None:
             return
 
+        for row in self.mirror_rows:
+            group.remove(row)
+
+        self.mirror_rows = []
+
         for mirror in self.mirror_windows:
+            row = Adw.ActionRow(title=f"Mirror {mirror.mirror_number}")
 
-            item = Gio.MenuItem.new(
-                f"Mirror {mirror.mirror_number}",
-                None
-            )
+            show = Gtk.Button(icon_name="window-new-symbolic")
+            show.add_css_class("flat")
+            show.set_valign(Gtk.Align.CENTER)
+            show.set_tooltip_text("Show")
+            show.connect("clicked", lambda b, m=mirror: m.present())
+            row.add_suffix(show)
 
-            item.set_action_and_target_value(
-                "win.present-mirror",
-                GLib.Variant("i", mirror.mirror_number)
-            )
+            close = Gtk.Button(icon_name="window-close-symbolic")
+            close.add_css_class("flat")
+            close.set_valign(Gtk.Align.CENTER)
+            close.set_tooltip_text("Close")
+            close.connect("clicked", lambda b, m=mirror: m.close())
+            row.add_suffix(close)
 
-            self.open_mirrors_section.append_item(item)
+            self.mirror_rows.append(row)
+
+        # Open mirrors go between New Mirror Window and Close All.
+        group.remove(self.close_mirrors_row)
+
+        for row in self.mirror_rows:
+            group.add(row)
+
+        group.add(self.close_mirrors_row)
+        self.close_mirrors_row.set_sensitive(bool(self.mirror_windows))
 
     def on_key_pressed(self, controller, keyval, keycode, state):
 
@@ -2684,17 +2759,6 @@ class MelangeWindow(Adw.ApplicationWindow):
     # rather than build_toggle_row now that this is a real action -
     # stays in sync with the hamburger menu item automatically in both
     # directions, no extra state to keep them agreeing.
-    def build_now_playing_enabled_control(self):
-
-        row = Adw.SwitchRow(
-            title="Enabled",
-            action_name="win.now-playing-enabled"
-        )
-
-        self.now_playing_enabled_row = row
-
-        return row
-
     NOW_PLAYING_PLACEMENT_LABELS = [
         ("top-left", "Top Left"),
         ("top-center", "Top Center"),
@@ -2994,7 +3058,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     def build_now_playing_scroll_long_titles_control(self):
 
         return self.build_toggle_row(
-            "Scroll Long Titles",
+            "Scroll Long Text",
             True,
             self.now_playing_scroll_long_titles_changed
         )
@@ -3018,13 +3082,18 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return row
 
+    # 1-30 s, with the slider's right end (TOOLBAR_HIDE_NEVER) meaning
+    # Never - a longer delay leads to "never" (it used to be the left
+    # end, 0). Internally toolbar_hide_delay <= 0 still means never.
+    TOOLBAR_HIDE_NEVER = 31.0
+
     def build_toolbar_hide_delay_control(self):
 
         def format_toolbar_hide_delay(value):
-            return "Never" if value <= 0 else f"{int(value)}s"
+            return "Never" if value >= self.TOOLBAR_HIDE_NEVER else f"{int(value)}s"
 
         def toolbar_hide_delay_changed(value):
-            self.toolbar_hide_delay = value
+            self.toolbar_hide_delay = 0 if value >= self.TOOLBAR_HIDE_NEVER else value
             # Re-arms immediately against the new delay rather than
             # waiting for the next mouse move/toolbar leave - changing
             # the setting while the toolbar happens to already be
@@ -3036,7 +3105,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.build_slider_row(
             "Hide Delay",
-            0.0, 10.0, 1.0, 3.0,
+            1.0, self.TOOLBAR_HIDE_NEVER, 1.0, 3.0,
             format_toolbar_hide_delay,
             toolbar_hide_delay_changed,
             store_as="toolbar_hide_delay_scale"
@@ -3168,19 +3237,13 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def preferences_clicked(self, action, param):
 
-        self.preferences_dialog.present(self)
+        self.show_sidebar_section("settings")
 
-    def build_preferences_dialog(self):
+    def build_settings_pages(self):
 
-        audio_group = Adw.PreferencesGroup()
+        audio_group = Adw.PreferencesGroup(title="Audio")
+        audio_group.add(self.build_audio_source_control())
         audio_group.add(self.build_sensitivity_control())
-
-        audio_page = Adw.PreferencesPage(
-            title="Audio",
-            icon_name="audio-speakers-symbolic"
-        )
-
-        audio_page.add(audio_group)
 
         cycling_group = Adw.PreferencesGroup(title="Cycling")
         cycling_group.add(self.build_cycle_interval_control())
@@ -3201,29 +3264,22 @@ class MelangeWindow(Adw.ApplicationWindow):
         beat_group.add(self.build_beat_threshold_control())
         beat_group.add(self.build_beat_min_time_control())
 
+        # Turned on/off from the main menu (Ctrl+T); this is its tuning.
         transparency_group = Adw.PreferencesGroup(
             title="Transparency Mode",
-            description="The header bar always stays fully visible."
+            description=(
+                "Turn on from the main menu (Ctrl+T). The header bar always "
+                "stays fully visible."
+            )
         )
-
-        # Bound straight to the action via action-name (Adw.SwitchRow
-        # implements Gtk.Actionable, same as the loop/shuffle queue
-        # Gtk.ToggleButtons elsewhere in this file) rather than a
-        # build_toggle_row callback - stays in sync automatically with
-        # the hamburger menu's own toggle in both directions, with no
-        # extra state to keep them agreeing.
-        transparency_enable_row = Adw.SwitchRow(
-            title="Enabled",
-            action_name="win.transparency-mode"
-        )
-
-        transparency_group.add(transparency_enable_row)
         transparency_group.add(self.build_transparency_opacity_control())
         transparency_group.add(self.build_transparency_hover_reveal_control())
         transparency_group.add(self.build_transparency_fade_control())
 
-        now_playing_group = Adw.PreferencesGroup(title="Now Playing")
-        now_playing_group.add(self.build_now_playing_enabled_control())
+        now_playing_group = Adw.PreferencesGroup(
+            title="Now Playing",
+            description="Turn on from the main menu."
+        )
         now_playing_group.add(self.build_now_playing_source_control())
         now_playing_group.add(self.build_now_playing_placement_control())
         now_playing_group.add(self.build_now_playing_displayed_fields_control())
@@ -3263,17 +3319,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         appearance_page.add(transparency_group)
         appearance_page.add(now_playing_group)
 
-        rendering_group = Adw.PreferencesGroup()
+        rendering_group = Adw.PreferencesGroup(title="Rendering")
         rendering_group.add(self.build_mesh_size_control())
         rendering_group.add(self.build_framerate_control())
         rendering_group.add(self.build_render_scale_control())
 
-        rendering_page = Adw.PreferencesPage(
-            title="Rendering",
-            icon_name="preferences-desktop-display-symbolic"
+        # What drives and draws the visuals - Audio and Rendering used to
+        # be two separate, very short pages.
+        visualizer_page = Adw.PreferencesPage(
+            title="Visualizer",
+            icon_name="audio-speakers-symbolic"
         )
 
-        rendering_page.add(rendering_group)
+        visualizer_page.add(audio_group)
+        visualizer_page.add(rendering_group)
 
         profiles_page = self.build_profiles_page()
 
@@ -3281,14 +3340,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         # view-switcher (rather than a single flat list) for free.
         # Theme (light/dark/system) lives in the hamburger menu itself
         # instead - see build_theme_selector.
-        dialog = Adw.PreferencesDialog()
-        dialog.add(audio_page)
-        dialog.add(playback_page)
-        dialog.add(appearance_page)
-        dialog.add(rendering_page)
-        dialog.add(profiles_page)
-
-        self.preferences_dialog = dialog
+        # Shown in the sidebar's Preferences section (build_sidebar) rather
+        # than a dialog, so the visualizer stays visible while changing
+        # things.
+        self.settings_pages = [
+            ("visualizer", visualizer_page),
+            ("playback", playback_page),
+            ("appearance", appearance_page),
+            ("profiles", profiles_page),
+        ]
 
     # The (key, getter, setter) triples that make up a settings
     # profile. A single list here rather than scattering profile
@@ -3528,13 +3588,259 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def browse_presets_clicked(self, action, param):
 
-        if self.preset_browser_dialog is None:
-            self.build_preset_browser_dialog()
+        self.show_sidebar_section("presets", tab="presets")
 
-        self.browser_view_stack.set_visible_child_name("presets")
-        self.preset_browser_dialog.present(self)
+    # --- sidebar: presets and settings beside the visualizer -------------
 
-    def build_preset_browser_dialog(self):
+    # The window's content (the toolbar view with the visualizer) moves
+    # into an Adw.OverlaySplitView with this sidebar on the right. It
+    # pushes the visualizer aside rather than covering it; windows
+    # narrower than SIDEBAR_COLLAPSE_WIDTH fall back to overlaying it,
+    # and below SIDEBAR_FULL_WIDTH it fills the window.
+    SIDEBAR_COLLAPSE_WIDTH = 720
+    SIDEBAR_FULL_WIDTH = 500
+
+    def build_sidebar(self):
+
+        content = self.get_content()
+        self.set_content(None)
+
+        split = Adw.OverlaySplitView()
+        split.set_sidebar_position(Gtk.PackType.END)
+        split.set_show_sidebar(False)
+        # By default the split view hides the sidebar when it collapses
+        # (and shows it on uncollapsing) - so shrinking the window made
+        # an open sidebar vanish. Pinned, only the toggle/shortcuts/
+        # close button show or hide it.
+        split.set_pin_sidebar(True)
+        split.set_min_sidebar_width(300)
+        split.set_max_sidebar_width(420)
+        split.set_sidebar_width_fraction(0.35)
+        split.set_content(content)
+        self.set_content(split)
+        self.sidebar_split = split
+
+        # Presets | Visualizers | Preferences
+        sections = Adw.ViewStack()
+        sections.add_titled_with_icon(
+            self.preset_browser, "presets", "Presets", "view-list-symbolic"
+        )
+        sections.add_titled_with_icon(
+            self.build_visualizers_section(), "visualizers", "Visualizers",
+            "video-display-symbolic"
+        )
+        sections.add_titled_with_icon(
+            self.build_settings_section(), "settings", "Preferences",
+            "preferences-system-symbolic"
+        )
+        self.sidebar_sections = sections
+
+        # Top-level sections in a bottom switcher bar (icons + labels),
+        # the usual GNOME pattern for narrow views; the tabs *within* a
+        # section (Presets/Favorites/Queue/Playlists, settings pages)
+        # stay at the top.
+        header = Adw.HeaderBar()
+        header.set_show_title(False)
+
+        section_switcher = Adw.ViewSwitcherBar(stack=sections)
+        section_switcher.set_reveal(True)
+
+        # The sidebar toggle shows pressed while the sidebar is open; it
+        # reopens on whichever section was last used (Presets the first
+        # time). Ctrl+F / Q / Ctrl+, jump straight to a section instead.
+        split.bind_property(
+            "show-sidebar", self.sidebar_button, "active",
+            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
+        )
+
+        sidebar = Adw.ToolbarView()
+        sidebar.add_top_bar(header)
+        sidebar.add_bottom_bar(section_switcher)
+        sidebar.set_content(sections)
+        split.set_sidebar(sidebar)
+
+        # While the sidebar is open, the sidebar toggle and main menu move
+        # into the sidebar's header - the same widgets - on its left, in
+        # the same order, with the window buttons alone on its right;
+        # closing it moves them back. So there's one of each, and the
+        # toggle doubles as the sidebar's close button. Fullscreen stays
+        # at the far left of the visualizer's header: it's about the
+        # visualizer, not the sidebar.
+        self.sidebar_header = header
+        # Left to right: sidebar toggle, main menu (GNOME puts the main
+        # menu last, before the window buttons).
+        right_to_left = (self.menu_button, self.sidebar_button)
+
+        def place_header_buttons(*args):
+            open_ = split.get_show_sidebar()
+            source, target = (
+                (self.headerbar, header) if open_ else (header, self.headerbar)
+            )
+
+            if all(b.get_ancestor(Adw.HeaderBar) is target for b in right_to_left):
+                pass
+            elif open_:
+                for button in reversed(right_to_left):
+                    source.remove(button)
+                    target.pack_start(button)
+            else:
+                for button in right_to_left:
+                    source.remove(button)
+                    target.pack_end(button)
+
+            self.headerbar.set_show_end_title_buttons(not open_)
+            header.set_show_end_title_buttons(open_)
+
+        # Deferred: the toggle can be the button that was just clicked.
+        split.connect(
+            "notify::show-sidebar",
+            lambda *args: GLib.idle_add(lambda: (place_header_buttons(), False)[1])
+        )
+        place_header_buttons()
+
+        breakpoint = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(
+            f"max-width: {self.SIDEBAR_COLLAPSE_WIDTH}sp"
+        ))
+        breakpoint.add_setter(split, "collapsed", True)
+        self.add_breakpoint(breakpoint)
+
+        # Very small windows: the sidebar takes the whole window, like a
+        # page (its close button / the toggle goes back). Added last, so
+        # it wins over the one above when both match.
+        full_width = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(
+            f"max-width: {self.SIDEBAR_FULL_WIDTH}sp"
+        ))
+        full_width.add_setter(split, "collapsed", True)
+        full_width.add_setter(split, "min-sidebar-width", 0.0)
+        full_width.add_setter(split, "max-sidebar-width", 100000.0)
+        full_width.add_setter(split, "sidebar-width-fraction", 1.0)
+        self.add_breakpoint(full_width)
+
+    # Mini visualizer windows (aux_window.py), one switch each - bound to
+    # the same win.show-* actions, so they always match what's open.
+    # Was a Mini Visualizers submenu in the main menu.
+    VISUALIZER_ROWS = (
+        ("Meters", (
+            ("VU Meter", "show-vu-meter"),
+            ("Peak Meter", "show-peak-meter"),
+        )),
+        ("Scopes", (
+            ("X-Y Scope", "show-xy-scope"),
+            ("Oscilloscope", "show-oscilloscope"),
+            ("Vector Scope", "show-vectorscope"),
+        )),
+        ("Spectrum", (
+            ("Spectrum", "show-spectrum"),
+            ("Spectrogram", "show-spectrogram"),
+            ("3D Terrain Spectrogram", "show-terrain"),
+            ("3D Waterfall", "show-waterfall"),
+        )),
+        ("Fun", (
+            ("DVD Bounce", "show-dvd-bounce"),
+            ("Pipes", "show-pipes"),
+        )),
+    )
+
+    def build_visualizers_section(self):
+
+        page = Adw.PreferencesPage()
+
+        # Mirror windows: extra windows showing the same visualizer.
+        mirror_group = Adw.PreferencesGroup(
+            title="Mirror Windows",
+            description="Extra windows showing the same visualizer, e.g. on another screen."
+        )
+
+        new_row = Adw.ActionRow(title="New Mirror Window", activatable=True)
+        new_row.add_suffix(Gtk.Image.new_from_icon_name("list-add-symbolic"))
+        new_row.connect("activated", lambda r: self.activate_action("win.new-mirror-window", None))
+        mirror_group.add(new_row)
+
+        close_row = Adw.ActionRow(title="Close All Mirrors", activatable=True)
+        close_row.connect("activated", lambda r: self.activate_action("win.close-all-mirrors", None))
+        mirror_group.add(close_row)
+
+        self.mirror_group = mirror_group
+        self.close_mirrors_row = close_row
+        self.mirror_rows = []
+        self.rebuild_mirror_windows_menu()
+        page.add(mirror_group)
+
+        intro = Adw.PreferencesGroup(
+            title="Mini Visualizers",
+            description="Small extra windows that react to the same audio."
+        )
+        page.add(intro)
+
+        for title, rows in self.VISUALIZER_ROWS:
+            group = Adw.PreferencesGroup(title=title)
+
+            for label, action in rows:
+                group.add(Adw.SwitchRow(title=label, action_name=f"win.{action}"))
+
+            page.add(group)
+
+        return page
+
+    def build_settings_section(self):
+
+        stack = Adw.ViewStack()
+
+        for name, page in self.settings_pages:
+            stack.add_titled_with_icon(page, name, page.get_title(), page.get_icon_name())
+
+        switcher = Adw.InlineViewSwitcher(stack=stack)
+        switcher.set_display_mode(Adw.InlineViewSwitcherDisplayMode.ICONS)
+        switcher.set_homogeneous(True)
+        switcher.set_margin_start(12)
+        switcher.set_margin_end(12)
+        switcher.set_margin_top(6)
+
+        # Icons only fit the sidebar's width, so the current page's name
+        # is shown underneath.
+        title = Gtk.Label(css_classes=["heading"], margin_top=6)
+
+        def update_title(*args):
+            page = stack.get_page(stack.get_visible_child())
+            title.set_label(page.get_title() if page else "")
+
+        stack.connect("notify::visible-child", update_title)
+        update_title()
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(switcher)
+        box.append(title)
+        box.append(stack)
+        stack.set_vexpand(True)
+
+        self.settings_stack = stack
+
+        return box
+
+    # Opens the sidebar on a section (and preset tab); asking for the
+    # section that's already showing closes it again, so the header's
+    # Presets button and the shortcuts work as toggles.
+    def show_sidebar_section(self, section, tab=None):
+
+        split = self.sidebar_split
+        already_showing = (
+            split.get_show_sidebar()
+            and self.sidebar_sections.get_visible_child_name() == section
+            and (tab is None or self.browser_view_stack.get_visible_child_name() == tab)
+        )
+
+        if already_showing:
+            split.set_show_sidebar(False)
+            return
+
+        self.sidebar_sections.set_visible_child_name(section)
+
+        if tab is not None:
+            self.browser_view_stack.set_visible_child_name(tab)
+
+        split.set_show_sidebar(True)
+
+    def build_preset_browser(self):
 
         view_stack = Adw.ViewStack()
 
@@ -3542,44 +3848,36 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.build_presets_tab(),
             "presets", "Presets", "view-list-symbolic"
         )
-
         view_stack.add_titled_with_icon(
             self.build_favorites_tab(),
             "favorites", "Favorites", "starred-symbolic"
         )
-
-        view_stack.add_titled_with_icon(
-            self.build_loaded_presets_tab(),
-            "loaded", "Loaded", "document-open-symbolic"
-        )
-
         view_stack.add_titled_with_icon(
             self.build_queue_tab(),
             "queue", "Queue", "view-continuous-symbolic"
         )
+        # Replaced the Loaded tab: presets loaded from files already
+        # appear in the Presets tree's "Loaded" folder and in search.
+        view_stack.add_titled_with_icon(
+            self.build_playlists_tab(),
+            "playlists", "Playlists", "view-list-bullet-symbolic"
+        )
 
-        switcher = Adw.ViewSwitcher()
-        switcher.set_stack(view_stack)
-        switcher.set_policy(Adw.ViewSwitcherPolicy.WIDE)
+        switcher = Adw.InlineViewSwitcher(stack=view_stack)
+        switcher.set_display_mode(Adw.InlineViewSwitcherDisplayMode.LABELS)
+        switcher.set_homogeneous(True)
+        switcher.set_margin_start(12)
+        switcher.set_margin_end(12)
+        switcher.set_margin_top(6)
 
-        header = Adw.HeaderBar()
-        header.set_title_widget(switcher)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box.append(switcher)
+        box.append(view_stack)
+        view_stack.set_vexpand(True)
 
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(header)
-        toolbar_view.set_content(view_stack)
-
-        dialog = Adw.Dialog()
-        dialog.set_title("Presets")
-        dialog.set_content_width(560)
-        dialog.set_content_height(560)
-        dialog.set_child(toolbar_view)
-
-        self.preset_browser_dialog = dialog
+        self.preset_browser = box
         self.browser_view_stack = view_stack
 
-    # Shared by the Presets and Favorites tabs - same search/filter/
-    # row-rendering behavior, only the backing Gtk.StringList differs.
     def build_preset_search_list(self, list_store, with_tree=False):
 
         expression = Gtk.PropertyExpression.new(
@@ -3729,8 +4027,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         for button in (
             list_item.favorite_button,
-            list_item.queue_button,
-            list_item.playlist_button,
+            list_item.add_button,
         ):
             button.set_visible(is_preset)
 
@@ -3749,7 +4046,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             return
 
         self.presets.go_to(node.preset_name)
-        self.preset_browser_dialog.close()
 
     # The preset collection as a Category > Subfolder > preset tree;
     # presets loaded from files go under "Loaded".
@@ -3816,16 +4112,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return self.build_preset_search_list(self.favorites_list_store)
 
-    # Only presets loaded via win.load-preset (the file picker), not
-    # the bundled packs - session-scoped, see the comment on
-    # self.user_loaded_presets in __init__ for why this deliberately
-    # isn't persisted to disk the way Favorites is.
-    def build_loaded_presets_tab(self):
-
-        self.user_preset_list_store = Gtk.StringList.new(self.user_loaded_presets)
-
-        return self.build_preset_search_list(self.user_preset_list_store)
-
     def preset_row_setup(self, factory, list_item):
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2)
@@ -3853,19 +4139,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         box.append(favorite_button)
 
-        queue_button = Gtk.Button(icon_name="list-add-symbolic")
+        # One "Add to…" button (was separate Add to Queue and Add to
+        # Playlist… buttons): its menu has Add to Queue first, then the
+        # playlists and New Playlist….
+        add_button = Gtk.Button(icon_name="list-add-symbolic")
 
-        queue_button.add_css_class("flat")
-        queue_button.set_tooltip_text("Add to Queue")
+        add_button.add_css_class("flat")
+        add_button.set_tooltip_text("Add to Queue or Playlist…")
 
-        box.append(queue_button)
-
-        playlist_button = Gtk.Button(icon_name="bookmark-new-symbolic")
-
-        playlist_button.add_css_class("flat")
-        playlist_button.set_tooltip_text("Add to Playlist…")
-
-        box.append(playlist_button)
+        box.append(add_button)
 
         list_item.set_child(box)
 
@@ -3876,10 +4158,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         list_item.preset_label = label
         list_item.favorite_button = favorite_button
         list_item.favorite_button_handler = None
-        list_item.queue_button = queue_button
-        list_item.queue_button_handler = None
-        list_item.playlist_button = playlist_button
-        list_item.playlist_button_handler = None
+        list_item.add_button = add_button
+        list_item.add_button_handler = None
 
     def preset_row_bind(self, factory, list_item):
 
@@ -3889,6 +4169,23 @@ class MelangeWindow(Adw.ApplicationWindow):
     def bind_preset_row(self, list_item, name):
 
         list_item.preset_label.set_label(name)
+
+        # Favorites (and playlists) can name presets that aren't in the
+        # collection any more - presets loaded from files only last for
+        # the session they were loaded in.
+        available = self.presets.contains(name)
+
+        if available:
+            list_item.preset_label.remove_css_class("dim-label")
+            list_item.preset_label.set_tooltip_text(None)
+        else:
+            list_item.preset_label.add_css_class("dim-label")
+            list_item.preset_label.set_tooltip_text(
+                "Not available - presets loaded from files only last for the "
+                "session; load the file again to use it"
+            )
+
+        list_item.add_button.set_sensitive(available)
 
         if list_item.favorite_button_handler is not None:
             list_item.favorite_button.disconnect(list_item.favorite_button_handler)
@@ -3902,20 +4199,14 @@ class MelangeWindow(Adw.ApplicationWindow):
             lambda button, n=name: self.favorite_row_clicked(button, n)
         )
 
-        if list_item.queue_button_handler is not None:
-            list_item.queue_button.disconnect(list_item.queue_button_handler)
+        if list_item.add_button_handler is not None:
+            list_item.add_button.disconnect(list_item.add_button_handler)
 
-        list_item.queue_button_handler = list_item.queue_button.connect(
+        list_item.add_button_handler = list_item.add_button.connect(
             "clicked",
-            lambda button: self.enqueue_preset(name)
-        )
-
-        if list_item.playlist_button_handler is not None:
-            list_item.playlist_button.disconnect(list_item.playlist_button_handler)
-
-        list_item.playlist_button_handler = list_item.playlist_button.connect(
-            "clicked",
-            lambda button, n=name: self.open_add_to_playlist_popover(button, n)
+            lambda button, n=name: self.open_add_to_playlist_popover(
+                button, n, include_queue=True
+            )
         )
 
     def favorite_row_clicked(self, button, name):
@@ -3935,30 +4226,28 @@ class MelangeWindow(Adw.ApplicationWindow):
         string_object = list_view.get_model().get_item(position)
         name = string_object.get_string()
 
-        self.presets.go_to(name)
-
-        self.preset_browser_dialog.close()
+        if not self.presets.go_to(name):
+            self.show_toast(f"Not available: {name}")
 
     def enqueue_preset(self, name):
 
-        self.presets.enqueue(name)
+        # Only presets in the current collection can be queued - a
+        # favorite/playlist entry for a preset loaded from a file in an
+        # earlier session no longer exists (it used to fail silently
+        # behind an "Added to queue" toast).
+        if not self.presets.enqueue(name):
+            self.show_toast(f"Not available: {name}")
+            return
+
         self.show_toast(f"Added to queue: {name}")
 
     def show_queue_clicked(self, action, param):
 
-        if self.preset_browser_dialog is None:
-            self.build_preset_browser_dialog()
-
-        self.browser_view_stack.set_visible_child_name("queue")
-        self.preset_browser_dialog.present(self)
+        self.show_sidebar_section("presets", tab="queue")
 
     def show_favorites_clicked(self, action, param):
 
-        if self.preset_browser_dialog is None:
-            self.build_preset_browser_dialog()
-
-        self.browser_view_stack.set_visible_child_name("favorites")
-        self.preset_browser_dialog.present(self)
+        self.show_sidebar_section("presets", tab="favorites")
 
     def build_queue_tab(self):
 
@@ -4001,13 +4290,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         controls.append(shuffle_button)
 
-        playlists_button = Gtk.Button(
-            icon_name="view-list-symbolic",
-            tooltip_text="Playlists…",
-            action_name="win.show-playlists"
-        )
-
-        controls.append(playlists_button)
 
         unload_playlist_button = Gtk.Button(
             icon_name="media-eject-symbolic",
@@ -4300,32 +4582,33 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def show_playlists_clicked(self, action, param):
 
-        if self.playlists_dialog is None:
-            self.build_playlists_dialog()
+        self.show_sidebar_section("presets", tab="playlists")
 
-        self.playlists_dialog.present(self)
-
-    def build_playlists_dialog(self):
+    def build_playlists_tab(self):
 
         self.playlists_group = Adw.PreferencesGroup()
 
+        new_row = Adw.ActionRow(title="New Playlist…", activatable=True)
+        new_row.connect("activated", lambda row: self.new_playlist_from_preset_clicked())
+        new_row.add_suffix(Gtk.Image.new_from_icon_name("list-add-symbolic"))
+        self.playlists_group.add(new_row)
+
+        # Greyed out (with a reason) while the queue is empty - it used
+        # to only flash a "Queue is empty" toast behind the sidebar.
         save_row = Adw.ActionRow(
-            title="Save Current Queue as Playlist…",
+            title="Save Queue as Playlist…",
             activatable=True
         )
-
         save_row.connect("activated", self.save_playlist_clicked)
         save_row.add_suffix(
             Gtk.Image.new_from_icon_name("document-save-symbolic")
         )
-
         self.playlists_group.add(save_row)
+        self.save_queue_row = save_row
+        self.update_save_queue_row()
 
-        # Tracked separately from save_row, same reasoning as
-        # profile_rows in build_profiles_page - a refresh needs to
-        # remove exactly the playlist rows, not the always-present
-        # save row above them.
         self.playlist_rows = []
+        self.expanded_playlists = set()
         self.refresh_playlists_list()
 
         clamp = Adw.Clamp()
@@ -4339,52 +4622,84 @@ class MelangeWindow(Adw.ApplicationWindow):
         scrolled.set_child(clamp)
         scrolled.set_vexpand(True)
 
-        toolbar_view = Adw.ToolbarView()
-        toolbar_view.add_top_bar(Adw.HeaderBar())
-        toolbar_view.set_content(scrolled)
+        return scrolled
 
-        dialog = Adw.Dialog()
-        dialog.set_title("Playlists")
-        dialog.set_content_width(420)
-        dialog.set_content_height(480)
-        dialog.set_child(toolbar_view)
-
-        self.playlists_dialog = dialog
-
+    # A playlist as an expandable row: open it to see its presets (click
+    # one to show it, or remove it); Load puts the playlist in the queue.
     def build_playlist_row(self, playlist):
 
+        name = playlist["name"]
         count = len(playlist["presets"])
 
-        row = Adw.ActionRow(
-            title=playlist["name"],
+        row = Adw.ExpanderRow(
+            title=name,
             subtitle=f"{count} preset{'s' if count != 1 else ''}"
         )
-
-        load_button = Gtk.Button(icon_name="document-open-symbolic")
-        load_button.add_css_class("flat")
-        load_button.set_valign(Gtk.Align.CENTER)
-        load_button.set_tooltip_text("Load")
-
-        load_button.connect(
-            "clicked",
-            lambda b, name=playlist["name"]: self.load_playlist_by_name(name)
+        row.set_expanded(name in self.expanded_playlists)
+        row.connect(
+            "notify::expanded",
+            lambda r, param, n=name: (
+                self.expanded_playlists.add(n) if r.get_expanded()
+                else self.expanded_playlists.discard(n)
+            )
         )
 
+        load_button = Gtk.Button(icon_name="media-playback-start-symbolic")
+        load_button.add_css_class("flat")
+        load_button.set_valign(Gtk.Align.CENTER)
+        load_button.set_tooltip_text("Load into Queue")
+        load_button.set_sensitive(count > 0)
+        load_button.connect("clicked", lambda b, n=name: self.load_playlist_by_name(n))
         row.add_suffix(load_button)
 
         remove_button = Gtk.Button(icon_name="user-trash-symbolic")
         remove_button.add_css_class("flat")
         remove_button.set_valign(Gtk.Align.CENTER)
-        remove_button.set_tooltip_text("Delete")
-
-        remove_button.connect(
-            "clicked",
-            lambda b, name=playlist["name"]: self.delete_playlist_by_name(name)
-        )
-
+        remove_button.set_tooltip_text("Delete Playlist")
+        remove_button.connect("clicked", lambda b, n=name: self.delete_playlist_by_name(n))
         row.add_suffix(remove_button)
 
+        if not playlist["presets"]:
+            empty = Adw.ActionRow(title="No presets yet")
+            empty.set_subtitle("Use the + button on a preset to add it")
+            empty.add_css_class("dim-label")
+            row.add_row(empty)
+
+        for preset in playlist["presets"]:
+            preset_row = Adw.ActionRow(title=preset, activatable=True)
+            preset_row.set_title_lines(1)
+            preset_row.set_tooltip_text(preset)
+            preset_row.connect("activated", lambda r, p=preset: self.presets.go_to(p))
+
+            unavailable = not self.presets.contains(preset)
+            if unavailable:
+                preset_row.set_subtitle("Not available")
+                preset_row.set_activatable(False)
+
+            remove = Gtk.Button(icon_name="list-remove-symbolic")
+            remove.add_css_class("flat")
+            remove.set_valign(Gtk.Align.CENTER)
+            remove.set_tooltip_text("Remove from Playlist")
+            remove.connect(
+                "clicked",
+                lambda b, n=name, p=preset: self.remove_preset_from_playlist(p, n)
+            )
+            preset_row.add_suffix(remove)
+
+            row.add_row(preset_row)
+
         return row
+
+    def remove_preset_from_playlist(self, preset, playlist_name):
+
+        playlist = next((p for p in self.playlists if p["name"] == playlist_name), None)
+
+        if playlist is None or preset not in playlist["presets"]:
+            return
+
+        playlist["presets"].remove(preset)
+        self.save_playlists()
+        self.refresh_playlists_list()
 
     def save_playlist_clicked(self, row):
 
@@ -4592,14 +4907,18 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.refresh_playlists_list()
         self.show_toast(f'Added to "{playlist_name}": {name}')
 
-    def new_playlist_from_preset_clicked(self, name):
+    # name=None creates an empty playlist (Playlists tab's New Playlist…).
+    def new_playlist_from_preset_clicked(self, name=None):
 
         entry = Gtk.Entry()
         entry.set_placeholder_text("Playlist name")
 
         dialog = Adw.AlertDialog(
             heading="New Playlist",
-            body=f'Create a new playlist containing "{name}".'
+            body=(
+                f'Create a new playlist containing "{name}".' if name else
+                "Create an empty playlist. Add presets with the + button on any preset."
+            )
         )
 
         dialog.set_extra_child(entry)
@@ -4637,19 +4956,20 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.playlists.append({
             "name": playlist_name,
-            "presets": [name]
+            "presets": [name] if name else []
         })
 
         self.save_playlists()
         self.refresh_playlists_list()
-        self.show_toast(f'Created playlist "{playlist_name}" with "{name}"')
+        self.show_toast(
+            f'Created playlist "{playlist_name}" with "{name}"' if name
+            else f'Created playlist "{playlist_name}"'
+        )
 
     def refresh_playlists_list(self):
 
-        # May be called before the Playlists dialog has ever been
-        # built (e.g. from the new per-row "add to playlist" button) -
-        # nothing to refresh yet in that case.
-        if self.playlists_dialog is None:
+        # May be called before the Playlists tab has been built.
+        if getattr(self, "playlists_group", None) is None:
             return
 
         for row in self.playlist_rows:
@@ -4702,8 +5022,20 @@ class MelangeWindow(Adw.ApplicationWindow):
             return False
 
         name = Path(basename).stem
+        existing = self.preset_paths.get(name)
 
-        if self.preset_paths.get(name) not in (None, Path(path)):
+        # Same file as the bundled preset of that name (e.g. a copy of a
+        # Cream of the Crop preset): just use the bundled one, rather
+        # than adding a session-only "(loaded)" duplicate.
+        if (
+            isinstance(existing, projectm_view.ZipPreset)
+            and projectm_view.read_preset_bytes(existing) == projectm_view.read_preset_bytes(path)
+        ):
+            self.presets.go_to(name)
+            self.show_toast(f"Already in the collection: {name}")
+            return True
+
+        if existing not in (None, Path(path)):
             name = f"{name} (loaded)"
 
         self.preset_paths[name] = Path(path)
@@ -4812,7 +5144,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         if self.projectm_view is not None:
             self.projectm_view.set_transition_seconds(seconds)
 
+    def update_save_queue_row(self):
+
+        row = getattr(self, "save_queue_row", None)
+
+        if row is None:
+            return
+
+        has_queue = bool(self.preset_queue)
+        row.set_sensitive(has_queue)
+        row.set_subtitle("" if has_queue else "The queue is empty")
+
     def on_preset_queue_changed(self):
+
+        self.update_save_queue_row()
 
         if self.queue_list_store is not None:
             self.queue_list_store.splice(
@@ -4826,7 +5171,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         for store, items in (
             (self.preset_list_store, self.preset_names),
             (self.favorites_list_store, self.favorites),
-            (self.user_preset_list_store, self.user_loaded_presets),
             (self.queue_list_store, self.preset_queue),
         ):
             if store is not None:
@@ -5100,46 +5444,67 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return result
 
+    # Audio Source (Settings > Audio): output devices (their monitors),
+    # Microphone and None, in a combo row driving win.audio-source.
+    # Rebuilt when devices appear/disappear (on_pactl_event).
     def rebuild_audio_source_menu(self):
 
-        self.audio_source_submenu.remove_all()
-
-        devices = Gio.Menu()
-
-        for name, description in self.list_sink_labels():
-
-            item = Gio.MenuItem.new(description, None)
-
-            item.set_action_and_target_value(
-                "win.audio-source",
-                GLib.Variant("s", name)
-            )
-
-            devices.append_item(item)
-
-        self.audio_source_submenu.append_section(None, devices)
-
-        other = Gio.Menu()
-
-        mic_item = Gio.MenuItem.new("Microphone", None)
-
-        mic_item.set_action_and_target_value(
-            "win.audio-source",
-            GLib.Variant("s", "mic")
+        self.audio_source_choices = (
+            list(self.list_sink_labels())
+            + [("mic", "Microphone"), ("none", "None")]
         )
 
-        other.append_item(mic_item)
+        row = getattr(self, "audio_source_row", None)
 
-        none_item = Gio.MenuItem.new("None", None)
+        if row is None:
+            return
 
-        none_item.set_action_and_target_value(
-            "win.audio-source",
-            GLib.Variant("s", "none")
-        )
+        self.updating_audio_source_row = True
+        row.set_model(Gtk.StringList.new(
+            [label for _, label in self.audio_source_choices]
+        ))
+        self.updating_audio_source_row = False
 
-        other.append_item(none_item)
+        self.sync_audio_source_row()
 
-        self.audio_source_submenu.append_section(None, other)
+    def sync_audio_source_row(self, *args):
+
+        row = getattr(self, "audio_source_row", None)
+
+        if row is None:
+            return
+
+        current = self.lookup_action("audio-source").get_state().get_string()
+        values = [value for value, _ in self.audio_source_choices]
+
+        if current in values:
+            self.updating_audio_source_row = True
+            row.set_selected(values.index(current))
+            self.updating_audio_source_row = False
+
+    def build_audio_source_control(self):
+
+        row = Adw.ComboRow(title="Audio Source")
+        self.audio_source_row = row
+        self.updating_audio_source_row = False
+        self.rebuild_audio_source_menu()
+
+        def selected_changed(r, param):
+            if self.updating_audio_source_row:
+                return
+            index = r.get_selected()
+            if 0 <= index < len(self.audio_source_choices):
+                self.lookup_action("audio-source").change_state(
+                    GLib.Variant("s", self.audio_source_choices[index][0])
+                )
+
+        row.connect("notify::selected", selected_changed)
+
+        # Follow changes made elsewhere (e.g. the automatic fallback to
+        # None when the chosen device disappears).
+        self.lookup_action("audio-source").connect("notify::state", self.sync_audio_source_row)
+
+        return row
 
     def watch_audio_changes(self):
 
