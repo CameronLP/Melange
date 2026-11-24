@@ -396,7 +396,7 @@ class MirrorWindow(Adw.ApplicationWindow):
     def refresh_paintable(self):
 
         self.picture.set_paintable(
-            Gtk.WidgetPaintable.new(self.primary.webview)
+            Gtk.WidgetPaintable.new(self.primary.visualizer_widget())
         )
 
     def update_title(self, preset_name):

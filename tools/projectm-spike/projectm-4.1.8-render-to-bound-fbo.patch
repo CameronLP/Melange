@@ -1,0 +1,23 @@
+--- a/src/libprojectM/ProjectM.cpp
++++ b/src/libprojectM/ProjectM.cpp
+@@ -92,6 +92,11 @@
+ 
+ void ProjectM::RenderFrame()
+ {
++    // Melange patch: draw the final image into whichever framebuffer the
++    // caller has bound (e.g. a Gtk.GLArea's), not always FBO 0.
++    GLint targetFramebuffer = 0;
++    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &targetFramebuffer);
++
+     // Don't render if window area is zero.
+     if (m_windowWidth == 0 || m_windowHeight == 0)
+     {
+@@ -167,7 +172,7 @@
+     m_activePreset->RenderFrame(audioData, renderContext);
+ 
+     // ToDo: Allow external apps to provide a custom target framebuffer.
+-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
++    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(targetFramebuffer));
+     glViewport(0, 0, renderContext.viewportSizeX, renderContext.viewportSizeY);
+ 
+ #ifdef USE_GLES

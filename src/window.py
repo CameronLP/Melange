@@ -37,6 +37,7 @@ from melange.webview import create_webview
 from melange.mirror_window import MirrorWindow
 from melange.aux_window import AuxVisualizerWindow
 from melange.now_playing import NowPlayingWatcher
+from melange import projectm_view
 
 # key -> (halign, valign) - "top-*"/"bottom-*" pick valign, the second
 # word picks halign, same convention as the label text.
@@ -179,7 +180,18 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Gtk.Picture never forwards input back to a paintable's
         # source, so they'd have been inert, confusing clutter).
         webview_overlay = Gtk.Overlay()
-        webview_overlay.set_child(self.webview)
+
+        # Holds whichever renderer is active: the Butterchurn webview
+        # (default) or, when Preferences > Experimental > projectM
+        # Renderer is on, a native ProjectMView (created on first use).
+        # The nav arrows, favorite button and Now Playing card stay
+        # overlaid on top of either.
+        self.visualizer_stack = Gtk.Stack()
+        self.visualizer_stack.add_named(self.webview, "butterchurn")
+        webview_overlay.set_child(self.visualizer_stack)
+
+        self.projectm_view = None
+        self.projectm_active = False
 
         self.prev_arrow_button = Gtk.Button(icon_name="go-previous-symbolic")
         self.prev_arrow_button.add_css_class("nav-arrow-button")
@@ -893,11 +905,10 @@ class MelangeWindow(Adw.ApplicationWindow):
     def on_webview_debug_message(self, text):
 
         if text.startswith("PRESET_NAME:"):
-            preset_name = text[len("PRESET_NAME:"):]
-            self.current_preset_name = preset_name
-            self.set_title(self.build_window_title())
-            self.update_mirror_titles()
-            self.update_favorite_button_icon()
+            # Butterchurn keeps running hidden while projectM is shown;
+            # its preset changes mustn't overwrite projectM's title.
+            if not self.projectm_active:
+                self.set_current_preset_name(text[len("PRESET_NAME:"):])
             return
 
         # A failed Load Preset (bad MilkDrop conversion, invalid
@@ -975,13 +986,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         # whether a change was requested via auto-cycling or the
         # win.next-preset keyboard shortcut/GTK nav arrow.
         if text == "NAV_NEXT":
-            self.next_preset(None)
+            if not self.projectm_active:
+                self.next_preset(None)
             return
 
         # Distinct from NAV_NEXT so a beat-triggered advance is
         # actually visible - otherwise it's indistinguishable from a
         # manual click or a normal Cycle Interval tick.
         if text == "BEAT_NAV_NEXT":
+            if self.projectm_active:
+                return
             self.next_preset(None)
             self.show_toast("Beat detected - next preset")
             return
@@ -991,6 +1005,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         # separate, rare, dramatic event neither mode has any
         # particular affinity for (see checkDrop in main.js).
         if text == "DROP_NAV_NEXT":
+            if self.projectm_active:
+                return
             self.next_preset(None)
             self.show_toast("Drop detected - next preset")
             return
@@ -3134,6 +3150,23 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         experimental_page.add(beat_group)
 
+        renderer_group = Adw.PreferencesGroup(
+            title="Renderer",
+            description=(
+                "Native MilkDrop rendering with libprojectM instead of "
+                "Butterchurn. Uses a starter set of 100 presets. The "
+                "preset browser, favorites, queue, playlists, beat-driven "
+                "cycling and most Rendering settings don't apply to it yet."
+            )
+        )
+        self.projectm_renderer_row = self.build_toggle_row(
+            "projectM Renderer",
+            self.projectm_active,
+            self.set_projectm_renderer
+        )
+        renderer_group.add(self.projectm_renderer_row)
+        experimental_page.add(renderer_group)
+
         appearance_page = Adw.PreferencesPage(
             title="Appearance",
             icon_name="preferences-desktop-appearance-symbolic"
@@ -3658,6 +3691,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         string_object = list_view.get_model().get_item(position)
         name = string_object.get_string()
+
+        if self.projectm_active:
+            self.show_toast("The preset browser doesn't work with the projectM renderer yet")
+            return
 
         self.run_js(f"loadPresetByName({json.dumps(name)});")
 
@@ -4438,6 +4475,10 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.show_toast("Preset is locked")
             return
 
+        if self.projectm_active:
+            self.projectm_view.next_preset()
+            return
+
         self.run_js("nextPreset();")
 
     def previous_preset(self, button):
@@ -4446,7 +4487,83 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.show_toast("Preset is locked")
             return
 
+        if self.projectm_active:
+            self.projectm_view.previous_preset()
+            return
+
         self.run_js("previousPreset();")
+
+    def set_current_preset_name(self, name):
+
+        self.current_preset_name = name
+        self.set_title(self.build_window_title())
+        self.update_mirror_titles()
+        self.update_favorite_button_icon()
+
+    # The widget mirror windows show (Gtk.WidgetPaintable) - whichever
+    # renderer is currently active.
+    def visualizer_widget(self):
+
+        if self.projectm_active:
+            return self.projectm_view
+
+        return self.webview
+
+    def projectm_cycle_seconds(self):
+
+        if self.preset_locked:
+            return 0
+
+        scale = getattr(self, "cycle_interval_scale", None)
+
+        return scale.get_value() if scale is not None else 30.0
+
+    def set_projectm_renderer(self, enabled):
+
+        if enabled == self.projectm_active:
+            return
+
+        if enabled:
+
+            available, reason = projectm_view.availability()
+
+            if not available:
+                print("projectM renderer unavailable:", reason)
+                self.show_toast("projectM renderer isn't available in this build")
+                self.projectm_renderer_row.set_active(False)
+                return
+
+            if self.projectm_view is None:
+                self.projectm_view = projectm_view.ProjectMView(
+                    on_preset_changed=self.set_current_preset_name,
+                    get_cycle_seconds=self.projectm_cycle_seconds
+                )
+                self.visualizer_stack.add_named(self.projectm_view, "projectm")
+
+            self.projectm_active = True
+            self.visualizer_stack.set_visible_child_name("projectm")
+
+            # Butterchurn stays loaded but idle: no audio is sent to it
+            # (flush_pending_audio) and its own cycle timer is paused.
+            self.run_js("setCycleInterval(0);")
+
+            name = self.projectm_view.current_preset_name()
+
+            if name:
+                self.set_current_preset_name(name)
+
+        else:
+
+            self.projectm_active = False
+            self.visualizer_stack.set_visible_child_name("butterchurn")
+            self.run_js(f"setCycleInterval({self.projectm_cycle_seconds()});")
+
+        # Favorites are keyed on Butterchurn preset names - not
+        # supported for projectM presets yet.
+        self.favorite_button.set_visible(not self.projectm_active)
+
+        for mirror in self.mirror_windows:
+            mirror.refresh_paintable()
 
     def build_sensitivity_control(self):
 
@@ -4620,7 +4737,10 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.audio_flush_scheduled = False
 
         if data:
-            self.send_audio_to_webview(data)
+            if self.projectm_active:
+                self.projectm_view.push_audio(data)
+            else:
+                self.send_audio_to_webview(data)
 
             if self.aux_windows:
                 self.forward_audio_to_aux_windows(data)
