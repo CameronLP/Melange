@@ -2597,6 +2597,19 @@
 - [ ] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
       Update 2026-11-24: WebKit is gone - the visualizer is a Gtk.GLArea
       now, so GtkWidget.set_cursor should simply work.
+      Requested again ("make mouse disappear in fullscreen") - so it
+      apparently still doesn't in practice. Current code: hide_toolbar
+      (window.py) sets a "none" cursor on the window when the header
+      auto-hides in fullscreen, and mouse_move/toolbar_enter restore it;
+      mirror_window.py does the same; aux_window.py (mini visualizers)
+      doesn't hide it at all. Likely causes to check on a real desktop:
+      it's tied to the header's Hide Delay, so with Hide Delay = Never
+      the cursor never hides; the cursor only hides once the header has
+      hidden, not after its own idle time; something (an overlay widget,
+      the sidebar, a popover) may set its own cursor. Probably: hide the
+      cursor after a short idle time in fullscreen independently of the
+      header (own timer, any mouse movement shows it again), in the main
+      window, mirrors and mini visualizers alike.
 - [ ] Reduce memory usage further - real measurement (not guessing) already found and fixed several things: eager loading of the whole baron preset pack at startup, GC churn in the audio hot path, and some unused WebKit persistence/features (see Done). What's left is WebKitGTK's own multi-process baseline itself (UI + network + web-content processes, each a full engine instance) - measured at roughly 500-650MB total for a single window even after the above fixes. Trimming that further means either the WebSocket audio-bridge change above, or the native-rendering direction below; see that for the real lever.
       Update 2026-11-24: with WebKit removed, Melange measured ~195 MB
       RSS in a single process (was ~700 MB across Python + two WebKit
