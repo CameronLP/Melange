@@ -329,6 +329,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         # source, so they'd have been inert, confusing clutter).
         webview_overlay = Gtk.Overlay()
 
+        # Fill the space even with the visualizer hidden (Main Visualizer
+        # off) - its expand used to be all that stretched this, so the
+        # "Main Visualizer Off" page collapsed into a corner.
+        webview_overlay.set_hexpand(True)
+        webview_overlay.set_vexpand(True)
+
         webview_overlay.set_child(visualizer)
 
         # Dropping .milk files onto the visualizer loads them, same as
