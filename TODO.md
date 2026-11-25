@@ -114,6 +114,16 @@
 
 ### Requested 2026-11-25
 
+- [ ] "File open preset selector" - requested, waiting on which of
+      these is meant (Load Preset... / Ctrl+O already opens a file
+      chooser for single .milk files):
+      - open a folder of your own presets, shown in the preset browser
+        as its own section with its subfolders as a tree, remembered;
+      - let Load Preset... pick several files at once (queue/play them);
+      - a bigger, separate file-chooser-style window for browsing and
+        searching all presets (the sidebar is narrow);
+      - preview a preset on the visualizer while browsing, before
+        choosing it.
 - [ ] **Mini visualizer refactor** (agreed 2026-11-25: restructure, not
       rewrite - same drawing and behaviour, every setting/saved file/
       shortcut unchanged; one step per PR, existing headless tests as
