@@ -252,6 +252,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Preferences > Window: the preset's name in the title bar.
         self.show_preset_in_title = True
 
+        # Now Playing > Style: the card's background (Show Background on).
+        self.now_playing_bg_color = Gdk.RGBA()
+        self.now_playing_bg_color.parse("#000000")
+        self.now_playing_bg_opacity = 0.5
+
         # Now Playing > Style: outline around the text and placeholder.
         self.now_playing_outline = False
         self.now_playing_outline_color = Gdk.RGBA()
@@ -1462,6 +1467,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         else:
             self.now_playing_box.remove_css_class("now-playing-card")
 
+        for row in getattr(self, "now_playing_bg_rows", ()):
+            row.set_visible(enabled)
+
     def now_playing_show_time_changed(self, enabled):
 
         self.now_playing_show_time = enabled
@@ -2037,6 +2045,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         css = (
             f".now-playing-art-placeholder {{ color: {color.to_string()}; }}"
             f" .now-playing-text {{ color: {color.to_string()}; }}"
+        )
+
+        bg = self.now_playing_bg_color
+        css += (
+            f" .now-playing-card {{ background-color: rgba({round(bg.red * 255)},"
+            f" {round(bg.green * 255)}, {round(bg.blue * 255)}, {self.now_playing_bg_opacity:.2f}); }}"
         )
 
         # Text Outline: a ring of hard-edged shadows around the text and
@@ -3233,6 +3247,40 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_scroll_long_titles_changed
         )
 
+    def build_now_playing_background_controls(self):
+        """Color and opacity of the card behind the text (shown while
+        Displayed Fields > Show Background is on)."""
+
+        color_row = Adw.ActionRow(title="Background Color")
+        button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False))
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_rgba(self.now_playing_bg_color)
+
+        def color_changed(widget, param):
+            self.now_playing_bg_color = widget.get_rgba()
+            self.apply_now_playing_text_style()
+
+        button.connect("notify::rgba", color_changed)
+        color_row.add_suffix(button)
+        self.now_playing_bg_color_button = button
+
+        def opacity_changed(value):
+            self.now_playing_bg_opacity = value
+            self.apply_now_playing_text_style()
+
+        opacity_row = self.build_slider_row(
+            "Background Opacity", 0.0, 1.0, 0.05, self.now_playing_bg_opacity,
+            lambda value: f"{value * 100:.0f}%", opacity_changed,
+            store_as="now_playing_bg_opacity_scale"
+        )
+
+        self.now_playing_bg_rows = (color_row, opacity_row)
+
+        for row in self.now_playing_bg_rows:
+            row.set_visible(self.now_playing_show_background)
+
+        return [color_row, opacity_row]
+
     def build_now_playing_outline_controls(self):
 
         def outline_changed(enabled):
@@ -3569,6 +3617,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         np_style_group.add(self.build_now_playing_font_control())
         np_style_group.add(self.build_now_playing_text_color_control())
         for row in self.build_now_playing_outline_controls():
+            np_style_group.add(row)
+        for row in self.build_now_playing_background_controls():
             np_style_group.add(row)
 
         np_visibility_group = Adw.PreferencesGroup(title="Visibility")
