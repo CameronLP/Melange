@@ -252,6 +252,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Preferences > Window: the preset's name in the title bar.
         self.show_preset_in_title = True
 
+        # Now Playing > Style: outline around the text and placeholder.
+        self.now_playing_outline = False
+        self.now_playing_outline_color = Gdk.RGBA()
+        self.now_playing_outline_color.parse("#ffffff")
+        self.now_playing_outline_width = 2.0
+
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
@@ -2024,25 +2030,39 @@ class MelangeWindow(Adw.ApplicationWindow):
                 self.get_display(), self.now_playing_placeholder_css,
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
             )
-        self.now_playing_placeholder_css.load_from_string(
+        # Text Color goes through CSS (not a Pango foreground attribute):
+        # GTK draws text shadows in an attribute's color, so with an
+        # attribute the Text Outline came out in the text color instead
+        # of the outline color.
+        css = (
             f".now-playing-art-placeholder {{ color: {color.to_string()}; }}"
+            f" .now-playing-text {{ color: {color.to_string()}; }}"
         )
 
-        attrs.insert(Pango.attr_foreground_new(
-            int(color.red * 65535),
-            int(color.green * 65535),
-            int(color.blue * 65535)
-        ))
+        # Text Outline: a ring of hard-edged shadows around the text and
+        # the placeholder icon (meme-caption style), so it reads over any
+        # preset. GTK's CSS has no stroke, but 16 offset shadows look
+        # the same at these widths.
+        if self.now_playing_outline:
+            width = self.now_playing_outline_width
+            outline = self.now_playing_outline_color.to_string()
+            shadows = ", ".join(
+                f"{width * math.cos(step * math.pi / 8):.2f}px "
+                f"{width * math.sin(step * math.pi / 8):.2f}px 0 {outline}"
+                for step in range(16)
+            )
+            css += (
+                # Room for the outline, which would otherwise be clipped at
+                # each line's edges.
+                f" .now-playing-outlined .now-playing-text {{ text-shadow: {shadows};"
+                f" padding: {math.ceil(width)}px; }}"
+                f" .now-playing-outlined .now-playing-art-placeholder {{ -gtk-icon-shadow: {shadows}; }}"
+            )
+            self.now_playing_box.add_css_class("now-playing-outlined")
+        else:
+            self.now_playing_box.remove_css_class("now-playing-outlined")
 
-        # Foreground color and its alpha are two separate Pango
-        # attribute types - the Text Color picker already lets
-        # choosing a translucent color (GTK4's color dialog has an
-        # alpha slider by default), but picking one had zero visible
-        # effect until this was added, since alpha was never read at
-        # all before.
-        attrs.insert(Pango.attr_foreground_alpha_new(
-            int(color.alpha * 65535)
-        ))
+        self.now_playing_placeholder_css.load_from_string(css)
 
         for label in (
             self.now_playing_title_label,
@@ -2051,6 +2071,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_time_label
         ):
             label.set_attributes(attrs)
+            label.add_css_class("now-playing-text")
 
         self.apply_now_playing_art_size()
         self.apply_now_playing_title_frame_width()
@@ -3212,6 +3233,48 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_scroll_long_titles_changed
         )
 
+    def build_now_playing_outline_controls(self):
+
+        def outline_changed(enabled):
+            self.now_playing_outline = enabled
+            color_row.set_visible(enabled)
+            width_row.set_visible(enabled)
+            self.apply_now_playing_text_style()
+
+        toggle = self.build_toggle_row(
+            "Text Outline", self.now_playing_outline, outline_changed,
+            store_as="now_playing_outline_row"
+        )
+        toggle.set_subtitle("An outline around the text and icon, for any background")
+
+        color_row = Adw.ActionRow(title="Outline Color")
+        button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_rgba(self.now_playing_outline_color)
+
+        def color_changed(widget, param):
+            self.now_playing_outline_color = widget.get_rgba()
+            self.apply_now_playing_text_style()
+
+        button.connect("notify::rgba", color_changed)
+        color_row.add_suffix(button)
+        self.now_playing_outline_color_button = button
+
+        def width_changed(value):
+            self.now_playing_outline_width = value
+            self.apply_now_playing_text_style()
+
+        width_row = self.build_slider_row(
+            "Outline Width", 1.0, 4.0, 0.5, self.now_playing_outline_width,
+            lambda value: f"{value:g} px", width_changed,
+            store_as="now_playing_outline_width_scale"
+        )
+
+        color_row.set_visible(self.now_playing_outline)
+        width_row.set_visible(self.now_playing_outline)
+
+        return [toggle, color_row, width_row]
+
     def build_now_playing_text_color_control(self):
 
         row = Adw.ActionRow(title="Text Color")
@@ -3505,6 +3568,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         np_style_group = Adw.PreferencesGroup(title="Style")
         np_style_group.add(self.build_now_playing_font_control())
         np_style_group.add(self.build_now_playing_text_color_control())
+        for row in self.build_now_playing_outline_controls():
+            np_style_group.add(row)
 
         np_visibility_group = Adw.PreferencesGroup(title="Visibility")
         np_visibility_group.add(self.build_now_playing_auto_hide_control())
