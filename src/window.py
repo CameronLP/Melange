@@ -252,6 +252,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Preferences > Window: the preset's name in the title bar.
         self.show_preset_in_title = True
 
+        # Now Playing > Style > Placeholder Icon: "note" or "player".
+        self.now_playing_placeholder_style = "note"
+
+        # Now Playing > Style: the card's background (Show Background on).
+        self.now_playing_bg_color = Gdk.RGBA()
+        self.now_playing_bg_color.parse("#000000")
+        self.now_playing_bg_opacity = 0.5
+
+        # Now Playing > Style: outline around the text and placeholder.
+        self.now_playing_outline = False
+        self.now_playing_outline_color = Gdk.RGBA()
+        self.now_playing_outline_color.parse("#ffffff")
+        self.now_playing_outline_width = 2.0
+
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
@@ -314,6 +328,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Gtk.Picture never forwards input back to a paintable's
         # source, so they'd have been inert, confusing clutter).
         webview_overlay = Gtk.Overlay()
+
+        # Fill the space even with the visualizer hidden (Main Visualizer
+        # off) - its expand used to be all that stretched this, so the
+        # "Main Visualizer Off" page collapsed into a corner.
+        webview_overlay.set_hexpand(True)
+        webview_overlay.set_vexpand(True)
 
         webview_overlay.set_child(visualizer)
 
@@ -391,6 +411,25 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.paused_badge.set_can_target(False)
         self.paused_badge.set_visible(False)
         webview_overlay.add_overlay(self.paused_badge)
+
+        # Shown in place of the visualizer while it's turned off (menu >
+        # Main Visualizer) to run only the mini visualizers.
+        self.main_off_page = Adw.StatusPage(
+            icon_name="video-display-symbolic",
+            title="Main Visualizer Off",
+            description="Mini visualizers keep running. Turning it off saves CPU and GPU.",
+        )
+        turn_on = Gtk.Button(label="Turn On", halign=Gtk.Align.CENTER)
+        turn_on.add_css_class("pill")
+        turn_on.add_css_class("suggested-action")
+        turn_on.connect(
+            "clicked",
+            lambda button: self.lookup_action("main-visualizer").change_state(GLib.Variant("b", True))
+        )
+        self.main_off_page.set_child(turn_on)
+        self.main_off_page.add_css_class("main-off-page")
+        self.main_off_page.set_visible(False)
+        webview_overlay.add_overlay(self.main_off_page)
 
         # Now Playing (now_playing.py) - hidden until a track is
         # actually reported (see on_now_playing_changed), so there's
@@ -594,6 +633,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pactl_event_timer = None
         self.preset_locked = False
         self.paused = False
+        self.main_visualizer_on = True
         self.preset_list_store = None
         self.preset_browser = None
         self.browser_view_stack = None
@@ -948,6 +988,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Pause (P): freeze the visualizer on its current frame - no
         # rendering, audio ignored, no preset changes. Next/previous
         # resume it.
+        # Main Visualizer on/off: off hides and pauses projectM (no
+        # rendering, no audio into it, no preset changes) while audio
+        # still reaches the mini visualizers.
+        main_visualizer_action = Gio.SimpleAction.new_stateful(
+            "main-visualizer", None, GLib.Variant("b", True)
+        )
+        main_visualizer_action.connect("change-state", self.main_visualizer_changed)
+        self.add_action(main_visualizer_action)
+
         pause_action = Gio.SimpleAction.new_stateful(
             "pause", None, GLib.Variant("b", False)
         )
@@ -1043,8 +1092,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def toolbar_enter(self, controller, x, y):
 
-        print(f"[{time.monotonic():.3f}] toolbar_enter x={x:.0f} y={y:.0f}")
-
         self.mouse_over_toolbar = True
 
         if self.hide_timer:
@@ -1061,8 +1108,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
 
     def toolbar_leave(self, controller):
-
-        print(f"[{time.monotonic():.3f}] toolbar_leave")
 
         self.mouse_over_toolbar = False
 
@@ -1158,9 +1203,9 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.reveal_toolbar()
 
         self.show_toast(
-            "Immersive Mode enabled - right-click to exit"
+            "Controls hidden - right-click to show them"
             if self.immersive_mode_enabled
-            else "Immersive Mode disabled"
+            else "Controls shown"
         )
 
     # The only way out of Immersive Mode once it's on (see
@@ -1169,11 +1214,31 @@ class MelangeWindow(Adw.ApplicationWindow):
     # effect on ordinary right-clicks.
     def on_content_right_click(self, gesture, n_press, x, y):
 
-        if not self.immersive_mode_enabled:
-            return
-
+        # Everyday options, wherever the controls are (and the way back
+        # when Hide Controls is on: it shows checked here).
         menu = Gio.Menu()
-        menu.append("Exit Immersive Mode", "win.immersive-mode")
+
+        presets = Gio.Menu()
+        presets.append("Next Preset", "win.next-preset")
+        presets.append("Previous Preset", "win.previous-preset")
+        presets.append("Favorite", "win.toggle-favorite")
+        menu.append_section(None, presets)
+
+        playback = Gio.Menu()
+        playback.append("Pause", "win.pause")
+        playback.append("Lock Preset", "win.lock-preset")
+        playback.append("Shuffle", "win.shuffle-preset")
+        menu.append_section(None, playback)
+
+        view = Gio.Menu()
+        view.append("Hide Controls", "win.immersive-mode")
+        view.append("Fullscreen", "win.toggle-fullscreen")
+        menu.append_section(None, view)
+
+        more = Gio.Menu()
+        more.append("Browse Presets…", "win.browse-presets")
+        more.append("Preferences…", "win.preferences")
+        menu.append_section(None, more)
 
         popover = Gtk.PopoverMenu.new_from_model(menu)
         popover.set_parent(self.content_box)
@@ -1193,6 +1258,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         point.height = 1
 
         popover.set_pointing_to(point)
+        # Detach it once closed (after the chosen item has run), or every
+        # right-click would leave another popover attached.
+        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
         popover.popup()
 
     OPACITY_FADE_TICK_MS = 16
@@ -1430,6 +1498,9 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_box.add_css_class("now-playing-card")
         else:
             self.now_playing_box.remove_css_class("now-playing-card")
+
+        for row in getattr(self, "now_playing_bg_rows", ()):
+            row.set_visible(enabled)
 
     def now_playing_show_time_changed(self, enabled):
 
@@ -1999,25 +2070,45 @@ class MelangeWindow(Adw.ApplicationWindow):
                 self.get_display(), self.now_playing_placeholder_css,
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
             )
-        self.now_playing_placeholder_css.load_from_string(
+        # Text Color goes through CSS (not a Pango foreground attribute):
+        # GTK draws text shadows in an attribute's color, so with an
+        # attribute the Text Outline came out in the text color instead
+        # of the outline color.
+        css = (
             f".now-playing-art-placeholder {{ color: {color.to_string()}; }}"
+            f" .now-playing-text {{ color: {color.to_string()}; }}"
         )
 
-        attrs.insert(Pango.attr_foreground_new(
-            int(color.red * 65535),
-            int(color.green * 65535),
-            int(color.blue * 65535)
-        ))
+        bg = self.now_playing_bg_color
+        css += (
+            f" .now-playing-card {{ background-color: rgba({round(bg.red * 255)},"
+            f" {round(bg.green * 255)}, {round(bg.blue * 255)}, {self.now_playing_bg_opacity:.2f}); }}"
+        )
 
-        # Foreground color and its alpha are two separate Pango
-        # attribute types - the Text Color picker already lets
-        # choosing a translucent color (GTK4's color dialog has an
-        # alpha slider by default), but picking one had zero visible
-        # effect until this was added, since alpha was never read at
-        # all before.
-        attrs.insert(Pango.attr_foreground_alpha_new(
-            int(color.alpha * 65535)
-        ))
+        # Text Outline: a ring of hard-edged shadows around the text and
+        # the placeholder icon (meme-caption style), so it reads over any
+        # preset. GTK's CSS has no stroke, but 16 offset shadows look
+        # the same at these widths.
+        if self.now_playing_outline:
+            width = self.now_playing_outline_width
+            outline = self.now_playing_outline_color.to_string()
+            shadows = ", ".join(
+                f"{width * math.cos(step * math.pi / 8):.2f}px "
+                f"{width * math.sin(step * math.pi / 8):.2f}px 0 {outline}"
+                for step in range(16)
+            )
+            css += (
+                # Room for the outline, which would otherwise be clipped at
+                # each line's edges.
+                f" .now-playing-outlined .now-playing-text {{ text-shadow: {shadows};"
+                f" padding: {math.ceil(width)}px; }}"
+                f" .now-playing-outlined .now-playing-art-placeholder {{ -gtk-icon-shadow: {shadows}; }}"
+            )
+            self.now_playing_box.add_css_class("now-playing-outlined")
+        else:
+            self.now_playing_box.remove_css_class("now-playing-outlined")
+
+        self.now_playing_placeholder_css.load_from_string(css)
 
         for label in (
             self.now_playing_title_label,
@@ -2026,6 +2117,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_time_label
         ):
             label.set_attributes(attrs)
+            label.add_css_class("now-playing-text")
 
         self.apply_now_playing_art_size()
         self.apply_now_playing_title_frame_width()
@@ -2096,9 +2188,50 @@ class MelangeWindow(Adw.ApplicationWindow):
     # an empty gap where the art frame would be rather than showing
     # anything. Also reused for a real art_url that fails to download
     # or decode, so every "no usable art" case looks the same.
+    # Now Playing > Style > Placeholder Icon = Player's Icon: the
+    # player's own icon if the sandbox can see it (apps installed
+    # normally - Flatpak players' icons aren't visible to Melange),
+    # else one for the kind of source, else the music note.
+    PLACEHOLDER_BROWSERS = (
+        "firefox", "mozilla", "chrom", "brave", "epiphany", "webkit", "vivaldi",
+        "opera", "edge", "librewolf", "zen", "floorp", "waterfox",
+    )
+    PLACEHOLDER_VIDEO_PLAYERS = (
+        "vlc", "totem", "mpv", "celluloid", "videos", "clapper", "showtime",
+        "haruna", "smplayer", "kodi", "mplayer", "dragon",
+    )
+
+    def now_playing_placeholder_icon(self):
+
+        default = "audio-x-generic-symbolic"
+
+        if self.now_playing_placeholder_style != "player":
+            return default
+
+        info = self.now_playing_info or {}
+        theme = Gtk.IconTheme.get_for_display(self.get_display())
+        entry = (info.get("desktop_entry") or "").removesuffix(".desktop")
+
+        for name in (f"{entry}-symbolic", entry, f"{entry.lower()}-symbolic", entry.lower()):
+            if entry and theme.has_icon(name):
+                return name
+
+        text = f"{entry} {info.get('identity', '')}".lower()
+
+        if any(word in text for word in self.PLACEHOLDER_BROWSERS):
+            return "web-browser-symbolic"
+        if any(word in text for word in self.PLACEHOLDER_VIDEO_PLAYERS):
+            return "video-x-generic-symbolic"
+        if not info.get("length_us"):
+            # No length: usually a live stream or internet radio.
+            return "network-wireless-symbolic"
+
+        return default
+
     def show_now_playing_art_placeholder(self):
 
         self.now_playing_art.set_paintable(None)
+        self.now_playing_art_placeholder.set_from_icon_name(self.now_playing_placeholder_icon())
 
         if not self.now_playing_show_art_placeholder:
             self.now_playing_art_frame.set_visible(False)
@@ -2270,13 +2403,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def hide_toolbar(self):
 
-        print(
-            f"[{time.monotonic():.3f}] hide_toolbar firing:",
-            "mouse_over_toolbar=", self.mouse_over_toolbar,
-            "menu_open=", self.menu_open,
-            "is_fullscreen=", self.is_fullscreen()
-        )
-
         self.hide_timer = None
 
         if self.mouse_over_toolbar:
@@ -2298,9 +2424,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         # while the preset is locked (requested: a locked view shows no
         # floating buttons; F still toggles the favorite).
         for arrow in (self.prev_arrow_button, self.next_arrow_button):
-            arrow.set_visible(self.show_nav_arrows and not self.preset_locked)
+            arrow.set_visible(self.show_nav_arrows and not self.preset_locked and self.main_visualizer_on)
 
-        self.favorite_button.set_visible(self.show_favorite_button and not self.preset_locked)
+        self.favorite_button.set_visible(
+            self.show_favorite_button and not self.preset_locked and self.main_visualizer_on
+        )
 
         buttons = (
             self.prev_arrow_button,
@@ -2595,16 +2723,37 @@ class MelangeWindow(Adw.ApplicationWindow):
                 self.hide_timer = None
             self.toolbar_view.set_reveal_top_bars(False)
 
+    def main_visualizer_changed(self, action, value):
+
+        action.set_state(value)
+        self.main_visualizer_on = value.get_boolean()
+
+        if self.projectm_view is not None:
+            view = self.projectm_view
+            view.set_paused(self.paused or not self.main_visualizer_on)
+            # Hidden = no frames drawn at all. Pausing normally waits to
+            # grab one last frame to freeze on, which a hidden view never
+            # draws - so don't wait (it kept asking for redraws), and grab
+            # a fresh one when it comes back still paused.
+            view.freeze_pending = self.main_visualizer_on and self.paused
+            view.set_visible(self.main_visualizer_on)
+            view.queue_render()
+
+        self.main_off_page.set_visible(not self.main_visualizer_on)
+        self.paused_badge.set_visible(self.paused and self.main_visualizer_on)
+        self.presets.set_cycle_paused(self.preset_locked or self.paused or not self.main_visualizer_on)
+        self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
+
     def pause_changed(self, action, value):
 
         action.set_state(value)
         self.paused = value.get_boolean()
 
         if self.projectm_view is not None:
-            self.projectm_view.set_paused(self.paused)
+            self.projectm_view.set_paused(self.paused or not self.main_visualizer_on)
 
-        self.presets.set_cycle_paused(self.preset_locked or self.paused)
-        self.paused_badge.set_visible(self.paused)
+        self.presets.set_cycle_paused(self.preset_locked or self.paused or not self.main_visualizer_on)
+        self.paused_badge.set_visible(self.paused and self.main_visualizer_on)
 
         self.show_toast("Paused" if self.paused else "Resumed")
 
@@ -2631,7 +2780,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         # a preset *change* actually happening.
         self.cycling_group.set_sensitive(not self.preset_locked)
 
-        self.presets.set_cycle_paused(self.preset_locked or self.paused)
+        self.presets.set_cycle_paused(self.preset_locked or self.paused or not self.main_visualizer_on)
         self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
 
         self.show_toast(
@@ -3171,6 +3320,101 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_scroll_long_titles_changed
         )
 
+    def build_now_playing_placeholder_style_control(self):
+
+        styles = [("note", "Music Note"), ("player", "Player's Icon")]
+        row = Adw.ComboRow(
+            title="Placeholder Icon",
+            subtitle="Shown when a track has no artwork",
+            model=Gtk.StringList.new([label for _, label in styles]),
+        )
+
+        def changed(combo, param):
+            self.now_playing_placeholder_style = styles[combo.get_selected()][0]
+            if self.now_playing_art_placeholder.get_visible():
+                self.show_now_playing_art_placeholder()
+
+        row.connect("notify::selected", changed)
+        self.now_playing_placeholder_style_row = row
+
+        return row
+
+    def build_now_playing_background_controls(self):
+        """Color and opacity of the card behind the text (shown while
+        Displayed Fields > Show Background is on)."""
+
+        color_row = Adw.ActionRow(title="Background Color")
+        button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(with_alpha=False))
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_rgba(self.now_playing_bg_color)
+
+        def color_changed(widget, param):
+            self.now_playing_bg_color = widget.get_rgba()
+            self.apply_now_playing_text_style()
+
+        button.connect("notify::rgba", color_changed)
+        color_row.add_suffix(button)
+        self.now_playing_bg_color_button = button
+
+        def opacity_changed(value):
+            self.now_playing_bg_opacity = value
+            self.apply_now_playing_text_style()
+
+        opacity_row = self.build_slider_row(
+            "Background Opacity", 0.0, 1.0, 0.05, self.now_playing_bg_opacity,
+            lambda value: f"{value * 100:.0f}%", opacity_changed,
+            store_as="now_playing_bg_opacity_scale"
+        )
+
+        self.now_playing_bg_rows = (color_row, opacity_row)
+
+        for row in self.now_playing_bg_rows:
+            row.set_visible(self.now_playing_show_background)
+
+        return [color_row, opacity_row]
+
+    def build_now_playing_outline_controls(self):
+
+        def outline_changed(enabled):
+            self.now_playing_outline = enabled
+            color_row.set_visible(enabled)
+            width_row.set_visible(enabled)
+            self.apply_now_playing_text_style()
+
+        toggle = self.build_toggle_row(
+            "Text Outline", self.now_playing_outline, outline_changed,
+            store_as="now_playing_outline_row"
+        )
+        toggle.set_subtitle("An outline around the text and icon, for any background")
+
+        color_row = Adw.ActionRow(title="Outline Color")
+        button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_rgba(self.now_playing_outline_color)
+
+        def color_changed(widget, param):
+            self.now_playing_outline_color = widget.get_rgba()
+            self.apply_now_playing_text_style()
+
+        button.connect("notify::rgba", color_changed)
+        color_row.add_suffix(button)
+        self.now_playing_outline_color_button = button
+
+        def width_changed(value):
+            self.now_playing_outline_width = value
+            self.apply_now_playing_text_style()
+
+        width_row = self.build_slider_row(
+            "Outline Width", 1.0, 4.0, 0.5, self.now_playing_outline_width,
+            lambda value: f"{value:g} px", width_changed,
+            store_as="now_playing_outline_width_scale"
+        )
+
+        color_row.set_visible(self.now_playing_outline)
+        width_row.set_visible(self.now_playing_outline)
+
+        return [toggle, color_row, width_row]
+
     def build_now_playing_text_color_control(self):
 
         row = Adw.ActionRow(title="Text Color")
@@ -3464,6 +3708,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         np_style_group = Adw.PreferencesGroup(title="Style")
         np_style_group.add(self.build_now_playing_font_control())
         np_style_group.add(self.build_now_playing_text_color_control())
+        for row in self.build_now_playing_outline_controls():
+            np_style_group.add(row)
+        for row in self.build_now_playing_background_controls():
+            np_style_group.add(row)
+        np_style_group.add(self.build_now_playing_placeholder_style_control())
 
         np_visibility_group = Adw.PreferencesGroup(title="Visibility")
         np_visibility_group.add(self.build_now_playing_auto_hide_control())
@@ -5446,7 +5695,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     # change preset (see ProjectMView.apply_settings).
     def on_projectm_beat(self):
 
-        if self.preset_locked or self.paused:
+        if self.preset_locked or self.paused or not self.main_visualizer_on:
             return
 
         self.presets.next()

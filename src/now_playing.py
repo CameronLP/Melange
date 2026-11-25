@@ -50,6 +50,10 @@ class NowPlayingWatcher:
 
         self.players = {}
         self.identities = {}
+        # Each player's DesktopEntry (its app ID: "firefox",
+        # "org.videolan.VLC"...) - usually also its icon name; used for
+        # Now Playing's "Player's Icon" placeholder.
+        self.desktop_entries = {}
         self.last_active = {}
         self.preferred_source = None
 
@@ -162,6 +166,11 @@ class NowPlayingWatcher:
                 name, MPRIS_PATH, MPRIS_ROOT_IFACE, None
             )
 
+            entry = root_proxy.get_cached_property("DesktopEntry")
+
+            if entry:
+                self.desktop_entries[name] = entry.get_string()
+
             identity = root_proxy.get_cached_property("Identity")
 
             if identity:
@@ -176,6 +185,7 @@ class NowPlayingWatcher:
 
     def _remove_player(self, name):
 
+        self.desktop_entries.pop(name, None)
         self.players.pop(name, None)
         self.identities.pop(name, None)
         self.last_active.pop(name, None)
@@ -256,6 +266,8 @@ class NowPlayingWatcher:
             "art_url": metadata.get("mpris:artUrl", ""),
             "status": self._playback_status(proxy),
             "length_us": metadata.get("mpris:length", 0),
+            "identity": self.identities.get(bus_name, ""),
+            "desktop_entry": self.desktop_entries.get(bus_name, ""),
         }
 
     def _playback_status(self, proxy):

@@ -70,6 +70,8 @@ SAVED_SETTINGS = [
     "terrain_auto_rotate", "terrain_rotate_speed",
     "waterfall_auto_rotate", "waterfall_rotate_speed",
     "view_hint_shown", "vector_auto_gain", "color_sync", "reverse_colors",
+    "terrain_pan_x", "terrain_pan_y", "waterfall_pan_x", "waterfall_pan_y",
+    "pipes_pan_x", "pipes_pan_y",
     "scope_line_width", "peak_scale",
 ]
 
@@ -77,7 +79,7 @@ SAVED_SETTINGS = [
 # Reset View / double-click / Home go back to these.
 VIEW_DEFAULTS = {"terrain": (35, 55), "waterfall": (35, 55), "pipes": (35, 28)}
 VIEW_KINDS = tuple(VIEW_DEFAULTS)
-VIEW_HINT = "Drag to rotate · Scroll to zoom · Double-click to reset"
+VIEW_HINT = "Drag to rotate · Shift+drag to move · Scroll to zoom · Double-click to reset"
 
 SAVE_DELAY_MS = 1000
 
@@ -914,6 +916,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.view_dragging = False
         self.last_auto_rotate_time = None
         self.view_hint_shown = False
+
+        # 3D views: where the scene sits in the window (fractions of the
+        # width/height; Shift+drag, Shift+arrows, Center View = 0).
+        self.terrain_pan_x = self.terrain_pan_y = 0.0
+        self.waterfall_pan_x = self.waterfall_pan_y = 0.0
+        self.pipes_pan_x = self.pipes_pan_y = 0.0
+        self.view_panning = False
+        self.pan_start = (0.0, 0.0)
 
         self.settings_rows = {}
         self.row_subtitles = {}
@@ -3187,6 +3197,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 subtitle="Rotate 45°: mono is vertical, stereo width spreads sideways"
             )
 
+        if self.kind in VIEW_KINDS:
+            center_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            center_button = Gtk.Button(label="Center View")
+            center_button.connect("clicked", lambda button: self.center_view())
+            center_row.append(center_button)
+            box.append(center_row)
+
         if self.kind in ("terrain", "waterfall"):
             self.add_switch(box, "Auto-Rotate", f"{self.kind}_auto_rotate")
             self.add_scale(
@@ -3567,6 +3584,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.add_action(compact)
         self.compact_action = compact
 
+        center = Gio.SimpleAction.new("center-view", None)
+        center.connect("activate", lambda *args: self.center_view())
+        self.add_action(center)
+
         reset_view = Gio.SimpleAction.new("reset-view", None)
         reset_view.connect("activate", lambda *args: self.reset_view())
         self.add_action(reset_view)
@@ -3696,6 +3717,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         menu.append("Fullscreen", "win.toggle-fullscreen")
 
         if self.kind in VIEW_KINDS:
+            menu.append("Center View", "win.center-view")
             menu.append("Reset View", "win.reset-view")
 
         menu.append("Close", "window.close")
@@ -3718,14 +3740,48 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 "grabbing" if self.view_dragging else "grab"
             )
 
-    def on_view_drag_begin(self):
+    def on_view_drag_begin(self, gesture=None):
 
         self.view_dragging = True
+
+        # Shift+drag moves the scene instead of rotating it.
+        state = gesture.get_current_event_state() if gesture is not None else 0
+        self.view_panning = bool(state & Gdk.ModifierType.SHIFT_MASK)
+        self.pan_start = self.view_pan()
+
         self.update_view_cursor()
+
+    def view_pan(self):
+
+        return (
+            getattr(self, f"{self.kind}_pan_x", 0.0),
+            getattr(self, f"{self.kind}_pan_y", 0.0),
+        )
+
+    def set_view_pan(self, pan_x, pan_y):
+
+        if self.kind not in VIEW_KINDS:
+            return
+
+        # Keep at least part of the scene on screen.
+        setattr(self, f"{self.kind}_pan_x", max(-0.9, min(0.9, pan_x)))
+        setattr(self, f"{self.kind}_pan_y", max(-0.9, min(0.9, pan_y)))
+        self.view_changed()
+
+    def pan_drag(self, offset_x, offset_y):
+
+        width = max(1, self.drawing_area.get_width())
+        height = max(1, self.drawing_area.get_height())
+        self.set_view_pan(self.pan_start[0] + offset_x / width, self.pan_start[1] + offset_y / height)
+
+    def center_view(self):
+
+        self.set_view_pan(0.0, 0.0)
 
     def on_view_drag_end(self, *args):
 
         self.view_dragging = False
+        self.view_panning = False
         self.last_auto_rotate_time = None
         self.update_view_cursor()
         self.schedule_save()
@@ -3774,6 +3830,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         setattr(self, f"{self.kind}_azimuth", math.radians(azimuth))
         setattr(self, f"{self.kind}_elevation", math.radians(elevation))
         setattr(self, f"{self.kind}_zoom", 1.0)
+        setattr(self, f"{self.kind}_pan_x", 0.0)
+        setattr(self, f"{self.kind}_pan_y", 0.0)
         self.view_changed()
 
     def auto_rotate_step(self):
@@ -4201,9 +4259,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.pipes_rotate_start = (self.pipes_azimuth, self.pipes_elevation)
         self.pipes_dragging = True
-        self.on_view_drag_begin()
+        self.on_view_drag_begin(gesture)
 
     def on_pipes_drag_update(self, gesture, offset_x, offset_y):
+
+        if self.view_panning:
+            self.pan_drag(offset_x, offset_y)
+            return
 
         start_azimuth, start_elevation = self.pipes_rotate_start
 
@@ -4408,9 +4470,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_terrain_drag_begin(self, gesture, start_x, start_y):
 
         self.terrain_rotate_start = (self.terrain_azimuth, self.terrain_elevation)
-        self.on_view_drag_begin()
+        self.on_view_drag_begin(gesture)
 
     def on_terrain_drag_update(self, gesture, offset_x, offset_y):
+
+        if self.view_panning:
+            self.pan_drag(offset_x, offset_y)
+            return
 
         # offset_x/offset_y are cumulative from drag-begin (GTK's own
         # GestureDrag semantics), not per-event deltas - recomputing
@@ -4451,9 +4517,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.waterfall_rotate_start = (
             self.waterfall_azimuth, self.waterfall_elevation
         )
-        self.on_view_drag_begin()
+        self.on_view_drag_begin(gesture)
 
     def on_waterfall_drag_update(self, gesture, offset_x, offset_y):
+
+        if self.view_panning:
+            self.pan_drag(offset_x, offset_y)
+            return
 
         start_azimuth, start_elevation = self.waterfall_rotate_start
 
@@ -6646,8 +6716,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         box_h = max(1e-6, max(ys) - min(ys))
         scale = min((width - margin * 2) / box_w, (height - margin * 2) / box_h) * zoom
 
-        cx = width / 2 - (min(xs) + max(xs)) / 2 * scale
-        cy = height / 2 - (min(ys) + max(ys)) / 2 * scale
+        pan_x, pan_y = self.view_pan()
+        cx = width / 2 - (min(xs) + max(xs)) / 2 * scale + pan_x * width
+        cy = height / 2 - (min(ys) + max(ys)) / 2 * scale + pan_y * height
 
         return cx, cy, scale
 
@@ -7438,7 +7509,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.paint_background(cr)
 
         size = PIPES_GRID_SIZE
-        cx, cy = width / 2, height / 2
+        cx = width / 2 + self.pipes_pan_x * width
+        cy = height / 2 + self.pipes_pan_y * height
         scale = (
             min(width, height) * 0.38
             * self.pipes_zoom * (1.0 + self.pipes_beat_zoom_boost)
@@ -7788,7 +7860,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 Gdk.KEY_Up: (0, step), Gdk.KEY_Down: (0, -step),
             }
             if keyval in moves:
-                self.rotate_view(*moves[keyval])
+                if state & Gdk.ModifierType.SHIFT_MASK:
+                    pan_x, pan_y = self.view_pan()
+                    step_pan = {
+                        Gdk.KEY_Left: (-0.05, 0), Gdk.KEY_Right: (0.05, 0),
+                        Gdk.KEY_Up: (0, -0.05), Gdk.KEY_Down: (0, 0.05),
+                    }[keyval]
+                    self.set_view_pan(pan_x + step_pan[0], pan_y + step_pan[1])
+                else:
+                    self.rotate_view(*moves[keyval])
                 return True
             if keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
                 self.zoom_view(1.1)
