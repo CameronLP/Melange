@@ -18,6 +18,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import colorsys
+import json
+from pathlib import Path
 import math
 import cmath
 import random
@@ -33,6 +35,92 @@ gi.require_version("GdkPixbuf", "2.0")
 from melange.cursor_hider import FullscreenCursorHider
 from gi.repository import Gtk, Adw, Gdk, Gio, GLib, GdkPixbuf, GObject
 import cairo
+
+# Remembered between launches, per kind, in
+# ~/.config/melange/mini_visualizers.json (see load_saved_settings).
+# Everything a setting control changes, plus the 3D views' camera.
+SAVED_SETTINGS = [
+    "color", "color_mode", "num_bars", "decay", "show_labels",
+    "mirror_reflection", "maintain_aspect_ratio", "scope_zoom",
+    "xy_line_width", "xy_points", "xy_curved",
+    "vu_style", "vu_peak_hold", "vu_segments",
+    "peak_hold_seconds", "peak_hold_color_custom", "peak_hold_color",
+    "spectrum_peak_hold", "spectrum_height_scale", "spectrum_style",
+    "scope_time_base", "scope_trigger", "vector_persistence", "vector_dot_size",
+    "spectrogram_vertical", "spectrogram_speed", "spectrogram_palette",
+    "spectrogram_color_lo", "spectrogram_color_hi", "spectrogram_color_ceiling",
+    "terrain_palette", "terrain_color_lo", "terrain_color_hi",
+    "terrain_color_ceiling", "terrain_zoom", "terrain_show_axes",
+    "terrain_azimuth", "terrain_elevation",
+    "waterfall_palette", "waterfall_color_lo", "waterfall_color_hi",
+    "waterfall_color_ceiling", "waterfall_textured", "waterfall_height_scale",
+    "waterfall_zoom", "waterfall_show_axes",
+    "waterfall_azimuth", "waterfall_elevation",
+    "icon_name", "dvd_bg_color", "dvd_speed_scale", "dvd_base_size",
+    "dvd_reactivity", "dvd_beats_enabled", "dvd_beat_sensitivity",
+    "pipes_max_pipes", "pipes_base_width", "pipes_band_colors",
+    "pipes_speed_scale", "pipes_reactivity", "pipes_show_grid",
+    "pipes_fade_enabled", "pipes_fade_seconds", "pipes_auto_rotate",
+    "pipes_rotate_speed", "pipes_beats_enabled", "pipes_beat_rotation_enabled",
+    "pipes_beat_zoom_enabled", "pipes_pulse_width", "pipes_pulse_color",
+    "pipes_tube_shading", "pipes_zoom", "pipes_azimuth", "pipes_elevation",
+]
+
+SAVE_DELAY_MS = 1000
+
+
+def saved_settings_path():
+
+    return Path(GLib.get_user_config_dir()) / "melange" / "mini_visualizers.json"
+
+
+def read_saved_settings():
+
+    try:
+        data = json.loads(saved_settings_path().read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def encode_setting(value):
+
+    if isinstance(value, Gdk.RGBA):
+        return value.to_string()
+
+    if isinstance(value, list):
+        return [encode_setting(item) for item in value]
+
+    return value
+
+
+def decode_setting(saved, current):
+    """Saved JSON value -> the type of the current default, or None if
+    it doesn't fit (then the default is kept)."""
+
+    if isinstance(current, Gdk.RGBA):
+        color = Gdk.RGBA()
+        return color if isinstance(saved, str) and color.parse(saved) else None
+
+    if isinstance(current, list):
+        if not isinstance(saved, list) or len(saved) != len(current):
+            return None
+        items = [decode_setting(a, b) for a, b in zip(saved, current)]
+        return None if None in items else items
+
+    if isinstance(current, bool):
+        return saved if isinstance(saved, bool) else None
+
+    if isinstance(current, (int, float)):
+        if isinstance(saved, bool) or not isinstance(saved, (int, float)):
+            return None
+        return type(current)(saved)
+
+    if isinstance(current, str):
+        return saved if isinstance(saved, str) else None
+
+    return None
+
 
 # Smallest size a mini visualizer window can be resized to.
 AUX_MIN_WIDTH = 100
@@ -513,6 +601,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.set_default_size(400, 400)
         else:
             self.set_default_size(360, 220)
+
+        self.save_timer = None
+        saved = read_saved_settings().get(kind, {})
+        size = saved.get("window_size")
+
+        if (
+            isinstance(size, list) and len(size) == 2
+            and all(isinstance(n, int) for n in size)
+        ):
+            self.set_default_size(max(size[0], AUX_MIN_WIDTH), max(size[1], AUX_MIN_HEIGHT))
 
         self.set_title(AUX_WINDOW_TITLES[kind])
 
@@ -1131,9 +1229,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # see the comment there for why (every kind's state needs to
         # exist first, and this is the first point in __init__ where
         # that's guaranteed).
+        self.load_saved_settings()
+
         self.settings_split.set_sidebar(
             self.build_settings_sidebar(self.build_settings_controls())
         )
+
+        # Size changes are saved too (not while maximized/fullscreen).
+        self.connect("notify::default-width", self.schedule_save)
+        self.connect("notify::default-height", self.schedule_save)
         self.settings_button.bind_property(
             "active", self.settings_split, "show-sidebar",
             GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
@@ -2812,6 +2916,66 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_dirty = True
         self.waterfall_dirty = True
         self.drawing_area.queue_draw()
+        self.schedule_save()
+
+    # --- remembered settings ---------------------------------------------
+
+    def load_saved_settings(self):
+
+        saved = read_saved_settings().get(self.kind, {})
+        valid_icons = {key for key, _ in DVD_ICON_CHOICES}
+
+        for name in SAVED_SETTINGS:
+            if name not in saved or not hasattr(self, name):
+                continue
+
+            value = decode_setting(saved[name], getattr(self, name))
+
+            if value is None:
+                continue
+
+            if name == "icon_name" and value not in valid_icons:
+                continue
+
+            setattr(self, name, value)
+
+        self._icon_cache_key = None
+
+    def schedule_save(self, *args):
+
+        if self.save_timer is not None:
+            GLib.source_remove(self.save_timer)
+
+        self.save_timer = GLib.timeout_add(SAVE_DELAY_MS, self.save_settings)
+
+    def save_settings(self):
+
+        if self.save_timer is not None:
+            GLib.source_remove(self.save_timer)
+            self.save_timer = None
+
+        data = read_saved_settings()
+        entry = data.get(self.kind, {}) if isinstance(data.get(self.kind), dict) else {}
+
+        for name in SAVED_SETTINGS:
+            if hasattr(self, name):
+                entry[name] = encode_setting(getattr(self, name))
+
+        if not (self.is_maximized() or self.is_fullscreen()):
+            width, height = self.get_default_size()
+            if width > 0 and height > 0:
+                entry["window_size"] = [width, height]
+
+        data[self.kind] = entry
+
+        try:
+            path = saved_settings_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            GLib.file_set_contents(str(path), json.dumps(data, indent=1).encode())
+        except (OSError, GLib.Error) as error:
+            print(f"Couldn't save mini visualizer settings: {error}")
+
+        return False
 
     def on_color_changed(self, button, param):
 
@@ -6281,6 +6445,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def on_close_request(self, window):
 
+        self.save_settings()
         self.cursor_hider.stop()
 
         if self.hide_timer:

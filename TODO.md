@@ -801,6 +801,11 @@
       settings aren't in profile_fields() (window state, audio source,
       Now Playing options, aux window settings) and whether they
       should be remembered too.
+      **Partly done 2026-11-25:** mini visualizer (aux window) settings
+      and window size are now remembered per kind
+      (~/.config/melange/mini_visualizers.json, aux_window.py
+      SAVED_SETTINGS). Position can't be on Wayland. Main window
+      settings are still not persisted.
 - [ ] Tunable X-Y Scope that can write text/draw images - requested,
       a much bigger feature idea than a simple setting. This is the
       "oscilloscope art"/vector-monitor genre (Lissajous-style X-Y
