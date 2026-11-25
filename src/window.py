@@ -3400,9 +3400,9 @@ class MelangeWindow(Adw.ApplicationWindow):
     ]
 
     def now_playing_effective_colors(self):
-        """(text, background) to draw with, from each one's source. Text
-        that doesn't come from your own choice switches to white or black
-        when it would be too close to the background to read."""
+        """(text, background) to draw with, from each one's source. When
+        either follows something (theme, visualizer), text that would be
+        too close to the background switches to white or black."""
 
         def rgba(rgb):
             color = Gdk.RGBA()
@@ -3426,7 +3426,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         elif self.now_playing_text_source == "main":
             text = rgba(palette_color("main", 1.0))
 
-        if self.now_playing_text_source != "custom" and abs(luminance(text) - luminance(bg)) < 0.45:
+        # Keep it readable whenever either colour isn't one you picked -
+        # e.g. your white text on a background following a light theme
+        # flips to black (and back in dark mode).
+        follows = self.now_playing_text_source != "custom" or self.now_playing_bg_source != "custom"
+        if follows and abs(luminance(text) - luminance(bg)) < 0.45:
             text = rgba((1.0, 1.0, 1.0) if luminance(bg) < 0.5 else (0.0, 0.0, 0.0))
 
         return text, bg

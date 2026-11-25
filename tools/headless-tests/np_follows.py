@@ -45,6 +45,18 @@ def run(win):
     text_row.set_selected(0); c2 = Gdk.RGBA(); c2.parse("#ff8800"); win.now_playing_text_color_button.set_rgba(c2)
     t, b = win.now_playing_effective_colors()
     check("Chosen Color is used as-is", t.to_string() == "rgb(255,136,0)")
+    # your own text colour on a theme-following background inverts with it
+    white = Gdk.RGBA(); white.parse("#ffffff"); win.now_playing_text_color_button.set_rgba(white)
+    text_row.set_selected(0); bg_row.set_selected(1)
+    sm.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
+    t, b = win.now_playing_effective_colors()
+    check("your white text on System Theme (dark): stays white", t.to_string() == "rgb(255,255,255)", f"{t.to_string()} on {b.to_string()}")
+    sm.set_color_scheme(Adw.ColorScheme.FORCE_LIGHT)
+    t, b = win.now_playing_effective_colors()
+    check("…and turns black when the theme goes light", t.to_string() == "rgb(0,0,0)", f"{t.to_string()} on {b.to_string()}")
+    bg_row.set_selected(0); c3 = Gdk.RGBA(); c3.parse("#eeeeee"); win.now_playing_bg_color_button.set_rgba(c3)
+    t, b = win.now_playing_effective_colors()
+    check("both your own colours: left alone even if close", t.to_string() == "rgb(255,255,255)", f"{t.to_string()} on {b.to_string()}")
     text_row.set_selected(2); bg_row.set_selected(1)
     win.save_settings()
     prefs = json.load(open(f"{OUT}/config/melange/settings.json"))["preferences"]
