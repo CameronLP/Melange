@@ -117,26 +117,31 @@
 - [ ] More comprehensive README, "like Twine" - requested as a model
       for depth/structure. Ties in with the NEXT README entry below
       (screenshots + logo); worth doing as one piece.
-- [ ] Fullscreen: the title bar should disappear at the same moment as
+- [x] **Done 2026-11-25 (PR #10).**
+      Fullscreen: the title bar should disappear at the same moment as
       the pointer and the floating buttons. Today the pointer and
       buttons go after 2 s still (FullscreenCursorHider.on_hide ->
       set_nav_arrows_visible(False), window.py), but the header waits
       for Hide Delay (3 s default, or Never). Likely fix: in that same
       on_hide, also hide the header (respecting mouse_over_toolbar /
       menu_open) when fullscreen.
-- [ ] Now Playing placeholder (the icon shown when there's no artwork)
+- [x] **Done 2026-11-25 (PR #10).**
+      Now Playing placeholder (the icon shown when there's no artwork)
       should take the same color as the text (Text Color setting).
 - [ ] More projectM settings? - open question; see the existing
       "rendering settings for projectm" entry. Candidates from the
       libprojectM 4 API: hard-cut sensitivity/duration, soft-cut
       duration, beat sensitivity, aspect correction, preset duration.
-- [ ] Framerate (Preferences > Audio & Rendering): add a real 60 FPS
+- [x] **Done 2026-11-25 (PR #10).**
+      Framerate (Preferences > Audio & Rendering): add a real 60 FPS
       step - the slider runs 10-60 and 60 means "Uncapped"
       (build_framerate_control, window.py), so it jumps from 59 FPS
       straight to uncapped. E.g. range 10-61 with 61 = Uncapped.
-- [ ] Setting to show the visualizer's name in the title bar (the main
+- [x] **Done 2026-11-25 (PR #10).**
+      Setting to show the visualizer's name in the title bar (the main
       window title is the preset name today).
-- [ ] Option to change preset when the song changes (Now Playing
+- [x] **Done 2026-11-25 (PR #10).**
+      Option to change preset when the song changes (Now Playing
       already watches MPRIS track changes - could trigger next/random
       preset, maybe respecting Lock).
 - [ ] Mini visualizers that stop shrinking before the window does -
