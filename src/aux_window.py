@@ -765,23 +765,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         content_overlay = Gtk.Overlay()
         content_overlay.set_child(self.drawing_area)
 
-        # The settings sidebar is built at the end of __init__: its
-        # controls read kind-specific state assigned further down.
-        # Toggles the settings sidebar (see build_settings_sidebar) -
-        # bound both ways to its show-sidebar in __init__'s last lines.
+        # Sidebar toggle at the right end of the title bar, like the
+        # main window's (the settings sidebar opens on the right). The
+        # sidebar itself is built at the end of __init__: its controls
+        # read kind-specific state assigned further down. Bound both
+        # ways to show-sidebar there; the sidebar's own header has a
+        # matching toggle to close it.
         self.settings_button = Gtk.ToggleButton(
-            icon_name="preferences-system-symbolic",
+            icon_name="sidebar-show-right-symbolic",
             tooltip_text="Settings"
         )
-        self.settings_button.add_css_class("nav-arrow-button")
-        self.settings_button.add_css_class("flat")
-        self.settings_button.set_size_request(40, 40)
-        self.settings_button.set_halign(Gtk.Align.END)
-        self.settings_button.set_valign(Gtk.Align.END)
-        self.settings_button.set_margin_end(10)
-        self.settings_button.set_margin_bottom(10)
-
-        content_overlay.add_overlay(self.settings_button)
+        self.header.pack_end(self.settings_button)
 
         # In the header, same placement as MirrorWindow's own
         # fullscreen button (mirror_window.py) - not an overlay button
@@ -2884,6 +2878,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 widget.connect_after("notify::rgba", self.settings_changed)
 
         header = Adw.HeaderBar(show_start_title_buttons=False)
+
+        close_toggle = Gtk.ToggleButton(
+            icon_name="sidebar-show-right-symbolic",
+            tooltip_text="Settings",
+        )
+        close_toggle.bind_property(
+            "active", self.settings_split, "show-sidebar",
+            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
+        )
+        header.pack_start(close_toggle)
         header.set_title_widget(
             Adw.WindowTitle(title="Settings", subtitle=AUX_WINDOW_TITLES[self.kind])
         )
@@ -3610,7 +3614,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def set_overlay_controls_visible(self, visible):
 
-        buttons = (self.settings_button,)
+        buttons = ()    # no floating buttons left; kept for callers
 
         for button in buttons:
 
