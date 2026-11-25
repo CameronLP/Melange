@@ -292,9 +292,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         # unusual choice.
         self.now_playing_periodic_fade = False
         # Periodic Fade cycle: hidden -> fade in -> shown -> fade out.
-        self.now_playing_periodic_hidden_seconds = 4.0
-        self.now_playing_periodic_shown_seconds = 4.0
-        self.now_playing_periodic_fade_duration = 1.0
+        self.now_playing_periodic_hidden_seconds = 30.0
+        self.now_playing_periodic_shown_seconds = 15.0
+        self.now_playing_periodic_fade_duration = 2.0
         self.now_playing_periodic_timer = None
         self.now_playing_fade_timer = None
         self.toolbar_hide_delay = 3
@@ -3286,26 +3286,38 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return f"{minutes} min {seconds}s" if seconds else f"{minutes} min"
 
+    # Hidden For / Shown For go up to 5 minutes, so their sliders are
+    # squared: the slider position p means p^2 seconds - fine steps for
+    # short times, coarse ones for long (just under half is 0-1 min).
+    PERIODIC_MAX_SECONDS = 300
+
+    @staticmethod
+    def periodic_seconds(position):
+
+        return float(round(position * position))
+
     def build_now_playing_periodic_fade_controls(self):
+
+        top = math.sqrt(self.PERIODIC_MAX_SECONDS)
 
         return [
             self.build_slider_row(
                 "Hidden For",
-                0.0, 300.0, 1.0, self.now_playing_periodic_hidden_seconds,
-                self.format_duration,
-                self.now_playing_periodic_hidden_changed,
+                0.0, top, 0.05, math.sqrt(self.now_playing_periodic_hidden_seconds),
+                lambda position: self.format_duration(self.periodic_seconds(position)),
+                lambda position: self.now_playing_periodic_hidden_changed(self.periodic_seconds(position)),
                 store_as="now_playing_periodic_hidden_scale"
             ),
             self.build_slider_row(
                 "Shown For",
-                1.0, 300.0, 1.0, self.now_playing_periodic_shown_seconds,
-                self.format_duration,
-                self.now_playing_periodic_shown_changed,
+                1.0, top, 0.05, math.sqrt(self.now_playing_periodic_shown_seconds),
+                lambda position: self.format_duration(self.periodic_seconds(position)),
+                lambda position: self.now_playing_periodic_shown_changed(self.periodic_seconds(position)),
                 store_as="now_playing_periodic_shown_scale"
             ),
             self.build_slider_row(
                 "Fade Duration",
-                0.2, 5.0, 0.1, self.now_playing_periodic_fade_duration,
+                0.2, 10.0, 0.1, self.now_playing_periodic_fade_duration,
                 lambda value: f"{value:.1f}s",
                 self.now_playing_periodic_fade_duration_changed,
                 store_as="now_playing_periodic_fade_duration_scale"
@@ -3744,6 +3756,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     # moment-to-moment states, and starting up in them would confuse.
     REMEMBERED_ACTIONS = ("shuffle-preset", "now-playing-enabled", "loop-queue", "shuffle-queue")
     SETTINGS_SAVE_DELAY_MS = 1000
+    SETTINGS_VERSION = 2
 
     def settings_file_path(self):
 
@@ -3812,6 +3825,16 @@ class MelangeWindow(Adw.ApplicationWindow):
             return
 
         preferences = saved.get("preferences", {})
+
+        # Version 2: Hidden For / Shown For sliders became squared (their
+        # position is the square root of the seconds) - convert older
+        # files' plain seconds so the times stay the same.
+        if isinstance(preferences, dict) and saved.get("version", 1) < 2:
+            for key in ("now-playing/Hidden For", "now-playing/Shown For"):
+                value = preferences.get(key)
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                    preferences[key] = math.sqrt(value)
+
         if isinstance(preferences, dict):
             for key, widget, getter, setter in self.keyed_preference_controls():
                 if key in preferences:
@@ -3873,6 +3896,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.settings_save_timer = None
 
         data = {
+            "version": self.SETTINGS_VERSION,
             "preferences": {
                 key: self.encode_preference(getter())
                 for key, widget, getter, setter in self.keyed_preference_controls()
