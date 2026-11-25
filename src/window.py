@@ -252,6 +252,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Preferences > Window: the preset's name in the title bar.
         self.show_preset_in_title = True
 
+        # Now Playing > Style > Placeholder Icon: "note" or "player".
+        self.now_playing_placeholder_style = "note"
+
         # Now Playing > Style: the card's background (Show Background on).
         self.now_playing_bg_color = Gdk.RGBA()
         self.now_playing_bg_color.parse("#000000")
@@ -2179,9 +2182,50 @@ class MelangeWindow(Adw.ApplicationWindow):
     # an empty gap where the art frame would be rather than showing
     # anything. Also reused for a real art_url that fails to download
     # or decode, so every "no usable art" case looks the same.
+    # Now Playing > Style > Placeholder Icon = Player's Icon: the
+    # player's own icon if the sandbox can see it (apps installed
+    # normally - Flatpak players' icons aren't visible to Melange),
+    # else one for the kind of source, else the music note.
+    PLACEHOLDER_BROWSERS = (
+        "firefox", "mozilla", "chrom", "brave", "epiphany", "webkit", "vivaldi",
+        "opera", "edge", "librewolf", "zen", "floorp", "waterfox",
+    )
+    PLACEHOLDER_VIDEO_PLAYERS = (
+        "vlc", "totem", "mpv", "celluloid", "videos", "clapper", "showtime",
+        "haruna", "smplayer", "kodi", "mplayer", "dragon",
+    )
+
+    def now_playing_placeholder_icon(self):
+
+        default = "audio-x-generic-symbolic"
+
+        if self.now_playing_placeholder_style != "player":
+            return default
+
+        info = self.now_playing_info or {}
+        theme = Gtk.IconTheme.get_for_display(self.get_display())
+        entry = (info.get("desktop_entry") or "").removesuffix(".desktop")
+
+        for name in (f"{entry}-symbolic", entry, f"{entry.lower()}-symbolic", entry.lower()):
+            if entry and theme.has_icon(name):
+                return name
+
+        text = f"{entry} {info.get('identity', '')}".lower()
+
+        if any(word in text for word in self.PLACEHOLDER_BROWSERS):
+            return "web-browser-symbolic"
+        if any(word in text for word in self.PLACEHOLDER_VIDEO_PLAYERS):
+            return "video-x-generic-symbolic"
+        if not info.get("length_us"):
+            # No length: usually a live stream or internet radio.
+            return "network-wireless-symbolic"
+
+        return default
+
     def show_now_playing_art_placeholder(self):
 
         self.now_playing_art.set_paintable(None)
+        self.now_playing_art_placeholder.set_from_icon_name(self.now_playing_placeholder_icon())
 
         if not self.now_playing_show_art_placeholder:
             self.now_playing_art_frame.set_visible(False)
@@ -3270,6 +3314,25 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_scroll_long_titles_changed
         )
 
+    def build_now_playing_placeholder_style_control(self):
+
+        styles = [("note", "Music Note"), ("player", "Player's Icon")]
+        row = Adw.ComboRow(
+            title="Placeholder Icon",
+            subtitle="Shown when a track has no artwork",
+            model=Gtk.StringList.new([label for _, label in styles]),
+        )
+
+        def changed(combo, param):
+            self.now_playing_placeholder_style = styles[combo.get_selected()][0]
+            if self.now_playing_art_placeholder.get_visible():
+                self.show_now_playing_art_placeholder()
+
+        row.connect("notify::selected", changed)
+        self.now_playing_placeholder_style_row = row
+
+        return row
+
     def build_now_playing_background_controls(self):
         """Color and opacity of the card behind the text (shown while
         Displayed Fields > Show Background is on)."""
@@ -3643,6 +3706,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             np_style_group.add(row)
         for row in self.build_now_playing_background_controls():
             np_style_group.add(row)
+        np_style_group.add(self.build_now_playing_placeholder_style_control())
 
         np_visibility_group = Adw.PreferencesGroup(title="Visibility")
         np_visibility_group.add(self.build_now_playing_auto_hide_control())
