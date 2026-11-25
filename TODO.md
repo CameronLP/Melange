@@ -112,6 +112,59 @@
 
 ## In progress / not started
 
+### Requested 2026-11-25
+
+- [ ] More comprehensive README, "like Twine" - requested as a model
+      for depth/structure. Ties in with the NEXT README entry below
+      (screenshots + logo); worth doing as one piece.
+- [ ] Fullscreen: the title bar should disappear at the same moment as
+      the pointer and the floating buttons. Today the pointer and
+      buttons go after 2 s still (FullscreenCursorHider.on_hide ->
+      set_nav_arrows_visible(False), window.py), but the header waits
+      for Hide Delay (3 s default, or Never). Likely fix: in that same
+      on_hide, also hide the header (respecting mouse_over_toolbar /
+      menu_open) when fullscreen.
+- [ ] Now Playing placeholder (the icon shown when there's no artwork)
+      should take the same color as the text (Text Color setting).
+- [ ] More projectM settings? - open question; see the existing
+      "rendering settings for projectm" entry. Candidates from the
+      libprojectM 4 API: hard-cut sensitivity/duration, soft-cut
+      duration, beat sensitivity, aspect correction, preset duration.
+- [ ] Framerate (Preferences > Audio & Rendering): add a real 60 FPS
+      step - the slider runs 10-60 and 60 means "Uncapped"
+      (build_framerate_control, window.py), so it jumps from 59 FPS
+      straight to uncapped. E.g. range 10-61 with 61 = Uncapped.
+- [ ] Setting to show the visualizer's name in the title bar (the main
+      window title is the preset name today).
+- [ ] Option to change preset when the song changes (Now Playing
+      already watches MPRIS track changes - could trigger next/random
+      preset, maybe respecting Lock).
+- [ ] Mini visualizers that stop shrinking before the window does -
+      mostly fixed 2026-11-25 (Spectrum bars/labels, Spectrogram
+      labels, meter layouts, DVD logo, Peak scale). Still left from the
+      overflow check: Pipes' 3D view reaches ~6-8 px past the left edge
+      at its narrowest sizes, Peak 1 px. Re-check on the real desktop
+      for anything else that won't shrink.
+- [ ] Draw images with the X-Y Scope? (oscilloscope-art) - see the
+      existing "Tunable X-Y Scope that can write text/draw images"
+      entry; same idea, requested again.
+- [ ] Fix VU meter Needle mode - reported broken, not investigated
+      yet (no details on what's wrong). Note: needles now stack
+      vertically in tall windows (draw_meter_pair_stacked) - check that
+      layout too.
+- [ ] New mini visualizers: Amiga Boing ball and the Utah teapot.
+- [ ] Pipes colors should have a Main Visualizer option. Today the
+      Match Main Visualizer slider blends the four band colors toward
+      the main visualizer's palette (apply_effective_colors); a direct
+      per-band "Main Visualizer" choice (like Peak Hold Color's) isn't
+      there.
+- [ ] Rewrite of the mini visualizers, or at least some of them?
+      aux_window.py is ~7,000 lines with every kind in one class; a
+      split into one module/class per kind (shared base for settings,
+      colors, background, persistence) would make fixes like Needle
+      mode and new kinds (Boing ball, teapot) much easier. Relates to
+      the existing "different graphics library" and shared-FFT entries.
+
 - [ ] NEXT (after the now-playing branch): Updated README for GitHub with
       new screenshots and the app logo - requested ("make an updated
       README for the git including screenshots and displaying the
