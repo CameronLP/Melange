@@ -168,7 +168,8 @@
       Scope alpha-fade trails), but first find out what broke on the
       real desktop while resizing (needs a description/recording).
 
-- [ ] Mode with the main visualizer turned off, to run only the mini
+- [x] **Done 2026-11-25** (menu > Main Visualizer).
+      Mode with the main visualizer turned off, to run only the mini
       visualizers - requested. Likely: a toggle that pauses projectM
       (ProjectMView.set_paused) and shows a "Main visualizer off" note,
       while audio keeps reaching the mini visualizers (that path is

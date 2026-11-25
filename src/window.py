@@ -392,6 +392,25 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.paused_badge.set_visible(False)
         webview_overlay.add_overlay(self.paused_badge)
 
+        # Shown in place of the visualizer while it's turned off (menu >
+        # Main Visualizer) to run only the mini visualizers.
+        self.main_off_page = Adw.StatusPage(
+            icon_name="video-display-symbolic",
+            title="Main Visualizer Off",
+            description="Mini visualizers keep running. Turning it off saves CPU and GPU.",
+        )
+        turn_on = Gtk.Button(label="Turn On", halign=Gtk.Align.CENTER)
+        turn_on.add_css_class("pill")
+        turn_on.add_css_class("suggested-action")
+        turn_on.connect(
+            "clicked",
+            lambda button: self.lookup_action("main-visualizer").change_state(GLib.Variant("b", True))
+        )
+        self.main_off_page.set_child(turn_on)
+        self.main_off_page.add_css_class("main-off-page")
+        self.main_off_page.set_visible(False)
+        webview_overlay.add_overlay(self.main_off_page)
+
         # Now Playing (now_playing.py) - hidden until a track is
         # actually reported (see on_now_playing_changed), so there's
         # never an empty/placeholder card shown when nothing's playing
@@ -594,6 +613,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pactl_event_timer = None
         self.preset_locked = False
         self.paused = False
+        self.main_visualizer_on = True
         self.preset_list_store = None
         self.preset_browser = None
         self.browser_view_stack = None
@@ -948,6 +968,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Pause (P): freeze the visualizer on its current frame - no
         # rendering, audio ignored, no preset changes. Next/previous
         # resume it.
+        # Main Visualizer on/off: off hides and pauses projectM (no
+        # rendering, no audio into it, no preset changes) while audio
+        # still reaches the mini visualizers.
+        main_visualizer_action = Gio.SimpleAction.new_stateful(
+            "main-visualizer", None, GLib.Variant("b", True)
+        )
+        main_visualizer_action.connect("change-state", self.main_visualizer_changed)
+        self.add_action(main_visualizer_action)
+
         pause_action = Gio.SimpleAction.new_stateful(
             "pause", None, GLib.Variant("b", False)
         )
@@ -2298,9 +2327,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         # while the preset is locked (requested: a locked view shows no
         # floating buttons; F still toggles the favorite).
         for arrow in (self.prev_arrow_button, self.next_arrow_button):
-            arrow.set_visible(self.show_nav_arrows and not self.preset_locked)
+            arrow.set_visible(self.show_nav_arrows and not self.preset_locked and self.main_visualizer_on)
 
-        self.favorite_button.set_visible(self.show_favorite_button and not self.preset_locked)
+        self.favorite_button.set_visible(
+            self.show_favorite_button and not self.preset_locked and self.main_visualizer_on
+        )
 
         buttons = (
             self.prev_arrow_button,
@@ -2595,16 +2626,37 @@ class MelangeWindow(Adw.ApplicationWindow):
                 self.hide_timer = None
             self.toolbar_view.set_reveal_top_bars(False)
 
+    def main_visualizer_changed(self, action, value):
+
+        action.set_state(value)
+        self.main_visualizer_on = value.get_boolean()
+
+        if self.projectm_view is not None:
+            view = self.projectm_view
+            view.set_paused(self.paused or not self.main_visualizer_on)
+            # Hidden = no frames drawn at all. Pausing normally waits to
+            # grab one last frame to freeze on, which a hidden view never
+            # draws - so don't wait (it kept asking for redraws), and grab
+            # a fresh one when it comes back still paused.
+            view.freeze_pending = self.main_visualizer_on and self.paused
+            view.set_visible(self.main_visualizer_on)
+            view.queue_render()
+
+        self.main_off_page.set_visible(not self.main_visualizer_on)
+        self.paused_badge.set_visible(self.paused and self.main_visualizer_on)
+        self.presets.set_cycle_paused(self.preset_locked or self.paused or not self.main_visualizer_on)
+        self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
+
     def pause_changed(self, action, value):
 
         action.set_state(value)
         self.paused = value.get_boolean()
 
         if self.projectm_view is not None:
-            self.projectm_view.set_paused(self.paused)
+            self.projectm_view.set_paused(self.paused or not self.main_visualizer_on)
 
-        self.presets.set_cycle_paused(self.preset_locked or self.paused)
-        self.paused_badge.set_visible(self.paused)
+        self.presets.set_cycle_paused(self.preset_locked or self.paused or not self.main_visualizer_on)
+        self.paused_badge.set_visible(self.paused and self.main_visualizer_on)
 
         self.show_toast("Paused" if self.paused else "Resumed")
 
@@ -2631,7 +2683,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         # a preset *change* actually happening.
         self.cycling_group.set_sensitive(not self.preset_locked)
 
-        self.presets.set_cycle_paused(self.preset_locked or self.paused)
+        self.presets.set_cycle_paused(self.preset_locked or self.paused or not self.main_visualizer_on)
         self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
 
         self.show_toast(
@@ -5446,7 +5498,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     # change preset (see ProjectMView.apply_settings).
     def on_projectm_beat(self):
 
-        if self.preset_locked or self.paused:
+        if self.preset_locked or self.paused or not self.main_visualizer_on:
             return
 
         self.presets.next()
