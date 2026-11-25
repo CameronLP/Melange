@@ -114,6 +114,18 @@
 
 ### Requested 2026-11-25
 
+- [ ] Main window: quicker ways to close the sidebar - requested, then
+      decided (2026-11-25) against closing it on a click in the
+      visualizer: in wide windows the sidebar is pinned beside the
+      visualizer on purpose (adjust while watching), and a stray click
+      or a window drag would make it vanish mid-adjustment. Narrow
+      windows already close it on an outside click (it overlays there).
+      Instead:
+      - Esc closes the sidebar when it's open (otherwise Esc still
+        leaves fullscreen);
+      - F9 toggles it (GNOME's usual sidebar shortcut, e.g. Files),
+        listed in Keyboard Shortcuts;
+      - the title-bar toggle stays.
 - [ ] Found while writing the README: data/web/ (app.js, index.html,
       main.js) is the old Butterchurn page - nothing installs or loads
       it any more, so it can go.
