@@ -3400,8 +3400,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         toolbar_group.add(self.build_show_nav_arrows_control())
         toolbar_group.add(self.build_show_favorite_button_control())
 
+        # When presets change (not the presets themselves).
         playback_page = Adw.PreferencesPage(
-            title="Presets",
+            title="Cycling",
             icon_name="media-playlist-shuffle-symbolic"
         )
 
@@ -3432,7 +3433,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         # What drives and draws the visuals - Audio and Rendering used to
         # be two separate, very short pages.
         visualizer_page = Adw.PreferencesPage(
-            title="Visualizer",
+            title="Audio & Rendering",
             icon_name="audio-speakers-symbolic"
         )
 
@@ -3956,7 +3957,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         view_stack.add_titled_with_icon(
             self.build_presets_tab(),
-            "presets", "Presets", "view-list-symbolic"
+            "presets", "Browse", "view-list-symbolic"
         )
         view_stack.add_titled_with_icon(
             self.build_favorites_tab(),
