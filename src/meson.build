@@ -29,6 +29,7 @@ configure_file(
 melange_sources = [
   '__init__.py',
   'main.py',
+  'mini_visualizer_base.py',
   'aux_window.py',
   'cursor_hider.py',
   'mirror_window.py',
