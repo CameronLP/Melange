@@ -70,7 +70,7 @@ SAVED_SETTINGS = [
     "terrain_auto_rotate", "terrain_rotate_speed",
     "waterfall_auto_rotate", "waterfall_rotate_speed",
     "view_hint_shown", "vector_auto_gain", "color_sync", "reverse_colors",
-    "scope_line_width", "peak_scale",
+    "scope_line_width", "peak_scale", "background_opacity", "glass_finish",
 ]
 
 # Starting camera (azimuth, elevation in degrees) of the 3D kinds -
@@ -480,6 +480,65 @@ def update_main_visualizer_palette(pixels):
     _PALETTE_LUTS.pop("main", None)
     MAIN_PALETTE_VERSION[0] += 1
 
+    update_main_frame(pixels)
+
+
+# "Frosted (Main Visualizer)" background: the sampled 32x32 frame
+# averaged down to 16x16 and box-blurred, eased between samples, kept as
+# a small cairo surface that backgrounds scale up with bilinear
+# filtering - a soft, blurry copy of the main view. (GNOME gives apps no
+# way to blur the desktop behind a window, so this blurs Melange's own
+# picture instead.)
+FROST_SIZE = 16
+MAIN_FRAME = {"pixels": None, "surface": None, "data": None, "average": (0.1, 0.1, 0.12)}
+
+
+def update_main_frame(pixels):
+
+    size = 32
+    if len(pixels) < size * size * 4:
+        return
+
+    # glReadPixels rows run bottom-up.
+    def texel(x, y):
+        o = ((size - 1 - y) * size + x) * 4
+        return pixels[o] / 255, pixels[o + 1] / 255, pixels[o + 2] / 255
+
+    small = []
+    for y in range(FROST_SIZE):
+        for x in range(FROST_SIZE):
+            block = [texel(x * 2 + dx, y * 2 + dy) for dx in (0, 1) for dy in (0, 1)]
+            small.append(tuple(sum(c[i] for c in block) / 4 for i in range(3)))
+
+    blurred = []
+    for y in range(FROST_SIZE):
+        for x in range(FROST_SIZE):
+            near = [
+                small[ny * FROST_SIZE + nx]
+                for ny in range(max(0, y - 1), min(FROST_SIZE, y + 2))
+                for nx in range(max(0, x - 1), min(FROST_SIZE, x + 2))
+            ]
+            blurred.append(tuple(sum(c[i] for c in near) / len(near) for i in range(3)))
+
+    old = MAIN_FRAME["pixels"]
+    if old is not None:
+        blurred = [
+            tuple(o[i] + (n[i] - o[i]) * 0.35 for i in range(3))
+            for o, n in zip(old, blurred)
+        ]
+
+    MAIN_FRAME["pixels"] = blurred
+    MAIN_FRAME["average"] = tuple(sum(c[i] for c in blurred) / len(blurred) for i in range(3))
+
+    data = bytearray(FROST_SIZE * FROST_SIZE * 4)
+    for index, (r, g, b) in enumerate(blurred):
+        data[index * 4:index * 4 + 4] = bytes((int(b * 255), int(g * 255), int(r * 255), 255))
+
+    MAIN_FRAME["data"] = data
+    MAIN_FRAME["surface"] = cairo.ImageSurface.create_for_data(
+        data, cairo.FORMAT_ARGB32, FROST_SIZE, FROST_SIZE, FROST_SIZE * 4
+    )
+
 
 def _palette_lut(name):
 
@@ -545,12 +604,12 @@ COLOR_ROW_ORDER = [
     "Color Style", "Color", "Gradient", "Low Color", "High Color", "High Level",
     "Reverse", "Bass Color", "Low Mid Color", "High Mid Color", "Treble Color",
     "Pulse Color", "Peak Hold Color", "Match Main Visualizer",
-    "Background", "Background Color",
+    "Background", "Background Color", "Background Opacity", "Glass Finish",
 ]
 
 BACKGROUND_CHOICES = [
-    ("theme", "Match Theme"), ("black", "Black"),
-    ("transparent", "Transparent"), ("custom", "Custom Color"),
+    ("theme", "Match Theme"), ("black", "Black"), ("custom", "Custom Color"),
+    ("frosted", "Frosted (Main Visualizer)"), ("transparent", "Transparent"),
 ]
 
 # 0 = redraw on every audio chunk (no cap).
@@ -856,6 +915,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.background_mode = "custom" if kind == "dvd" else "theme"
         self.background_color = Gdk.RGBA()
         self.background_color.parse("#0d0d0d" if kind == "dvd" else "#000000")
+        # How solid the background is (Black/Custom at ~40% = tinted
+        # glass over the desktop), and an optional glass sheen.
+        self.background_opacity = 1.0
+        self.glass_finish = False
         self.gain = 1.0
         self.frame_rate_cap = 0
         self.last_draw_queued = 0.0
@@ -3197,6 +3260,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.add_choice(box, "Background", "background_mode", BACKGROUND_CHOICES, self.background_changed)
         self.add_color(box, "Background Color", "background_color", self.background_changed)
+        self.add_scale(
+            box, "Background Opacity", "background_opacity", 0.05, 1.0, 0.05,
+            lambda value: f"{value * 100:.0f}%", self.background_changed
+        )
+        self.add_switch(box, "Glass Finish", "glass_finish")
+        self.row_subtitles["Glass Finish"] = "A soft highlight and edge, like a pane of glass"
 
     def build_shared_controls(self, box):
 
@@ -3407,6 +3476,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         visible("High Color", gradient_shown and gradient == "gradient")
         visible("Reverse", gradient_shown)
         visible("Background Color", self.background_mode == "custom")
+        visible("Background Opacity", self.background_mode != "transparent")
 
         if "Rotate Speed" in rows:
             rows["Rotate Speed"].set_sensitive(getattr(self, f"{self.kind}_auto_rotate", True))
@@ -3431,7 +3501,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         # Transparent needs the window itself to stop painting the theme
         # background (same class as Transparency Mode, style.css).
-        if self.background_mode == "transparent":
+        if self.background_mode == "transparent" or self.background_opacity < 0.999:
             self.add_css_class("transparency-active")
         else:
             self.remove_css_class("transparency-active")
@@ -4440,8 +4510,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return True
 
     def background_rgb(self):
-        """The chosen background (shared Background setting), or None
-        for Transparent. Match Theme follows light/dark."""
+        """The chosen background's color (an average for Frosted), or
+        None for Transparent. Match Theme follows light/dark."""
 
         if self.background_mode == "transparent":
             return None
@@ -4450,20 +4520,48 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if self.background_mode == "custom":
             color = self.background_color
             return (color.red, color.green, color.blue)
+        if self.background_mode == "frosted":
+            # Dimmed in paint_background, so it reads dark.
+            return tuple(c * 0.6 for c in MAIN_FRAME["average"])
 
         return self.theme_background_rgb()
 
+    def background_is_opaque(self):
+
+        return (
+            self.background_mode in ("theme", "black", "custom")
+            and self.background_opacity >= 0.999
+        )
+
     def paint_background(self, cr):
 
-        rgb = self.background_rgb()
         cr.save()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
 
-        if rgb is None:
+        if self.background_mode == "transparent":
             cr.set_operator(cairo.OPERATOR_CLEAR)
+            cr.paint()
+        elif self.background_mode == "frosted" and MAIN_FRAME["surface"] is not None:
+            clip = cr.clip_extents()
+            width, height = clip[2] - clip[0], clip[3] - clip[1]
+            cr.save()
+            cr.translate(clip[0], clip[1])
+            cr.scale(max(1, width) / FROST_SIZE, max(1, height) / FROST_SIZE)
+            cr.set_source_surface(MAIN_FRAME["surface"], 0, 0)
+            pattern = cr.get_source()
+            pattern.set_filter(cairo.FILTER_BILINEAR)
+            pattern.set_extend(cairo.EXTEND_PAD)
+            cr.paint_with_alpha(self.background_opacity)
+            cr.restore()
+            # Dim it so the traces stay readable on top.
+            cr.set_operator(cairo.OPERATOR_OVER)
+            cr.set_source_rgba(0, 0, 0, 0.4 * self.background_opacity)
+            cr.paint()
         else:
-            cr.set_source_rgb(*rgb)
+            rgb = self.background_rgb()
+            cr.set_source_rgba(*rgb, self.background_opacity)
+            cr.paint()
 
-        cr.paint()
         cr.restore()
 
     def canvas_background_rgb(self):
@@ -4605,6 +4703,42 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.drawing_area.queue_draw()
 
     def on_draw(self, area, cr, width, height):
+
+        self.draw_with_colors(area, cr, width, height)
+
+        if self.glass_finish:
+            self.draw_glass_finish(cr, width, height)
+
+    def draw_glass_finish(self, cr, width, height):
+        """A pane-of-glass sheen: soft highlight across the top, a thin
+        light edge, a faint shade along the bottom."""
+
+        cr.save()
+        cr.reset_clip()
+
+        highlight = cairo.LinearGradient(0, 0, 0, height * 0.45)
+        highlight.add_color_stop_rgba(0, 1, 1, 1, 0.16)
+        highlight.add_color_stop_rgba(1, 1, 1, 1, 0.0)
+        cr.set_source(highlight)
+        cr.rectangle(0, 0, width, height * 0.45)
+        cr.fill()
+
+        shade = cairo.LinearGradient(0, height * 0.75, 0, height)
+        shade.add_color_stop_rgba(0, 0, 0, 0, 0.0)
+        shade.add_color_stop_rgba(1, 0, 0, 0, 0.18)
+        cr.set_source(shade)
+        cr.rectangle(0, height * 0.75, width, height * 0.25)
+        cr.fill()
+
+        radius = min(14, width / 4, height / 4)
+        self.rounded_rect_path(cr, 1, 1, width - 2, height - 2, radius)
+        cr.set_source_rgba(1, 1, 1, 0.22)
+        cr.set_line_width(1.2)
+        cr.stroke()
+
+        cr.restore()
+
+    def draw_with_colors(self, area, cr, width, height):
 
         if self.color_sync <= 0 and not self.reverse_colors and self.color_mode != "gradient":
             self.color_signature = None
@@ -5595,7 +5729,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 cairo.FORMAT_ARGB32, max(1, width), max(1, height)
             )
             fresh = cairo.Context(self.vector_surface)
-            if self.background_mode != "transparent":
+            if self.background_is_opaque():
                 fresh.set_source_rgb(*bg)
                 fresh.paint()
 
@@ -5609,7 +5743,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # than vanishing instantly, which is what makes a goniometer's
         # display read as a "cloud" with density/shape instead of a
         # single instantaneous dot.
-        if self.background_mode == "transparent":
+        if not self.background_is_opaque():
             # Fade the trail's alpha instead of painting a color over it.
             trail_cr.set_operator(cairo.OPERATOR_DEST_OUT)
             trail_cr.set_source_rgba(0, 0, 0, 1.0 - self.vector_persistence)
