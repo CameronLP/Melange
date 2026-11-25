@@ -40,7 +40,7 @@ import cairo
 # ~/.config/melange/mini_visualizers.json (see load_saved_settings).
 # Everything a setting control changes, plus the 3D views' camera.
 SAVED_SETTINGS = [
-    "color", "color_mode", "num_bars", "decay", "show_labels",
+    "color", "color_style", "line_gradient", "line_color_lo", "line_color_hi", "num_bars", "decay", "show_labels",
     "mirror_reflection", "maintain_aspect_ratio", "scope_zoom",
     "xy_line_width", "xy_points", "xy_curved",
     "vu_style", "vu_peak_hold", "vu_segments",
@@ -399,7 +399,7 @@ PALETTE_STOPS = {
 }
 
 PALETTE_LABELS = [
-    ("main", "Main Visualizer"), ("rainbow", "Rainbow"), ("fire", "Fire"), ("ice", "Ice"),
+    ("rainbow", "Rainbow"), ("fire", "Fire"), ("ice", "Ice"),
     ("viridis", "Viridis"), ("magma", "Magma"), ("plasma", "Plasma"),
     ("ocean", "Ocean"), ("sunset", "Sunset"), ("neon", "Neon"),
     ("forest", "Forest"), ("matrix", "Matrix"), ("candy", "Candy"),
@@ -523,7 +523,7 @@ def palette_color(name, level, lo=None, hi=None):
     return _palette_lut(name)[int(level * 255 + 0.5)]
 
 
-PALETTE_CHOICES = [("gradient", "Custom Gradient")] + PALETTE_LABELS
+PALETTE_CHOICES = [("gradient", "Custom")] + PALETTE_LABELS
 
 # Same idea as PALETTE_CHOICES, for the kinds that only ever had a
 # single solid Color (X-Y Scope, Spectrum, VU Meter's needle style,
@@ -532,15 +532,21 @@ PALETTE_CHOICES = [("gradient", "Custom Gradient")] + PALETTE_LABELS
 # (today's only behavior) against "Rainbow" instead. Backed by one
 # shared self.color_mode field, the same way self.color itself is
 # already shared generic state across these kinds.
-# Main Visualizer as either one solid color (its most prominent) or a
-# gradient (its sampled palette).
-_MAIN_MODE_CHOICES = [("main-solid", "Main Visualizer Color"), ("main", "Main Visualizer Gradient")]
-_OTHER_PALETTES = [choice for choice in PALETTE_LABELS if choice[0] != "main"]
+# Colors group "Color Style" (not "Style" - Spectrum and VU already have
+# a Style row for their shape): how a kind is colored. Where the colors come
+# from (your own vs the main visualizer) is the Match slider.
+STYLE_CHOICES = [("solid", "Solid"), ("gradient", "Gradient")]
+METER_STYLE_CHOICES = [("classic", "Classic")] + STYLE_CHOICES
 
-COLOR_MODE_CHOICES = [("solid", "Solid")] + _MAIN_MODE_CHOICES + _OTHER_PALETTES
-
-# VU/Peak meters: Classic is the hardware green/yellow/red zones.
-METER_COLOR_MODE_CHOICES = [("classic", "Classic"), ("solid", "Solid")] + _MAIN_MODE_CHOICES + _OTHER_PALETTES
+# Rows that belong in the Colors group, in display order (whichever a
+# kind has). Built partly by build_settings_controls, partly by
+# build_color_controls; build_settings_page gathers them.
+COLOR_ROW_ORDER = [
+    "Color Style", "Color", "Gradient", "Low Color", "High Color", "High Level",
+    "Reverse", "Bass Color", "Low Mid Color", "High Mid Color", "Treble Color",
+    "Pulse Color", "Peak Hold Color", "Match Main Visualizer",
+    "Background", "Background Color",
+]
 
 BACKGROUND_CHOICES = [
     ("theme", "Match Theme"), ("black", "Black"),
@@ -748,6 +754,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     # live audio (a level meter, an oscilloscope trace, a spectrum...),
     # not a copy of what the main preset draws, so it keeps its own
     # small buffer of the latest PCM and draws it directly with Cairo.
+    # What the drawing code reads: "solid", "classic", or a palette key.
+    # Derived from Style + Gradient; the per-frame color swap
+    # (apply_effective_colors) overrides it while drawing.
+    @property
+    def color_mode(self):
+        if self._color_mode_override is not None:
+            return self._color_mode_override
+        if self.color_style in ("solid", "classic"):
+            return self.color_style
+        return self.line_gradient
+
+    @color_mode.setter
+    def color_mode(self, value):
+        self._color_mode_override = value
+
     def __init__(self, primary, kind, **kwargs):
 
         super().__init__(
@@ -819,14 +840,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # independently, and X-Y Scope's classic look is the plain
         # green Lissajous trace (self.color's own default, "#33cc55"),
         # not a rainbow one.
-        self.color_mode = (
-            "classic" if kind in ("vu", "peak")
-            else "solid" if kind in ("oscilloscope", "vectorscope", "xy", "spectrum")
-            else "rainbow"
-        )
-        self.color_mode_choices = (
-            METER_COLOR_MODE_CHOICES if kind in ("vu", "peak") else COLOR_MODE_CHOICES
-        )
+        # Colors: Style (Solid / Gradient / Classic for meters), and the
+        # Gradient for line kinds (heatmap kinds have their own
+        # *_palette). color_mode is what the drawing code reads - see
+        # the property below.
+        self._color_mode_override = None
+        self.color_style = "classic" if kind in ("vu", "peak") else "solid"
+        self.line_gradient = "rainbow"
+        self.line_color_lo = Gdk.RGBA()
+        self.line_color_lo.parse("#1a3cff")
+        self.line_color_hi = Gdk.RGBA()
+        self.line_color_hi.parse("#ff3cc8")
 
         # Shared settings (every kind) - see build_shared_controls.
         self.background_mode = "custom" if kind == "dvd" else "theme"
@@ -1506,31 +1530,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             color_row.append(color_button)
             box.append(color_row)
 
-            color_mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
-            color_mode_label = Gtk.Label(label="Color Mode", xalign=0, hexpand=True)
-            color_mode_row.append(color_mode_label)
-
-            color_mode_dropdown = Gtk.DropDown.new_from_strings(
-                [label for _, label in self.color_mode_choices]
-            )
-
-            current_color_mode_index = next(
-                (
-                    i for i, (key, _) in enumerate(self.color_mode_choices)
-                    if key == self.color_mode
-                ),
-                0
-            )
-            color_mode_dropdown.set_selected(current_color_mode_index)
-
-            color_mode_dropdown.connect(
-                "notify::selected",
-                self.on_color_mode_changed
-            )
-
-            color_mode_row.append(color_mode_dropdown)
-            box.append(color_mode_row)
 
         if self.kind == "vu":
 
@@ -1681,7 +1680,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
 
             waterfall_palette_label = Gtk.Label(
-                label="Palette", xalign=0, hexpand=True
+                label="Gradient", xalign=0, hexpand=True
             )
             waterfall_palette_row.append(waterfall_palette_label)
 
@@ -2269,7 +2268,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             palette_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
-            palette_label = Gtk.Label(label="Palette", xalign=0, hexpand=True)
+            palette_label = Gtk.Label(label="Gradient", xalign=0, hexpand=True)
             palette_row.append(palette_label)
 
             palette_dropdown = Gtk.DropDown.new_from_strings(
@@ -2352,7 +2351,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
 
             terrain_palette_label = Gtk.Label(
-                label="Palette", xalign=0, hexpand=True
+                label="Gradient", xalign=0, hexpand=True
             )
             terrain_palette_row.append(terrain_palette_label)
 
@@ -3161,22 +3160,40 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 lambda value: f"{value:.0f}°/s"
             )
 
-    def build_shared_controls(self, box):
+    def build_color_controls(self, box):
+        """Rows for the Colors group (build_settings_page moves the
+        kind's own color rows - Color, Gradient, Peak Hold Color, Pipes
+        band colors... - in beside these)."""
 
-        self.group_break(box, "Colors")
+        line_kind = self.kind in ("xy", "spectrum", "vu", "peak", "oscilloscope", "vectorscope")
+
+        if line_kind:
+            choices = METER_STYLE_CHOICES if self.kind in ("vu", "peak") else STYLE_CHOICES
+            self.add_choice(box, "Color Style", "color_style", choices)
+            self.add_choice(box, "Gradient", "line_gradient", PALETTE_CHOICES)
+            self.add_color(box, "Low Color", "line_color_lo")
+            self.add_color(box, "High Color", "line_color_hi")
+
+        if self.kind not in ("dvd", "pipes"):
+            self.add_switch(box, "Reverse", "reverse_colors")
+
         self.add_scale(
             box, "Match Main Visualizer", "color_sync", 0.0, 1.0, 0.05,
             lambda value: "Off" if value <= 0 else f"{value * 100:.0f}%"
         )
-        self.row_subtitles["Match Main Visualizer"] = "Blend toward the main visualizer's colors"
-
-        if self.kind not in ("dvd", "pipes"):
-            self.add_switch(box, "Reverse Colors", "reverse_colors")
-
-        self.group_break(box, "Window")
+        self.row_subtitles["Match Main Visualizer"] = (
+            "100% uses its colors"
+        )
 
         self.add_choice(box, "Background", "background_mode", BACKGROUND_CHOICES, self.background_changed)
         self.add_color(box, "Background Color", "background_color", self.background_changed)
+
+    def build_shared_controls(self, box):
+
+        self.build_color_controls(box)
+
+        self.group_break(box, "Window")
+
         self.add_scale(box, "Gain", "gain", 0.25, 4.0, 0.05, lambda value: f"×{value:.2f}")
         self.add_choice(
             box, "Frame Rate", "frame_rate_cap", FRAME_RATE_CHOICES, self.frame_rate_changed,
@@ -3241,7 +3258,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             return out
 
         page = Adw.PreferencesPage()
-        group = Adw.PreferencesGroup()
+
+        # All color rows go to one Colors group at the top (in
+        # COLOR_ROW_ORDER), whichever part of the builder made them.
+        colors_group = Adw.PreferencesGroup(title="Colors")
+        color_rows = []
+        page.add(colors_group)
+
+        group = Adw.PreferencesGroup(title=AUX_WINDOW_TITLES[self.kind])
 
         if self.kind in VIEW_KINDS:
             group.set_description(VIEW_HINT + " · Arrow keys and +/− work too")
@@ -3282,9 +3306,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 if len(parts) == 2 and isinstance(parts[1], Gtk.Switch):
                     row.set_activatable_widget(parts[1])
 
-                group.add(row)
+                if row.get_title() in COLOR_ROW_ORDER:
+                    color_rows.append(row)
+                else:
+                    group.add(row)
             else:
                 buttons += [part for part in parts if isinstance(part, Gtk.Button)]
+
+        color_rows.sort(key=lambda row: COLOR_ROW_ORDER.index(row.get_title()))
+
+        for row in color_rows:
+            colors_group.add(row)
 
         if buttons:
             button_box = Gtk.Box(
@@ -3342,30 +3374,32 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.schedule_save()
 
     def update_row_sensitivity(self):
-        """Grey out rows that don't apply to the current choices."""
+        """Show only the rows that apply to the current choices."""
 
         rows = self.settings_rows
 
-        def sensitive(title, value):
+        def visible(title, value):
             if title in rows:
-                rows[title].set_sensitive(value)
-
-        sensitive("Background Color", self.background_mode == "custom")
-        sensitive("Color", self.color_mode in ("solid", "classic"))
-        sensitive("Match Main Visualizer", not self.color_mode.startswith("main"))
+                rows[title].set_visible(value)
 
         palette = getattr(self, f"{self.kind}_palette", None)
+
         if palette is not None:
-            sensitive("Low Color", palette == "gradient")
-            sensitive("High Color", palette == "gradient")
+            gradient_shown, gradient = True, palette
+        else:
+            gradient_shown, gradient = self.color_style == "gradient", self.line_gradient
 
-        sensitive("Rotate Speed", getattr(self, f"{self.kind}_auto_rotate", True))
-        sensitive(
-            "Reverse Colors",
-            palette is not None or self.color_mode not in ("solid", "classic", "main-solid")
-        )
+        needle = self.kind == "vu" and self.vu_style == "needle"
 
-    # --- shared settings ---------------------------------------------------
+        visible("Color", self.color_style == "solid" or (self.color_style == "classic" and needle))
+        visible("Gradient", gradient_shown)
+        visible("Low Color", gradient_shown and gradient == "gradient")
+        visible("High Color", gradient_shown and gradient == "gradient")
+        visible("Reverse", gradient_shown)
+        visible("Background Color", self.background_mode == "custom")
+
+        if "Rotate Speed" in rows:
+            rows["Rotate Speed"].set_sensitive(getattr(self, f"{self.kind}_auto_rotate", True))
 
     def tick_interval_ms(self):
 
@@ -3744,6 +3778,24 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self._icon_cache_key = None
 
+        # Before Style + Gradient + the Match slider, one "Color Mode"
+        # held all of it (and heatmap Palettes offered Main Visualizer).
+        old_mode = saved.get("color_mode")
+        if isinstance(old_mode, str) and "color_style" not in saved:
+            if old_mode in ("solid", "classic"):
+                self.color_style = old_mode
+            elif old_mode == "main-solid":
+                self.color_style, self.color_sync = "solid", 1.0
+            elif old_mode == "main":
+                self.color_style, self.color_sync = "gradient", 1.0
+            elif old_mode in PALETTE_STOPS or old_mode == "rainbow":
+                self.color_style, self.line_gradient = "gradient", old_mode
+
+        palette_name = f"{self.kind}_palette"
+        if saved.get(palette_name) == "main":
+            setattr(self, palette_name, "rainbow")
+            self.color_sync = 1.0
+
         # DVD Bounce had its own Background Color before the shared one.
         if self.kind == "dvd" and "background_mode" not in saved and "dvd_bg_color" in saved:
             color = decode_setting(saved["dvd_bg_color"], self.background_color)
@@ -3792,14 +3844,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.color = button.get_rgba()
         self.terrain_dirty = True
         self.drawing_area.queue_draw()
-
-    def on_color_mode_changed(self, dropdown, param):
-
-        index = dropdown.get_selected()
-
-        if 0 <= index < len(self.color_mode_choices):
-            self.color_mode = self.color_mode_choices[index][0]
-            self.drawing_area.queue_draw()
 
     def on_bars_changed(self, spin):
 
@@ -4510,19 +4554,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def on_draw(self, area, cr, width, height):
 
-        if self.color_mode == "main-solid":
-            saved_mode, saved_color = self.color_mode, self.color
-            self.color_mode = "solid"
-            self.color = Gdk.RGBA(
-                red=MAIN_DOMINANT[0][0], green=MAIN_DOMINANT[0][1], blue=MAIN_DOMINANT[0][2], alpha=1.0
-            )
-            try:
-                self.on_draw(area, cr, width, height)
-            finally:
-                self.color_mode, self.color = saved_mode, saved_color
-            return
-
-        if self.color_sync <= 0 and not self.reverse_colors:
+        if self.color_sync <= 0 and not self.reverse_colors and self.color_mode != "gradient":
             self.color_signature = None
             self.draw_kind(area, cr, width, height)
             return
@@ -4535,7 +4567,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.draw_kind(area, cr, width, height)
         finally:
             for name, value in saved.items():
-                setattr(self, name, value)
+                if name == "color_mode":
+                    self._color_mode_override = None
+                else:
+                    setattr(self, name, value)
 
     def sync_blend(self, rgb, target):
 
@@ -4579,7 +4614,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if self.color_mode not in ("solid", "classic"):
             saved["color_mode"] = self.color_mode
-            self.color_mode, signature = self.effective_palette("mode", self.color_mode)
+            self.color_mode, signature = self.effective_palette(
+                "mode", self.color_mode, self.line_color_lo, self.line_color_hi
+            )
             signatures.append(signature)
 
         palette_name = f"{self.kind}_palette"
