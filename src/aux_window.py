@@ -863,6 +863,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.settings_rows = {}
         self.row_subtitles = {}
+        self.settings_window = None
         self.zoom_scale = None
         self.context_menu = None
         self.xy_line_width = 1.0
@@ -1451,6 +1452,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         )
 
         self.setup_extra_controls()
+
+        self.settings_split.connect("notify::show-sidebar", self.on_show_sidebar_changed)
 
         # Size changes are saved too (not while maximized/fullscreen).
         self.connect("notify::default-width", self.schedule_save)
@@ -3169,6 +3172,42 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def build_settings_sidebar(self, controls):
 
+        page = self.build_settings_page(controls)
+
+        header = Adw.HeaderBar(show_start_title_buttons=False)
+
+        close_toggle = Gtk.ToggleButton(
+            icon_name="sidebar-show-right-symbolic",
+            tooltip_text="Settings",
+        )
+        close_toggle.bind_property(
+            "active", self.settings_split, "show-sidebar",
+            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
+        )
+        header.pack_start(close_toggle)
+        header.set_title_widget(
+            Adw.WindowTitle(title="Settings", subtitle=AUX_WINDOW_TITLES[self.kind])
+        )
+
+        sidebar = Adw.ToolbarView()
+        sidebar.add_top_bar(header)
+        sidebar.set_content(page)
+
+        # Scrolls sideways rather than holding the window open (when
+        # it's narrow the settings open in their own window instead -
+        # see on_show_sidebar_changed).
+        scroller = Gtk.ScrolledWindow(
+            hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+            vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+            child=sidebar,
+        )
+
+        return scroller
+
+    # Settings as libadwaita rows: the sidebar's content, or the
+    # separate settings window's (open_settings_window).
+    def build_settings_page(self, controls):
+
         def children(widget):
             out = []
             child = widget.get_first_child()
@@ -3257,34 +3296,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 (w for w in self.iter_widgets(zoom_row) if isinstance(w, Gtk.Scale)), None
             )
 
-        header = Adw.HeaderBar(show_start_title_buttons=False)
-
-        close_toggle = Gtk.ToggleButton(
-            icon_name="sidebar-show-right-symbolic",
-            tooltip_text="Settings",
-        )
-        close_toggle.bind_property(
-            "active", self.settings_split, "show-sidebar",
-            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
-        )
-        header.pack_start(close_toggle)
-        header.set_title_widget(
-            Adw.WindowTitle(title="Settings", subtitle=AUX_WINDOW_TITLES[self.kind])
-        )
-
-        sidebar = Adw.ToolbarView()
-        sidebar.add_top_bar(header)
-        sidebar.set_content(page)
-
-        # Scrolls sideways instead of keeping the window from getting
-        # narrower than the settings.
-        scroller = Gtk.ScrolledWindow(
-            hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
-            vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
-            child=sidebar,
-        )
-
-        return scroller
+        return page
 
     def iter_widgets(self, widget):
 
@@ -3389,11 +3401,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 setattr(self, name, decoded)
 
         self._icon_cache_key = None
-        showing = self.settings_split.get_show_sidebar()
-        self.settings_split.set_sidebar(
-            self.build_settings_sidebar(self.build_settings_controls())
-        )
-        self.settings_split.set_show_sidebar(showing)
+        if self.settings_window is not None:
+            # Reopen it so its controls show the defaults.
+            settings_window, self.settings_window = self.settings_window, None
+            settings_window.destroy()
+            self.reset_to_current_controls()
+            self.open_settings_window()
+        else:
+            self.reset_to_current_controls()
         self.background_changed()
         self.frame_rate_changed()
         self.apply_compact_mode()
@@ -3436,7 +3451,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         show_settings = Gio.SimpleAction.new("show-settings", None)
         show_settings.connect(
             "activate", lambda *args: self.settings_split.set_show_sidebar(True)
-        )
+        )  # on_show_sidebar_changed redirects to a window when narrow
         self.add_action(show_settings)
 
         compact = Gio.SimpleAction.new_stateful(
@@ -3489,9 +3504,84 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             GLib.timeout_add_seconds(6, remove_hint)
 
+    # Below this the sidebar would only show a sliver of each row, so
+    # settings open in their own small window beside the visualizer.
+    SETTINGS_WINDOW_BELOW = (300, 220)
+
+    def on_show_sidebar_changed(self, split, param):
+
+        if not split.get_show_sidebar():
+            return
+
+        min_width, min_height = self.SETTINGS_WINDOW_BELOW
+
+        if self.get_width() >= min_width and self.get_height() >= min_height:
+            return
+
+        # Undo it once the toggle <-> sidebar binding has finished
+        # propagating; doing it inside this notify left the toggle
+        # stuck "on", so the next click did nothing.
+        GLib.idle_add(self.redirect_to_settings_window)
+
+    def redirect_to_settings_window(self):
+
+        self.settings_split.set_show_sidebar(False)
+
+        # The toggle/menu work as open/close for the window too.
+        if self.settings_window is not None:
+            self.settings_window.close()
+        else:
+            self.open_settings_window()
+
+        return False
+
+    def open_settings_window(self):
+
+        page = self.build_settings_page(self.build_settings_controls())
+        self.update_row_sensitivity()
+
+        window = Adw.Window(
+            title=f"{AUX_WINDOW_TITLES[self.kind]} Settings",
+            transient_for=self,
+            default_width=340,
+            default_height=480,
+        )
+        window.set_size_request(260, 200)
+
+        view = Adw.ToolbarView()
+        view.add_top_bar(Adw.HeaderBar())
+        view.set_content(page)
+        window.set_content(view)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect(
+            "key-pressed",
+            lambda controller, keyval, *args: (window.close() or True) if keyval == Gdk.KEY_Escape else False
+        )
+        window.add_controller(keys)
+
+        window.connect("close-request", self.on_settings_window_closed)
+        self.settings_window = window
+        window.present()
+
+    def on_settings_window_closed(self, window):
+
+        self.settings_window = None
+        # The sidebar's controls take over again, showing what changed.
+        self.reset_to_current_controls()
+
+        return False
+
     def reset_to_current_controls(self):
         """Rebuild the sidebar so its controls show the current values
         (after a change made somewhere else, e.g. the right-click menu)."""
+
+        if self.settings_window is not None:
+            self.settings_window.get_content().set_content(
+                self.build_settings_page(self.build_settings_controls())
+            )
+            self.update_row_sensitivity()
+            return
 
         showing = self.settings_split.get_show_sidebar()
         self.settings_split.set_sidebar(
@@ -7381,6 +7471,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return False
 
     def on_close_request(self, window):
+
+        if self.settings_window is not None:
+            settings_window, self.settings_window = self.settings_window, None
+            settings_window.destroy()
 
         for key in list(self.effective_signatures):
             PALETTE_STOPS.pop(key, None)
