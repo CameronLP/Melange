@@ -55,7 +55,9 @@ that react to the same audio.
   Playing, fullscreen, the preset browser, Load Preset… and Preferences.
 - **Now Playing.** An overlay with the title, artist, album and artwork of
   whatever is playing (any MPRIS player), with placement, size, font, colour,
-  auto-hide and periodic-fade options.
+  text outline, background, auto-hide and periodic-fade options. Its text and
+  background can each follow your own colour, the system theme, or the main
+  visualizer's colours.
 - **Mirror windows.** Extra windows showing the same visualizer, for a second
   screen.
 - **Mini visualizers.** Eleven kinds, each in its own small window: VU Meter,

@@ -34,6 +34,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.mirror_window import MirrorWindow
 from melange.aux_window import AuxVisualizerWindow, update_main_visualizer_palette, reset_all_saved_settings
+from melange.mini_visualizer_base import palette_color
 from melange.now_playing import NowPlayingWatcher
 from melange import projectm_view
 from melange.preset_manager import PresetManager
@@ -254,6 +255,12 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         # Preferences > Window: the preset's name in the title bar.
         self.show_preset_in_title = True
+
+        # Now Playing > Style: where the text and background colours come
+        # from - "custom" (the colour buttons), "theme" (light/dark), or
+        # "main" (the main visualizer's, sampled twice a second, eased).
+        self.now_playing_text_source = "custom"
+        self.now_playing_bg_source = "custom"
 
         # Now Playing > Style > Placeholder Icon: "note" or "player".
         self.now_playing_placeholder_style = "note"
@@ -1527,6 +1534,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         for row in getattr(self, "now_playing_bg_rows", ()):
             row.set_visible(enabled)
 
+        if hasattr(self, "now_playing_update_match_rows"):
+            self.now_playing_update_match_rows()
+
     def now_playing_show_time_changed(self, enabled):
 
         self.now_playing_show_time = enabled
@@ -2086,7 +2096,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         attrs.insert(Pango.attr_font_desc_new(font_desc))
 
-        color = self.now_playing_text_color
+        color, bg = self.now_playing_effective_colors()
 
         # The no-artwork icon takes the same color as the text.
         if not hasattr(self, "now_playing_placeholder_css"):
@@ -2104,7 +2114,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             f" .now-playing-text {{ color: {color.to_string()}; }}"
         )
 
-        bg = self.now_playing_bg_color
         css += (
             f" .now-playing-card {{ background-color: rgba({round(bg.red * 255)},"
             f" {round(bg.green * 255)}, {round(bg.blue * 255)}, {self.now_playing_bg_opacity:.2f}); }}"
@@ -2652,9 +2661,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def on_projectm_colors(self, pixels):
 
-        # Only worth working out while a mini visualizer is open.
-        if self.aux_windows:
+        # Only worth working out while something uses it: a mini
+        # visualizer, or Now Playing matching the main visualizer.
+        matching = "main" in (self.now_playing_text_source, self.now_playing_bg_source)
+
+        if self.aux_windows or matching:
             update_main_visualizer_palette(pixels)
+
+        if matching:
+            self.apply_now_playing_text_style()
 
     def forward_audio_to_aux_windows(self, data):
 
@@ -3380,6 +3395,83 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return row
 
+    NOW_PLAYING_COLOR_SOURCES = [
+        ("custom", "Chosen Color"), ("theme", "System Theme"), ("main", "Main Visualizer"),
+    ]
+
+    def now_playing_effective_colors(self):
+        """(text, background) to draw with, from each one's source. Text
+        that doesn't come from your own choice switches to white or black
+        when it would be too close to the background to read."""
+
+        def rgba(rgb):
+            color = Gdk.RGBA()
+            color.red, color.green, color.blue, color.alpha = (*rgb, 1.0)
+            return color
+
+        def luminance(color):
+            return 0.2126 * color.red + 0.7152 * color.green + 0.0722 * color.blue
+
+        dark_theme = Adw.StyleManager.get_default().get_dark()
+
+        bg = self.now_playing_bg_color
+        if self.now_playing_bg_source == "theme":
+            bg = rgba((0.12, 0.12, 0.13) if dark_theme else (0.97, 0.97, 0.97))
+        elif self.now_playing_bg_source == "main":
+            bg = rgba(tuple(c * 0.6 for c in palette_color("main", 0.0)))
+
+        text = self.now_playing_text_color
+        if self.now_playing_text_source == "theme":
+            text = rgba((1.0, 1.0, 1.0) if dark_theme else (0.12, 0.12, 0.13))
+        elif self.now_playing_text_source == "main":
+            text = rgba(palette_color("main", 1.0))
+
+        if self.now_playing_text_source != "custom" and abs(luminance(text) - luminance(bg)) < 0.45:
+            text = rgba((1.0, 1.0, 1.0) if luminance(bg) < 0.5 else (0.0, 0.0, 0.0))
+
+        return text, bg
+
+    def build_now_playing_color_source_controls(self):
+
+        keys = [key for key, _ in self.NOW_PLAYING_COLOR_SOURCES]
+        labels = [label for _, label in self.NOW_PLAYING_COLOR_SOURCES]
+
+        def update_rows():
+            self.now_playing_text_color_row.set_visible(self.now_playing_text_source == "custom")
+            self.now_playing_bg_rows[0].set_visible(
+                self.now_playing_show_background and self.now_playing_bg_source == "custom"
+            )
+            bg_row.set_visible(self.now_playing_show_background)
+
+        def text_changed(combo, param):
+            self.now_playing_text_source = keys[combo.get_selected()]
+            update_rows()
+            self.apply_now_playing_text_style()
+
+        def bg_changed(combo, param):
+            self.now_playing_bg_source = keys[combo.get_selected()]
+            update_rows()
+            self.apply_now_playing_text_style()
+
+        text_row = Adw.ComboRow(title="Text Follows", model=Gtk.StringList.new(labels))
+        text_row.set_subtitle("Also the placeholder icon")
+        text_row.connect("notify::selected", text_changed)
+
+        bg_row = Adw.ComboRow(title="Background Follows", model=Gtk.StringList.new(labels))
+        bg_row.connect("notify::selected", bg_changed)
+        bg_row.set_visible(self.now_playing_show_background)
+
+        self.now_playing_text_source_row = text_row
+        self.now_playing_bg_source_row = bg_row
+        self.now_playing_update_match_rows = update_rows
+
+        # System Theme follows light/dark as it changes.
+        Adw.StyleManager.get_default().connect(
+            "notify::dark", lambda *args: self.apply_now_playing_text_style()
+        )
+
+        return [text_row, bg_row]
+
     def build_now_playing_background_controls(self):
         """Color and opacity of the card behind the text (shown while
         Displayed Fields > Show Background is on)."""
@@ -3472,6 +3564,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         row.add_suffix(button)
 
         self.now_playing_text_color_button = button
+        self.now_playing_text_color_row = row
 
         return row
 
@@ -3919,13 +4012,22 @@ class MelangeWindow(Adw.ApplicationWindow):
         np_layout_group.add(self.build_now_playing_max_width_control())
 
         np_style_group = Adw.PreferencesGroup(title="Style")
-        np_style_group.add(self.build_now_playing_font_control())
-        np_style_group.add(self.build_now_playing_text_color_control())
-        for row in self.build_now_playing_outline_controls():
+        # Order: font; text colour (where it comes from, then your own);
+        # outline; background (where it comes from, then colour, opacity);
+        # placeholder icon. The "Follows" rows need the colour rows built
+        # first, so they're built first and placed above them.
+        font_row = self.build_now_playing_font_control()
+        text_color_row = self.build_now_playing_text_color_control()
+        outline_rows = self.build_now_playing_outline_controls()
+        background_rows = self.build_now_playing_background_controls()
+        text_source_row, bg_source_row = self.build_now_playing_color_source_controls()
+
+        for row in (
+            font_row, text_source_row, text_color_row, *outline_rows,
+            bg_source_row, *background_rows,
+            self.build_now_playing_placeholder_style_control(),
+        ):
             np_style_group.add(row)
-        for row in self.build_now_playing_background_controls():
-            np_style_group.add(row)
-        np_style_group.add(self.build_now_playing_placeholder_style_control())
 
         np_visibility_group = Adw.PreferencesGroup(title="Visibility")
         np_visibility_group.add(self.build_now_playing_auto_hide_control())
