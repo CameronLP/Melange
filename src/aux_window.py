@@ -96,6 +96,15 @@ def read_saved_settings():
         return {}
 
 
+def reset_all_saved_settings():
+    """Forget every kind's remembered settings and size."""
+
+    try:
+        saved_settings_path().unlink(missing_ok=True)
+    except OSError as error:
+        print(f"Couldn't reset mini visualizer settings: {error}")
+
+
 def encode_setting(value):
 
     if isinstance(value, Gdk.RGBA):

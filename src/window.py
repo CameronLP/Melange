@@ -33,7 +33,7 @@ gi.require_version("Pango", "1.0")
 
 from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.mirror_window import MirrorWindow
-from melange.aux_window import AuxVisualizerWindow, update_main_visualizer_palette
+from melange.aux_window import AuxVisualizerWindow, update_main_visualizer_palette, reset_all_saved_settings
 from melange.now_playing import NowPlayingWatcher
 from melange import projectm_view
 from melange.preset_manager import PresetManager
@@ -244,6 +244,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_scroll_timer = None
         self.now_playing_scroll_offset = 0
         self.now_playing_scroll_title = None
+        # Preferences > Cycling: jump to the next preset when the track
+        # playing (Now Playing's source) changes.
+        self.change_preset_on_new_song = False
+        self.last_song_key = None
+
+        # Preferences > Window: the preset's name in the title bar.
+        self.show_preset_in_title = True
+
         self.now_playing_text_color = Gdk.RGBA()
         self.now_playing_text_color.parse("#ffffff")
         self.now_playing_position_timer = None
@@ -1013,7 +1021,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.cursor_hider = FullscreenCursorHider(
             self,
             may_hide=lambda: self.pointer_over_visualizer and not self.menu_button.get_active(),
-            on_hide=lambda: self.set_nav_arrows_visible(False)
+            on_hide=self.on_pointer_hidden
         )
 
         self.menu_button.get_popover().add_child(
@@ -1311,6 +1319,19 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_artist_ticker.stop()
             self.now_playing_album_ticker.stop()
             return
+
+        song_key = (info["title"], info["artist"])
+
+        if (
+            self.change_preset_on_new_song
+            and self.last_song_key is not None
+            and song_key != self.last_song_key
+            and info["title"]
+            and not self.preset_locked
+        ):
+            self.next_preset(None)
+
+        self.last_song_key = song_key
 
         self.update_now_playing_title(info["title"])
         self.update_now_playing_line(self.now_playing_artist_ticker, info["artist"])
@@ -1971,6 +1992,17 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         color = self.now_playing_text_color
 
+        # The no-artwork icon takes the same color as the text.
+        if not hasattr(self, "now_playing_placeholder_css"):
+            self.now_playing_placeholder_css = Gtk.CssProvider()
+            Gtk.StyleContext.add_provider_for_display(
+                self.get_display(), self.now_playing_placeholder_css,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
+            )
+        self.now_playing_placeholder_css.load_from_string(
+            f".now-playing-art-placeholder {{ color: {color.to_string()}; }}"
+        )
+
         attrs.insert(Pango.attr_foreground_new(
             int(color.red * 65535),
             int(color.green * 65535),
@@ -2550,6 +2582,19 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return True
 
+    def on_pointer_hidden(self):
+        """Fullscreen, pointer just hid: the floating buttons and the
+        header bar go at the same moment (rather than the header
+        waiting for Hide Delay)."""
+
+        self.set_nav_arrows_visible(False)
+
+        if self.is_fullscreen() and not self.mouse_over_toolbar and not self.menu_open:
+            if self.hide_timer:
+                GLib.source_remove(self.hide_timer)
+                self.hide_timer = None
+            self.toolbar_view.set_reveal_top_bars(False)
+
     def pause_changed(self, action, value):
 
         action.set_state(value)
@@ -2728,22 +2773,24 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def build_framerate_control(self):
 
+        # 10-60 FPS, then one step past 60 = Uncapped (it used to jump
+        # from 59 straight to Uncapped).
         def format_framerate(value):
-            return "Uncapped" if value >= 60 else f"{int(value)} FPS"
+            return "Uncapped" if value >= 61 else f"{int(value)} FPS"
 
         def framerate_changed(value):
 
             # The slider's top end means "uncapped" (render on every
             # animation frame), same "boundary value is the special
             # state" shape as the cycle interval's "off" at its bottom.
-            fps = 0 if value >= 60 else value
+            fps = 0 if value >= 61 else value
 
             if self.projectm_view:
                 self.projectm_view.set_frame_rate_cap(fps)
 
         return self.build_slider_row(
             "Framerate",
-            10.0, 60.0, 1.0, 60.0,
+            10.0, 61.0, 1.0, 61.0,
             format_framerate,
             framerate_changed,
             store_as="framerate_scale"
@@ -3204,6 +3251,33 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return row
 
+    def build_change_on_new_song_control(self):
+
+        def changed(enabled):
+            self.change_preset_on_new_song = enabled
+
+        row = self.build_toggle_row(
+            "New Preset on Song Change", self.change_preset_on_new_song, changed,
+            store_as="change_on_new_song_row"
+        )
+        row.set_subtitle("Uses the track Now Playing follows; not while locked")
+
+        return row
+
+    def build_show_preset_in_title_control(self):
+
+        def changed(enabled):
+            self.show_preset_in_title = enabled
+            self.set_title(self.build_window_title())
+
+        row = self.build_toggle_row(
+            "Show Preset Name in Title", self.show_preset_in_title, changed,
+            store_as="show_preset_in_title_row"
+        )
+        row.set_subtitle("Off shows just \"Melange\"")
+
+        return row
+
     def build_toggle_row(self, title, initial, on_change, store_as=None):
 
         row = Adw.SwitchRow(title=title)
@@ -3342,6 +3416,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         cycling_group.add(self.build_cycle_interval_control())
         cycling_group.add(self.build_cycle_jitter_control())
         cycling_group.add(self.build_blend_time_control())
+        cycling_group.add(self.build_change_on_new_song_control())
 
         self.cycling_group = cycling_group
 
@@ -3406,6 +3481,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         toolbar_group.add(self.build_toolbar_hide_delay_control())
         toolbar_group.add(self.build_show_nav_arrows_control())
         toolbar_group.add(self.build_show_favorite_button_control())
+        toolbar_group.add(self.build_show_preset_in_title_control())
 
         # When presets change (not the presets themselves).
         playback_page = Adw.PreferencesPage(
@@ -3463,6 +3539,18 @@ class MelangeWindow(Adw.ApplicationWindow):
             ("now-playing", now_playing_page),
             ("profiles", profiles_page),
         ]
+
+        # Starting values of every Preferences control (Reset All
+        # Preferences puts them back), and the button for it.
+        self.preference_defaults = self.snapshot_preferences()
+
+        reset_group = Adw.PreferencesGroup()
+        reset_button = Gtk.Button(label="Reset All Preferences…", halign=Gtk.Align.CENTER)
+        reset_button.add_css_class("pill")
+        reset_button.add_css_class("destructive-action")
+        reset_button.connect("clicked", lambda button: self.confirm_reset_preferences())
+        reset_group.add(reset_button)
+        profiles_page.add(reset_group)
 
     # The (key, getter, setter) triples that make up a settings
     # profile. A single list here rather than scattering profile
@@ -3907,7 +3995,119 @@ class MelangeWindow(Adw.ApplicationWindow):
 
             page.add(group)
 
+        reset_group = Adw.PreferencesGroup()
+        reset_button = Gtk.Button(label="Reset All Mini Visualizers…", halign=Gtk.Align.CENTER)
+        reset_button.add_css_class("pill")
+        reset_button.add_css_class("destructive-action")
+        reset_button.connect("clicked", lambda button: self.confirm_reset_mini_visualizers())
+        reset_group.add(reset_button)
+        page.add(reset_group)
+
         return page
+
+    # --- resets --------------------------------------------------------------
+
+    # Controls a reset leaves alone (a device choice, not a preference).
+    RESET_SKIP_TITLES = ("Audio Source",)
+
+    def preference_controls(self):
+        """(widget, getter, setter) for every control on the Preferences
+        pages except Profiles."""
+
+        def walk(widget):
+            yield widget
+            child = widget.get_first_child()
+            while child is not None:
+                yield from walk(child)
+                child = child.get_next_sibling()
+
+        def color_copy(rgba):
+            copy = Gdk.RGBA()
+            copy.red, copy.green, copy.blue, copy.alpha = rgba.red, rgba.green, rgba.blue, rgba.alpha
+            return copy
+
+        controls = []
+
+        for name, page in self.settings_pages:
+            if name == "profiles":
+                continue
+
+            for widget in walk(page):
+                row = widget.get_ancestor(Adw.PreferencesRow)
+                if row is not None and row.get_title() in self.RESET_SKIP_TITLES:
+                    continue
+
+                if isinstance(widget, Adw.SwitchRow):
+                    controls.append((widget, widget.get_active, widget.set_active))
+                elif isinstance(widget, Adw.ComboRow):
+                    controls.append((widget, widget.get_selected, widget.set_selected))
+                elif isinstance(widget, Adw.SpinRow):
+                    controls.append((widget, widget.get_value, widget.set_value))
+                elif isinstance(widget, Gtk.Switch) and widget.get_ancestor(Adw.SwitchRow) is None:
+                    controls.append((widget, widget.get_active, widget.set_active))
+                elif isinstance(widget, Gtk.Scale):
+                    adjustment = widget.get_adjustment()
+                    controls.append((widget, adjustment.get_value, adjustment.set_value))
+                elif isinstance(widget, Gtk.SpinButton) and widget.get_ancestor(Adw.SpinRow) is None:
+                    controls.append((widget, widget.get_value, widget.set_value))
+                elif isinstance(widget, Gtk.DropDown) and widget.get_ancestor(Adw.ComboRow) is None:
+                    controls.append((widget, widget.get_selected, widget.set_selected))
+                elif isinstance(widget, Gtk.ColorDialogButton):
+                    controls.append((widget, lambda w=widget: color_copy(w.get_rgba()), widget.set_rgba))
+                elif isinstance(widget, Gtk.FontDialogButton):
+                    controls.append((widget, lambda w=widget: w.get_font_desc().copy() if w.get_font_desc() else None,
+                                     lambda value, w=widget: value is not None and w.set_font_desc(value)))
+
+        return controls
+
+    def snapshot_preferences(self):
+
+        return [(widget, setter, getter()) for widget, getter, setter in self.preference_controls()]
+
+    def reset_preferences(self):
+
+        for widget, setter, value in self.preference_defaults:
+            setter(value)
+
+        self.show_toast("Preferences reset")
+
+    def confirm_reset(self, heading, body, label, on_reset):
+
+        dialog = Adw.AlertDialog(heading=heading, body=body)
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("reset", label)
+        dialog.set_response_appearance("reset", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda d, response: on_reset() if response == "reset" else None)
+        dialog.present(self)
+
+    def confirm_reset_preferences(self):
+
+        self.confirm_reset(
+            "Reset All Preferences?",
+            "Every setting on the Preferences tabs goes back to its default. "
+            "Saved Profiles and the audio source aren't changed.",
+            "Reset", self.reset_preferences
+        )
+
+    def reset_mini_visualizers(self):
+
+        reset_all_saved_settings()
+
+        for aux_window in list(self.aux_windows.values()):
+            aux_window.reset_to_defaults()
+
+        self.show_toast("Mini visualizers reset")
+
+    def confirm_reset_mini_visualizers(self):
+
+        self.confirm_reset(
+            "Reset All Mini Visualizers?",
+            "Every mini visualizer's settings and remembered size go back to "
+            "their defaults, including ones that aren't open.",
+            "Reset", self.reset_mini_visualizers
+        )
 
     def build_settings_section(self):
 
@@ -4689,6 +4889,9 @@ class MelangeWindow(Adw.ApplicationWindow):
     def build_window_title(self):
 
         title = "Melange"
+
+        if not self.show_preset_in_title:
+            return title
 
         if self.current_playlist_name:
             title += f" ({self.current_playlist_name})"
