@@ -44,7 +44,7 @@ SAVED_SETTINGS = [
     "mirror_reflection", "maintain_aspect_ratio", "scope_zoom",
     "xy_line_width", "xy_points", "xy_curved",
     "vu_style", "vu_peak_hold", "vu_segments",
-    "peak_hold_seconds", "peak_hold_color_custom", "peak_hold_color",
+    "peak_hold_seconds", "peak_hold_color_mode", "peak_hold_color",
     "spectrum_peak_hold", "spectrum_height_scale", "spectrum_style",
     "scope_time_base", "scope_trigger", "vector_persistence", "vector_dot_size",
     "spectrogram_vertical", "spectrogram_speed", "spectrogram_palette",
@@ -595,6 +595,8 @@ PALETTE_CHOICES = [("gradient", "Custom")] + PALETTE_LABELS
 # a Style row for their shape): how a kind is colored. Where the colors come
 # from (your own vs the main visualizer) is the Match slider.
 STYLE_CHOICES = [("solid", "Solid"), ("gradient", "Gradient")]
+
+PEAK_HOLD_COLOR_CHOICES = [("auto", "Automatic"), ("custom", "Custom"), ("main", "Main Visualizer")]
 METER_STYLE_CHOICES = [("classic", "Classic")] + STYLE_CHOICES
 
 # Rows that belong in the Colors group, in display order (whichever a
@@ -1296,7 +1298,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # near-black/near-white) is the existing default look for the
         # hold marker on VU Meter/Peak Meter/Spectrum, unchanged unless
         # the user opts into a fixed custom color instead.
-        self.peak_hold_color_custom = False
+        self.peak_hold_color_mode = "auto"
         self.peak_hold_color = Gdk.RGBA()
         self.peak_hold_color.parse("#ffffff")
 
@@ -2081,20 +2083,26 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
             hold_color_row.append(hold_color_label)
 
-            hold_color_switch = Gtk.Switch()
-            hold_color_switch.set_active(self.peak_hold_color_custom)
-            hold_color_switch.set_valign(Gtk.Align.CENTER)
-            hold_color_switch.set_tooltip_text(
-                "Off follows the theme (near-black/near-white), same "
-                "as this window's other structural marks."
+            # Automatic follows the background (near-white/near-black,
+            # like the other structural marks); Main Visualizer uses
+            # its brightest color.
+            hold_keys = [key for key, _ in PEAK_HOLD_COLOR_CHOICES]
+            hold_mode_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in PEAK_HOLD_COLOR_CHOICES]
+            )
+            hold_mode_dropdown.set_valign(Gtk.Align.CENTER)
+            hold_mode_dropdown.set_selected(
+                hold_keys.index(self.peak_hold_color_mode)
+                if self.peak_hold_color_mode in hold_keys else 0
             )
 
-            hold_color_switch.connect(
-                "notify::active",
-                self.on_peak_hold_color_custom_changed
-            )
+            def hold_mode_changed(dropdown, param):
+                index = dropdown.get_selected()
+                if 0 <= index < len(hold_keys):
+                    self.peak_hold_color_mode = hold_keys[index]
 
-            hold_color_row.append(hold_color_switch)
+            hold_mode_dropdown.connect("notify::selected", hold_mode_changed)
+            hold_color_row.append(hold_mode_dropdown)
 
             hold_color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
             hold_color_button.set_valign(Gtk.Align.CENTER)
@@ -3476,6 +3484,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         visible("High Color", gradient_shown and gradient == "gradient")
         visible("Reverse", gradient_shown)
         visible("Background Color", self.background_mode == "custom")
+
+        if "Peak Hold Color" in rows:
+            for widget in self.iter_widgets(rows["Peak Hold Color"]):
+                if isinstance(widget, Gtk.ColorDialogButton):
+                    widget.set_visible(self.peak_hold_color_mode == "custom")
         visible("Background Opacity", self.background_mode != "transparent")
 
         if "Rotate Speed" in rows:
@@ -3876,6 +3889,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             setattr(self, palette_name, "rainbow")
             self.color_sync = 1.0
 
+        # Peak Hold Color used to be an on/off "custom" switch.
+        if saved.get("peak_hold_color_custom") is True and "peak_hold_color_mode" not in saved:
+            self.peak_hold_color_mode = "custom"
+
         # DVD Bounce had its own Background Color before the shared one.
         if self.kind == "dvd" and "background_mode" not in saved and "dvd_bg_color" in saved:
             color = decode_setting(saved["dvd_bg_color"], self.background_color)
@@ -3939,11 +3956,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_peak_hold_seconds_changed(self, scale):
 
         self.peak_hold_seconds = scale.get_value()
-
-    def on_peak_hold_color_custom_changed(self, switch, param):
-
-        self.peak_hold_color_custom = switch.get_active()
-        self.drawing_area.queue_draw()
 
     def on_peak_hold_color_changed(self, button, param):
 
@@ -4595,14 +4607,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def peak_hold_draw_color(self, fallback_alpha=1.0):
 
-        if self.peak_hold_color_custom:
+        if self.peak_hold_color_mode == "custom":
+            color = self.peak_hold_color
+            return (color.red, color.green, color.blue, color.alpha)
 
-            return (
-                self.peak_hold_color.red,
-                self.peak_hold_color.green,
-                self.peak_hold_color.blue,
-                self.peak_hold_color.alpha
-            )
+        if self.peak_hold_color_mode == "main":
+            return (*palette_color("main", 1.0), fallback_alpha)
 
         return self.canvas_foreground_rgba(fallback_alpha)
 
