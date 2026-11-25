@@ -51,8 +51,8 @@ that react to the same audio.
   floating buttons. Transparency Mode lets the desktop show through, with an
   option to become opaque while the mouse is over the window.
 - **Right-click menu.** Right-click the visualizer for next/previous preset,
-  favorite, pause, lock, shuffle, Hide Controls, fullscreen, the preset
-  browser, Load Preset… and Preferences.
+  favorite, pause, lock, shuffle, Hide Controls, Transparency Mode, Now
+  Playing, fullscreen, the preset browser, Load Preset… and Preferences.
 - **Now Playing.** An overlay with the title, artist, album and artwork of
   whatever is playing (any MPRIS player), with placement, size, font, colour,
   auto-hide and periodic-fade options.
@@ -174,10 +174,13 @@ Melange keeps its files in `~/.var/app/com.cameronlp.Melange/config/melange/`:
 | `projectm-playlists.json` | Saved playlists |
 | `profiles.json` | Saved preference profiles |
 | `user-presets.json` | Presets you opened from files (their paths) |
+| `settings.json` | Preferences, theme, window size, and the Shuffle, Now Playing and queue options |
 | `mini_visualizers.json` | Each mini visualizer's settings and size |
 
-The main window's preferences aren't remembered between launches yet. Save
-them as a profile to keep them.
+Preferences are remembered between launches (except the audio source),
+and so are the theme, window size, Shuffle, Now Playing and the queue's loop
+and shuffle options. Pause, Lock, Hide Controls, Transparency Mode and Main
+Visualizer start off each time.
 
 ## Keyboard shortcuts
 

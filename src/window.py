@@ -1092,6 +1092,14 @@ class MelangeWindow(Adw.ApplicationWindow):
             "theme-selector"
         )
 
+        # Remembered between launches (settings.json): put back what was
+        # saved, then start saving changes. Reset All Preferences still
+        # goes to the real defaults (captured before this, in
+        # preference_defaults).
+        self.settings_save_timer = None
+        self.restore_settings()
+        self.watch_settings()
+
     # Only exists for Now Playing's Lock to Window Size - there's no
     # notify::default-width/height to bind to for a *live* interactive
     # resize in GTK4 (those properties only reflect the initially
@@ -1246,6 +1254,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         view = Gio.Menu()
         view.append("Hide Controls", "win.immersive-mode")
+        view.append("Transparency Mode", "win.transparency-mode")
+        view.append("Now Playing", "win.now-playing-enabled")
         view.append("Fullscreen", "win.toggle-fullscreen")
         menu.append_section(None, view)
 
@@ -2535,6 +2545,8 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def on_close_request(self, window):
 
+        self.save_settings()
+
         # Mirror windows have no purpose without this one driving them
         # (a mirror shows this window's own visualizer - see
         # mirror_window.py - so there's nothing left to display once
@@ -3626,6 +3638,174 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if button.get_active():
             Adw.StyleManager.get_default().set_color_scheme(scheme)
+            self.schedule_settings_save()
+
+    # --- remembered settings -------------------------------------------------
+
+    # Menu toggles worth keeping between launches. Not Pause, Lock,
+    # Hide Controls, Transparency Mode or Main Visualizer: those are
+    # moment-to-moment states, and starting up in them would confuse.
+    REMEMBERED_ACTIONS = ("shuffle-preset", "now-playing-enabled", "loop-queue", "shuffle-queue")
+    SETTINGS_SAVE_DELAY_MS = 1000
+
+    def settings_file_path(self):
+
+        config_dir = Path(GLib.get_user_config_dir()) / "melange"
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        return config_dir / "settings.json"
+
+    def keyed_preference_controls(self):
+        """(key, widget, getter, setter) for each Preferences control,
+        keyed by page and row title so saved values find their control
+        again even if the layout changes."""
+
+        keyed = []
+        seen = {}
+
+        for widget, getter, setter in self.preference_controls():
+            row = widget if isinstance(widget, Adw.PreferencesRow) else widget.get_ancestor(Adw.PreferencesRow)
+            page = next(
+                (name for name, page in self.settings_pages if widget.is_ancestor(page)),
+                "?"
+            )
+            key = f"{page}/{row.get_title() if row else type(widget).__name__}"
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] > 1:
+                key = f"{key}#{seen[key]}"
+            keyed.append((key, widget, getter, setter))
+
+        return keyed
+
+    @staticmethod
+    def encode_preference(value):
+
+        if isinstance(value, Gdk.RGBA):
+            return value.to_string()
+        if isinstance(value, Pango.FontDescription):
+            return value.to_string()
+        return value
+
+    @staticmethod
+    def decode_preference(saved, current):
+        """Saved JSON value -> the current value's type, or None."""
+
+        if isinstance(current, Gdk.RGBA):
+            color = Gdk.RGBA()
+            return color if isinstance(saved, str) and color.parse(saved) else None
+        if isinstance(current, Pango.FontDescription):
+            return Pango.FontDescription.from_string(saved) if isinstance(saved, str) else None
+        if isinstance(current, bool):
+            return saved if isinstance(saved, bool) else None
+        if isinstance(current, int):
+            return int(saved) if isinstance(saved, (int, float)) and not isinstance(saved, bool) else None
+        if isinstance(current, float):
+            return float(saved) if isinstance(saved, (int, float)) and not isinstance(saved, bool) else None
+        return None
+
+    def restore_settings(self):
+
+        try:
+            with open(self.settings_file_path()) as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            return
+
+        if not isinstance(saved, dict):
+            return
+
+        preferences = saved.get("preferences", {})
+        if isinstance(preferences, dict):
+            for key, widget, getter, setter in self.keyed_preference_controls():
+                if key in preferences:
+                    value = self.decode_preference(preferences[key], getter())
+                    if value is not None:
+                        setter(value)
+
+        actions = saved.get("actions", {})
+        if isinstance(actions, dict):
+            for name in self.REMEMBERED_ACTIONS:
+                action = self.lookup_action(name)
+                value = actions.get(name)
+                if action is not None and isinstance(value, bool) and action.get_state().get_boolean() != value:
+                    action.change_state(GLib.Variant("b", value))
+
+        theme = saved.get("theme")
+        button = getattr(self, "theme_buttons", {}).get(theme) if isinstance(theme, int) else None
+        if button is not None:
+            button.set_active(True)
+
+        size = saved.get("window_size")
+        if isinstance(size, list) and len(size) == 2 and all(isinstance(n, int) and n > 0 for n in size):
+            self.set_default_size(*size)
+        if saved.get("maximized") is True:
+            self.maximize()
+
+    def watch_settings(self):
+
+        for key, widget, getter, setter in self.keyed_preference_controls():
+            if isinstance(widget, Gtk.Scale):
+                widget.get_adjustment().connect("value-changed", self.schedule_settings_save)
+            elif isinstance(widget, Gtk.ColorDialogButton):
+                widget.connect("notify::rgba", self.schedule_settings_save)
+            elif isinstance(widget, Gtk.FontDialogButton):
+                widget.connect("notify::font-desc", self.schedule_settings_save)
+            elif isinstance(widget, (Adw.ComboRow, Gtk.DropDown)):
+                widget.connect("notify::selected", self.schedule_settings_save)
+            elif isinstance(widget, Adw.SpinRow):
+                widget.connect("notify::value", self.schedule_settings_save)
+            else:
+                widget.connect("notify::active", self.schedule_settings_save)
+
+        for name in self.REMEMBERED_ACTIONS:
+            action = self.lookup_action(name)
+            if action is not None:
+                action.connect("notify::state", self.schedule_settings_save)
+
+    def schedule_settings_save(self, *args):
+
+        if self.settings_save_timer is not None:
+            GLib.source_remove(self.settings_save_timer)
+
+        self.settings_save_timer = GLib.timeout_add(self.SETTINGS_SAVE_DELAY_MS, self.save_settings)
+
+    def save_settings(self):
+
+        if getattr(self, "settings_save_timer", None) is not None:
+            GLib.source_remove(self.settings_save_timer)
+        self.settings_save_timer = None
+
+        data = {
+            "preferences": {
+                key: self.encode_preference(getter())
+                for key, widget, getter, setter in self.keyed_preference_controls()
+            },
+            "actions": {
+                name: self.lookup_action(name).get_state().get_boolean()
+                for name in self.REMEMBERED_ACTIONS if self.lookup_action(name) is not None
+            },
+            "theme": int(Adw.StyleManager.get_default().get_color_scheme()),
+            "maximized": self.is_maximized(),
+        }
+
+        if not (self.is_maximized() or self.is_fullscreen()) and self.get_width() > 0:
+            data["window_size"] = [self.get_width(), self.get_height()]
+        else:
+            # Keep the last normal size while maximized/fullscreen.
+            try:
+                with open(self.settings_file_path()) as f:
+                    previous = json.load(f)
+                if isinstance(previous, dict) and "window_size" in previous:
+                    data["window_size"] = previous["window_size"]
+            except (OSError, ValueError):
+                pass
+
+        try:
+            GLib.file_set_contents(str(self.settings_file_path()), json.dumps(data, indent=1).encode())
+        except (OSError, GLib.Error) as e:
+            print("Failed to save settings:", e)
+
+        return False
 
     def build_theme_selector(self):
 
@@ -3664,6 +3844,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
             if scheme == Adw.ColorScheme.DEFAULT:
                 button.set_active(True)
+
+            if not hasattr(self, "theme_buttons"):
+                self.theme_buttons = {}
+            self.theme_buttons[int(scheme)] = button
 
             button.connect(
                 "toggled",
