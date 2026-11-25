@@ -38,15 +38,16 @@ class FullscreenCursorHider:
     # bring the pointer straight back the moment it was hidden.
     MOVEMENT_THRESHOLD_PX = 3
 
-    def __init__(self, window, may_hide=None, on_hide=None):
+    def __init__(self, window, may_hide=None, on_hide=None, on_show=None):
         """may_hide() - optional extra condition, e.g. "the pointer is
         over the visualizer, not the sidebar". on_hide() - called when
         the pointer hides, for hiding on-screen controls at the same
-        moment."""
+        moment. on_show() - called when it comes back."""
 
         self.window = window
         self.may_hide = may_hide or (lambda: True)
         self.on_hide = on_hide
+        self.on_show = on_show
         self.timer = None
         self.last_position = None
         self.hidden = False
@@ -105,6 +106,9 @@ class FullscreenCursorHider:
         if self.hidden:
             self.window.set_cursor(None)
             self.hidden = False
+
+            if self.on_show:
+                self.on_show()
 
     def stop(self):
 
