@@ -2111,7 +2111,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
 
             aspect_label = Gtk.Label(
-                label="Equal Aspect Ratio", xalign=0, hexpand=True
+                label="Maintain Aspect Ratio", xalign=0, hexpand=True
             )
             aspect_row.append(aspect_label)
 
@@ -3111,6 +3111,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if self.kind in ("spectrum", "spectrogram", "terrain", "waterfall"):
             self.add_scale(box, "Lowest Frequency", "freq_min", 20, 1000, 10, hertz, self.frequency_range_changed)
             self.add_scale(box, "Highest Frequency", "freq_max", 1000, SAMPLE_RATE / 2, 50, hertz, self.frequency_range_changed)
+
+        if self.kind in ("xy", "vectorscope"):
+            self.row_subtitles["Maintain Aspect Ratio"] = "Keep the plot square, whatever the window's shape"
 
         if self.kind == "vectorscope":
             self.add_switch(
