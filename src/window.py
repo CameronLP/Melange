@@ -153,6 +153,9 @@ class PresetTreeNode(GObject.Object):
 # Must match the Preferences controls' own defaults (Cycle Interval 30s,
 # no jitter, Shuffle on, Transition Blend Time 3s).
 DEFAULT_CYCLE_SECONDS = 30.0
+
+# Browse-tree folder for presets opened from files (pinned at the top).
+USER_PRESETS_FOLDER = "Your Presets"
 DEFAULT_BLEND_SECONDS = 3.0
 
 # current_sink while capturing the microphone instead of a sink monitor.
@@ -659,6 +662,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.presets.set_cycle_interval(DEFAULT_CYCLE_SECONDS)
         self.preset_paths = projectm_view.preset_catalog() if self.projectm_view else {}
         self.presets.set_catalog(sorted(self.preset_paths))
+        self.restore_user_presets()
         self.presets.set_active(True)
         self.presets.next()
 
@@ -988,6 +992,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Pause (P): freeze the visualizer on its current frame - no
         # rendering, audio ignored, no preset changes. Next/previous
         # resume it.
+        # F9 (GNOME's usual sidebar shortcut): show/hide the sidebar.
+        toggle_sidebar = Gio.SimpleAction.new("toggle-sidebar", None)
+        toggle_sidebar.connect(
+            "activate",
+            lambda *args: self.sidebar_split.set_show_sidebar(
+                not self.sidebar_split.get_show_sidebar()
+            )
+        )
+        self.add_action(toggle_sidebar)
+
         # Main Visualizer on/off: off hides and pauses projectM (no
         # rendering, no audio into it, no preset changes) while audio
         # still reaches the mini visualizers.
@@ -1237,6 +1251,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         more = Gio.Menu()
         more.append("Browse Presets…", "win.browse-presets")
+        more.append("Load Preset…", "win.load-preset")
         more.append("Preferences…", "win.preferences")
         menu.append_section(None, more)
 
@@ -2688,6 +2703,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.close_mirrors_row.set_sensitive(bool(self.mirror_windows))
 
     def on_key_pressed(self, controller, keyval, keycode, state):
+
+        # Esc closes the sidebar first (then leaves fullscreen).
+        if keyval == Gdk.KEY_Escape and self.sidebar_split.get_show_sidebar():
+            self.sidebar_split.set_show_sidebar(False)
+            return True
 
         if keyval == Gdk.KEY_Escape and self.is_fullscreen():
             self.unfullscreen()
@@ -4433,7 +4453,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             "queue", "Queue", "view-continuous-symbolic"
         )
         # Replaced the Loaded tab: presets loaded from files already
-        # appear in the Presets tree's "Loaded" folder and in search.
+        # appear in the Presets tree's "Your Presets" folder and in search.
         view_stack.add_titled_with_icon(
             self.build_playlists_tab(),
             "playlists", "Playlists", "view-list-bullet-symbolic"
@@ -4624,13 +4644,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.presets.go_to(node.preset_name)
 
     # The preset collection as a Category > Subfolder > preset tree;
-    # presets loaded from files go under "Loaded".
+    # presets loaded from files go under "Your Presets".
     def build_preset_tree_nodes(self):
 
         root = {}
 
         for name in self.presets.catalog:
-            folders = projectm_view.preset_folders(self.preset_paths[name]) or ("Loaded",)
+            folders = projectm_view.preset_folders(self.preset_paths[name]) or (USER_PRESETS_FOLDER,)
             level = root
 
             for folder in folders:
@@ -4640,7 +4660,11 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         def to_nodes(level):
 
-            folders = sorted(key for key in level if key is not None)
+            # Your Presets first, then the collection's categories.
+            folders = sorted(
+                (key for key in level if key is not None),
+                key=lambda folder: (folder != USER_PRESETS_FOLDER, folder)
+            )
             nodes = []
 
             for folder in folders:
@@ -5603,9 +5627,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         name = Path(basename).stem
         existing = self.preset_paths.get(name)
 
-        # Same file as the bundled preset of that name (e.g. a copy of a
-        # Cream of the Crop preset): just use the bundled one, rather
-        # than adding a session-only "(loaded)" duplicate.
         if (
             isinstance(existing, projectm_view.ZipPreset)
             and projectm_view.read_preset_bytes(existing) == projectm_view.read_preset_bytes(path)
@@ -5614,10 +5635,25 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.show_toast(f"Already in the collection: {name}")
             return True
 
-        if existing not in (None, Path(path)):
+        name = self.add_user_preset(Path(path))
+        self.save_user_presets()
+
+        self.refresh_preset_lists()
+        self.presets.go_to(name)
+
+        return True
+
+    def add_user_preset(self, path):
+        """Adds a .milk file to the catalog (under Your Presets in the
+        browser) and returns the name it's listed under."""
+
+        name = path.stem
+        existing = self.preset_paths.get(name)
+
+        if existing not in (None, path):
             name = f"{name} (loaded)"
 
-        self.preset_paths[name] = Path(path)
+        self.preset_paths[name] = path
 
         if not self.presets.contains(name):
             self.presets.set_catalog(self.presets.catalog + [name])
@@ -5625,10 +5661,44 @@ class MelangeWindow(Adw.ApplicationWindow):
         if name not in self.user_loaded_presets:
             self.user_loaded_presets.append(name)
 
-        self.refresh_preset_lists()
-        self.presets.go_to(name)
+        return name
 
-        return True
+    # Presets opened from files are remembered between launches (their
+    # paths, in user-presets.json); ones whose file is gone are dropped.
+    def user_presets_file_path(self):
+
+        config_dir = Path(GLib.get_user_config_dir()) / "melange"
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        return config_dir / "user-presets.json"
+
+    def save_user_presets(self):
+
+        paths = [
+            str(self.preset_paths[name]) for name in self.user_loaded_presets
+            if isinstance(self.preset_paths.get(name), Path)
+        ]
+
+        try:
+            with open(self.user_presets_file_path(), "w") as f:
+                json.dump(paths, f, indent=2)
+        except OSError as e:
+            print("Failed to save opened presets:", e)
+
+    def restore_user_presets(self):
+
+        try:
+            with open(self.user_presets_file_path()) as f:
+                paths = json.load(f)
+        except (OSError, ValueError):
+            return
+
+        for entry in paths if isinstance(paths, list) else []:
+            if isinstance(entry, str) and Path(entry).is_file():
+                self.add_user_preset(Path(entry))
+
+        # Rewrite without the ones that are gone.
+        self.save_user_presets()
 
     def on_files_dropped(self, drop_target, value, x, y):
 
