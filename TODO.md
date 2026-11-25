@@ -114,13 +114,22 @@
 
 ### Requested 2026-11-25
 
+- [ ] Sort (or filter) presets by colour? - requested idea, not
+      designed. Melange only learns a preset's colours by playing it, so
+      options: record each preset's sampled palette (the 32x32 frame
+      sampling the mini visualizers use) the first time it plays and
+      offer "sort/filter by colour" over the ones seen so far; or render
+      every preset offscreen once in the background to build the index
+      (slow: ~9,800 presets). A colour filter ("show reddish presets")
+      may be more useful than a sort.
 - [x] **Resolved 2026-11-25:** meant the file picker for a .milk file -
       it already existed (Load Preset..., Ctrl+O, and the Browse tab's
       button) but was hard to find; now also in the main menu and the
       right-click menu. Opened presets now sit under "Your Presets" at
       the top of the Browse tree and are remembered between launches
       (user-presets.json; missing files dropped). Still to do: a way to
-      remove one from Your Presets. The other ideas below stay open.
+      remove one from Your Presets [done 2026-11-25: the − button on its
+      row]. The other ideas below stay open.
       "File open preset selector" - requested, waiting on which of
       these is meant (Load Preset... / Ctrl+O already opens a file
       chooser for single .milk files):
@@ -183,15 +192,18 @@
       - F9 toggles it (GNOME's usual sidebar shortcut, e.g. Files),
         listed in Keyboard Shortcuts;
       - the title-bar toggle stays.
-- [ ] Found while writing the README: data/web/ (app.js, index.html,
+- [x] **Done 2026-11-25: removed.**
+      Found while writing the README: data/web/ (app.js, index.html,
       main.js) is the old Butterchurn page - nothing installs or loads
       it any more, so it can go.
-- [ ] Found while writing the README: the AppStream metainfo
+- [x] **Done 2026-11-25: real summary, description, developer, links, screenshots, release, branding; desktop file categories/keywords too. Validates with appstreamcli.**
+      Found while writing the README: the AppStream metainfo
       (data/com.cameronlp.Melange.metainfo.xml.in) still has template
       placeholders ("Keep the summary shorter...", "Developer name") -
       needs a real summary, description, developer, screenshots
       (docs/screenshots/) and releases before any Flathub submission.
-- [ ] Permissions: --device=all and the two portal talk-names came from
+- [x] **Done 2026-11-25: removed all three (portals are reachable without a talk-name; --device=dri covers the GPU); rendering, audio capture and Now Playing re-tested.**
+      Permissions: --device=all and the two portal talk-names came from
       the initial template with no known use (README says so) - check
       whether Melange still needs them and drop what it doesn't.
 - [x] **Done 2026-11-25** (README rewritten after ~/Projects/twine's, new

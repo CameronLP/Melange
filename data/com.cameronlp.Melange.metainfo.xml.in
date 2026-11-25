@@ -5,67 +5,72 @@
   <project_license>GPL-3.0-or-later</project_license>
 
   <name>Melange</name>
-  <summary>Keep the summary shorter, between 10 and 35 characters</summary>
+  <summary>Visualize your music with MilkDrop</summary>
   <description>
-    <p>No description</p>
+    <p>
+      Melange turns whatever your computer is playing into MilkDrop visuals.
+      It renders natively with projectM, listens to system audio or a
+      microphone, and comes with projectM's curated “Cream of the Crop”
+      collection of about 9,800 presets.
+    </p>
+    <ul>
+      <li>Browse presets by category or search, keep favorites, a queue and playlists</li>
+      <li>Open your own .milk presets, which are remembered between launches</li>
+      <li>Change presets on a timer, on beats or when the song changes</li>
+      <li>A sidebar for presets and preferences, so you see every change as you make it</li>
+      <li>Fullscreen, Hide Controls and Transparency Mode</li>
+      <li>A Now Playing overlay for whatever music player is running</li>
+      <li>Mirror windows for a second screen</li>
+      <li>Eleven mini visualizers: meters, scopes, spectrums, 3D views and more</li>
+    </ul>
   </description>
 
-  <developer id="tld.vendor">
-    <name>Developer name</name>
+  <developer id="com.cameronlp">
+    <name>Cameron</name>
   </developer>
 
-  <!-- Required: Should be a link to the upstream homepage for the component -->
-  <url type="homepage">https://example.org/</url>
-  <!-- Recommended: It is highly recommended for open-source projects to display the source code repository -->
-  <url type="vcs-browser">https://example.org/repository</url>
-  <!-- Should point to the software's bug tracking system, for users to report new bugs -->
-  <url type="bugtracker">https://example.org/issues</url>
-  <!-- Should link a FAQ page for this software, to answer some of the most-asked questions in detail -->
-  <!-- URLs of this type should point to a webpage where users can submit or modify translations of the upstream project -->
-  <url type="translate">https://example.org/translate</url>
-  <url type="faq">https://example.org/faq</url>
-  <!-- Should provide a web link to an online user's reference, a software manual or help page -->
-  <url type="help">https://example.org/help</url>
-  <!-- URLs of this type should point to a webpage showing information on how to donate to the described software project -->
-  <url type="donation">https://example.org/donate</url>
-  <!-- This could for example be an HTTPS URL to an online form or a page describing how to contact the developer -->
-  <url type="contact">https://example.org/contact</url>
-  <!-- URLs of this type should point to a webpage showing information on how to contribute to the described software project -->
-  <url type="contribute">https://example.org/contribute</url>
+  <url type="homepage">https://github.com/CameronLP/Melange</url>
+  <url type="vcs-browser">https://github.com/CameronLP/Melange</url>
+  <url type="bugtracker">https://github.com/CameronLP/Melange/issues</url>
 
   <translation type="gettext">melange</translation>
-  <!-- All graphical applications having a desktop file must have this tag in the MetaInfo.
-     If this is present, appstreamcli compose will pull icons, keywords and categories from the desktop file. -->
   <launchable type="desktop-id">com.cameronlp.Melange.desktop</launchable>
-  <!-- Use the OARS website (https://hughsie.github.io/oars/generate.html) to generate these and make sure to use oars-1.1 -->
   <content_rating type="oars-1.1" />
 
-  <!-- Applications should set a brand color in both light and dark variants like so -->
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <!-- From the app icon's amber. -->
   <branding>
-    <color type="primary" scheme_preference="light">#ff00ff</color>
-    <color type="primary" scheme_preference="dark">#993d3d</color>
+    <color type="primary" scheme_preference="light">#f0d27a</color>
+    <color type="primary" scheme_preference="dark">#7a5a0a</color>
   </branding>
 
   <screenshots>
     <screenshot type="default">
-      <image>https://example.org/example1.png</image>
-      <caption>A caption</caption>
+      <image>https://raw.githubusercontent.com/CameronLP/Melange/main/docs/screenshots/main.png</image>
+      <caption>A MilkDrop preset playing</caption>
     </screenshot>
     <screenshot>
-      <image>https://example.org/example2.png</image>
-      <caption>A caption</caption>
+      <image>https://raw.githubusercontent.com/CameronLP/Melange/main/docs/screenshots/presets.png</image>
+      <caption>Browsing presets in the sidebar</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/CameronLP/Melange/main/docs/screenshots/preferences.png</image>
+      <caption>Preferences beside the visualizer</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/CameronLP/Melange/main/docs/screenshots/mini-visualizers.png</image>
+      <caption>Mini visualizers</caption>
     </screenshot>
   </screenshots>
 
   <releases>
-    <release version="1.0.1" date="2024-01-18">
-      <url type="details">https://example.org/changelog.html#version_1.0.1</url>
+    <release version="0.1.0" date="2026-11-25">
       <description translate="no">
-        <p>Release description</p>
-        <ul>
-          <li>List of changes</li>
-          <li>List of changes</li>
-        </ul>
+        <p>First version: native MilkDrop rendering with projectM, the Cream of the Crop presets, Now Playing, mirror windows and mini visualizers.</p>
       </description>
     </release>
   </releases>
