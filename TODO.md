@@ -168,6 +168,13 @@
       Scope alpha-fade trails), but first find out what broke on the
       real desktop while resizing (needs a description/recording).
 
+- [ ] Mode with the main visualizer turned off, to run only the mini
+      visualizers - requested. Likely: a toggle that pauses projectM
+      (ProjectMView.set_paused) and shows a "Main visualizer off" note,
+      while audio keeps reaching the mini visualizers (that path is
+      separate from projectM). Note "Main Visualizer" colors/background
+      would freeze while it's off.
+
 - [ ] Rewrite of the mini visualizers, or at least some of them?
       aux_window.py is ~7,000 lines with every kind in one class; a
       split into one module/class per kind (shared base for settings,
