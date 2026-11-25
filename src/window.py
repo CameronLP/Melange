@@ -1247,6 +1247,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         more = Gio.Menu()
         more.append("Browse Presets…", "win.browse-presets")
+        more.append("Load Preset…", "win.load-preset")
         more.append("Preferences…", "win.preferences")
         menu.append_section(None, more)
 

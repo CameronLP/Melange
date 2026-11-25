@@ -136,6 +136,11 @@
     <section>
 
       <item>
+        <attribute name="label" translatable="yes">_Load Preset…</attribute>
+        <attribute name="action">win.load-preset</attribute>
+      </item>
+
+      <item>
         <attribute name="label" translatable="yes">_Preferences</attribute>
         <attribute name="action">win.preferences</attribute>
       </item>

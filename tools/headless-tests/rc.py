@@ -38,7 +38,7 @@ def run(win):
         c = c.get_next_sibling()
     check("right-click opens a menu even with controls showing", len(pops) == 1 and pops[0].get_visible())
     got = labels(pops[0].get_menu_model())
-    check("menu items", got == ["Next Preset", "Previous Preset", "Favorite", "Pause", "Lock Preset", "Shuffle", "Hide Controls", "Fullscreen", "Browse Presets…", "Preferences…"], str(got))
+    check("menu items", got == ["Next Preset", "Previous Preset", "Favorite", "Pause", "Lock Preset", "Shuffle", "Hide Controls", "Fullscreen", "Browse Presets…", "Load Preset…", "Preferences…"], str(got))
     pops[0].popdown(); pump(20)
     for _ in range(5):
         win.on_content_right_click(None, 1, 100, 100); pump(); 

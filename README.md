@@ -50,7 +50,7 @@ that react to the same audio.
   option to become opaque while the mouse is over the window.
 - **Right-click menu.** Right-click the visualizer for next/previous preset,
   favorite, pause, lock, shuffle, Hide Controls, fullscreen, the preset
-  browser and Preferences.
+  browser, Load Preset… and Preferences.
 - **Now Playing.** An overlay with the title, artist, album and artwork of
   whatever is playing (any MPRIS player), with placement, size, font, colour,
   auto-hide and periodic-fade options.
