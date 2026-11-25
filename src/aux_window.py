@@ -70,6 +70,7 @@ SAVED_SETTINGS = [
     "terrain_auto_rotate", "terrain_rotate_speed",
     "waterfall_auto_rotate", "waterfall_rotate_speed",
     "view_hint_shown", "vector_auto_gain", "color_sync", "reverse_colors",
+    "scope_line_width", "peak_scale",
 ]
 
 # Starting camera (azimuth, elevation in degrees) of the 3D kinds -
@@ -398,7 +399,7 @@ PALETTE_STOPS = {
 }
 
 PALETTE_LABELS = [
-    ("rainbow", "Rainbow"), ("fire", "Fire"), ("ice", "Ice"),
+    ("main", "Main Visualizer"), ("rainbow", "Rainbow"), ("fire", "Fire"), ("ice", "Ice"),
     ("viridis", "Viridis"), ("magma", "Magma"), ("plasma", "Plasma"),
     ("ocean", "Ocean"), ("sunset", "Sunset"), ("neon", "Neon"),
     ("forest", "Forest"), ("matrix", "Matrix"), ("candy", "Candy"),
@@ -531,10 +532,15 @@ PALETTE_CHOICES = [("gradient", "Custom Gradient")] + PALETTE_LABELS
 # (today's only behavior) against "Rainbow" instead. Backed by one
 # shared self.color_mode field, the same way self.color itself is
 # already shared generic state across these kinds.
-COLOR_MODE_CHOICES = [("solid", "Solid")] + PALETTE_LABELS
+# Main Visualizer as either one solid color (its most prominent) or a
+# gradient (its sampled palette).
+_MAIN_MODE_CHOICES = [("main-solid", "Main Visualizer Color"), ("main", "Main Visualizer Gradient")]
+_OTHER_PALETTES = [choice for choice in PALETTE_LABELS if choice[0] != "main"]
+
+COLOR_MODE_CHOICES = [("solid", "Solid")] + _MAIN_MODE_CHOICES + _OTHER_PALETTES
 
 # VU/Peak meters: Classic is the hardware green/yellow/red zones.
-METER_COLOR_MODE_CHOICES = [("classic", "Classic"), ("solid", "Solid")] + PALETTE_LABELS
+METER_COLOR_MODE_CHOICES = [("classic", "Classic"), ("solid", "Solid")] + _MAIN_MODE_CHOICES + _OTHER_PALETTES
 
 BACKGROUND_CHOICES = [
     ("theme", "Match Theme"), ("black", "Black"),
@@ -844,6 +850,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # masters nor shrinks to a dot on quiet ones.
         self.vector_auto_gain = True
         self.vector_envelope = 0.0
+
+        # Oscilloscope trace thickness (px).
+        self.scope_line_width = 1.2
+
+        # Peak meter: "db" (-60..0 dBFS, the default) or "linear".
+        self.peak_scale = "db"
 
         # Colors: blend toward the main visualizer's (0 = own colors,
         # 1 = fully matched), and flip palettes/gradients end to end.
@@ -3118,6 +3130,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if self.kind in ("xy", "vectorscope"):
             self.row_subtitles["Maintain Aspect Ratio"] = "Keep the plot square, whatever the window's shape"
 
+        if self.kind == "peak":
+            self.add_choice(
+                box, "Scale", "peak_scale", [("db", "Decibels"), ("linear", "Linear")],
+                subtitle="Decibels spread out quiet levels; Linear is raw amplitude"
+            )
+
+        if self.kind == "oscilloscope":
+            self.add_scale(
+                box, "Line Width", "scope_line_width", 0.5, 6.0, 0.1,
+                lambda value: f"{value:.1f}px"
+            )
+
         if self.kind == "vectorscope":
             self.add_switch(
                 box, "Auto Gain", "vector_auto_gain",
@@ -3328,6 +3352,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         sensitive("Background Color", self.background_mode == "custom")
         sensitive("Color", self.color_mode in ("solid", "classic"))
+        sensitive("Match Main Visualizer", not self.color_mode.startswith("main"))
 
         palette = getattr(self, f"{self.kind}_palette", None)
         if palette is not None:
@@ -3337,7 +3362,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         sensitive("Rotate Speed", getattr(self, f"{self.kind}_auto_rotate", True))
         sensitive(
             "Reverse Colors",
-            palette is not None or self.color_mode not in ("solid", "classic")
+            palette is not None or self.color_mode not in ("solid", "classic", "main-solid")
         )
 
     # --- shared settings ---------------------------------------------------
@@ -3718,13 +3743,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             setattr(self, name, value)
 
         self._icon_cache_key = None
-
-        # "Main Visualizer" used to be a palette choice; it's the Match
-        # Main Visualizer slider now.
-        for name in ("color_mode", f"{self.kind}_palette"):
-            if saved.get(name) == "main" and hasattr(self, name):
-                setattr(self, name, self.default_settings.get(name, "rainbow"))
-                self.color_sync = 1.0
 
         # DVD Bounce had its own Background Color before the shared one.
         if self.kind == "dvd" and "background_mode" not in saved and "dvd_bg_color" in saved:
@@ -4425,6 +4443,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def mouse_move(self, controller, x, y):
 
         if self.compact_mode:
+            # No title bar: just bring the move grip back for a while.
+            self.move_handle.add_css_class("revealed")
+            if self.hide_timer:
+                GLib.source_remove(self.hide_timer)
+            self.hide_timer = GLib.timeout_add_seconds(3, self.hide_toolbar)
             return
 
         self.toolbar_view.set_reveal_top_bars(True)
@@ -4438,6 +4461,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def hide_toolbar(self):
 
         self.hide_timer = None
+
+        handle = getattr(self, "move_handle", None)
+
+        # Not while the pointer is on the grip itself.
+        if handle is not None and self.compact_mode:
+            if handle.get_state_flags() & Gtk.StateFlags.PRELIGHT:
+                self.hide_timer = GLib.timeout_add_seconds(1, self.hide_toolbar)
+                return False
+            handle.remove_css_class("revealed")
 
         if self.mouse_over_toolbar:
             return False
@@ -4477,6 +4509,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.drawing_area.queue_draw()
 
     def on_draw(self, area, cr, width, height):
+
+        if self.color_mode == "main-solid":
+            saved_mode, saved_color = self.color_mode, self.color
+            self.color_mode = "solid"
+            self.color = Gdk.RGBA(
+                red=MAIN_DOMINANT[0][0], green=MAIN_DOMINANT[0][1], blue=MAIN_DOMINANT[0][2], alpha=1.0
+            )
+            try:
+                self.on_draw(area, cr, width, height)
+            finally:
+                self.color_mode, self.color = saved_mode, saved_color
+            return
 
         if self.color_sync <= 0 and not self.reverse_colors:
             self.color_signature = None
@@ -4701,7 +4745,26 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 self.vu_right, self.vu_hold_right, self.vu_hold_right_time, now
             )
 
-        margin = 12
+        if self.vu_style == "needle":
+            if height > width * 1.3:
+                self.draw_meter_pair_stacked(
+                    cr, width, height,
+                    lambda c, x, y, w, h, level, hold: self.draw_vu_needle(c, x, y, w, h, level),
+                    self.vu_left, self.vu_right, None, None
+                )
+                return
+        elif width > height * 1.3:
+            draw = self.draw_vu_led if self.vu_style == "led" else self.draw_vu_bar
+            self.draw_meter_pair_horizontal(
+                cr, width, height,
+                lambda c, x, y, w, h, level, hold: draw(c, x, y, w, h, level, hold),
+                self.vu_left, self.vu_right,
+                self.vu_hold_left if self.vu_peak_hold else None,
+                self.vu_hold_right if self.vu_peak_hold else None,
+            )
+            return
+
+        margin = 12 if width >= 140 else 6
         label_space = 16 if self.show_labels else 0
         cell_width = (width - margin * 3) / 2
         cell_height = height - margin * 2 - label_space
@@ -4788,6 +4851,44 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             gradient.add_color_stop_rgb(t, *palette_color(self.color_mode, t))
 
         cr.set_source(gradient)
+
+    def draw_meter_pair_horizontal(self, cr, width, height, draw, left, right, hold_left, hold_right):
+        """Wide windows: L above R, filling left -> right. The vertical
+        meter drawing is reused, turned 90 degrees."""
+
+        margin = 8 if height >= 60 else 4
+        label_width = 14 if self.show_labels else 0
+        length = width - margin * 2 - label_width
+        thickness = (height - margin * 3) / 2
+
+        for row, (level, hold, name) in enumerate(((left, hold_left, "L"), (right, hold_right, "R"))):
+            x0 = margin + label_width
+            y0 = margin + row * (thickness + margin)
+
+            cr.save()
+            # Local bottom -> top of a vertical meter becomes left -> right.
+            cr.translate(x0 + length, y0)
+            cr.rotate(math.pi / 2)
+            draw(cr, 0, 0, thickness, length, level, hold)
+            cr.restore()
+
+            if self.show_labels:
+                self.draw_text_label(cr, margin - 1, y0 + thickness / 2 + 4, name)
+
+    def draw_meter_pair_stacked(self, cr, width, height, draw, left, right, hold_left, hold_right):
+        """Tall windows (VU needles): L above R, each full width."""
+
+        margin = 8
+        label_space = 14 if self.show_labels else 0
+        cell_height = (height - margin * 3 - label_space * 2) / 2
+        cell_width = width - margin * 2
+
+        for row, (level, hold, name) in enumerate(((left, hold_left, "L"), (right, hold_right, "R"))):
+            y0 = margin + row * (cell_height + label_space + margin)
+            draw(cr, margin, y0, cell_width, cell_height, level, hold)
+
+            if self.show_labels:
+                self.draw_text_label(cr, width / 2 - 3, y0 + cell_height + label_space - 2, name)
 
     def draw_vu_bar(self, cr, x, y, bar_width, bar_height, level, hold_level=None):
 
@@ -4937,6 +5038,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def db_frac(self, level):
 
+        # Peak meter Scale: Linear shows the raw amplitude (0..1).
+        if self.peak_scale == "linear":
+            return max(0.0, min(1.0, level))
+
         # Linear 0..1 amplitude -> a 0..1 position on a -60..0 dBFS
         # scale. Peak meters are traditionally read in dB, not linear
         # amplitude - most of a track's real dynamic range lives in
@@ -4993,12 +5098,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_peak_scale(self, cr, x, y, h):
 
-        for db, label in (
-            (0, "0"), (-6, "-6"), (-12, "-12"),
-            (-24, "-24"), (-40, "-40"), (-60, "-60")
-        ):
-            frac = (db + 60) / 60
+        last_y = -1e9
+
+        if self.peak_scale == "linear":
+            ticks = [(1.0, "1.0"), (0.75, ".75"), (0.5, ".5"), (0.25, ".25"), (0.0, "0")]
+        else:
+            ticks = [((db + 60) / 60, str(db)) for db in (0, -6, -12, -24, -40, -60)]
+
+        for frac, label in ticks:
             tick_y = y + h * (1.0 - frac)
+
+            # Short meters: drop ticks that would overlap.
+            if abs(tick_y - last_y) < 13:
+                continue
+
+            last_y = tick_y
             self.draw_text_label(cr, x, tick_y + 3, label)
 
     def draw_peak_meter(self, cr, width, height):
@@ -5025,7 +5139,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.peak_right, self.peak_hold_right, self.peak_hold_right_time, now
         )
 
-        margin = 12
+        if width > height * 1.3:
+            self.draw_meter_pair_horizontal(
+                cr, width, height,
+                lambda c, x, y, w, h, level, hold: self.draw_peak_bar(c, x, y, w, h, level, hold),
+                self.db_frac(self.peak_left), self.db_frac(self.peak_right),
+                self.db_frac(self.peak_hold_left), self.db_frac(self.peak_hold_right),
+            )
+            return
+
+        margin = 12 if width >= 140 else 6
         scale_width = 26 if self.show_labels else 0
         label_space = 16 if self.show_labels else 0
 
@@ -5285,7 +5408,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if count < 2:
             return
 
-        cr.set_line_width(1.2)
+        cr.set_line_width(self.scope_line_width)
 
         if self.color_mode not in ("solid", "classic"):
 
@@ -5593,6 +5716,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # resize, which is what actually reads as "the icon pulses
         # from its center" - a purely cosmetic correction, doesn't
         # change anything about how the box moves or bounces.
+        # Never bigger than half the window, so it can still bounce.
+        new_size = min(new_size, self.dvd_max_size(width, height))
+
         size_delta = new_size - self.dvd_size
         self.dvd_x -= size_delta / 2
         self.dvd_y -= size_delta / 2
@@ -5922,6 +6048,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cr.restore()
 
+    def dvd_max_size(self, width, height):
+        """dvd_size is the logo's width (DVD), height (Tux) or side."""
+
+        if self.icon_name == DVD_TEXT_ICON:
+            return max(8.0, min(width * 0.5, height * 0.5 * DVD_LOGO_ASPECT))
+        if self.icon_name == TUX_ICON:
+            return max(8.0, min(height * 0.5, width * 0.5 / TUX_ASPECT))
+        return max(8.0, min(width, height) * 0.5)
+
     def draw_dvd_bounce(self, cr, width, height):
 
         self.paint_background(cr)
@@ -6024,13 +6159,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                         )
                     )
 
+    def spectrum_bar_layout(self, width, bar_count):
+        """(margin, gap, bar_width) that always fit the width - the gap
+        shrinks with the space per bar instead of a fixed 3px."""
+
+        margin = 8 if width >= 160 else 3
+        area = max(1.0, width - margin * 2)
+        gap = min(3.0, area * 0.25 / max(1, bar_count))
+        bar_width = (area - gap * (bar_count - 1)) / max(1, bar_count)
+
+        return margin, gap, bar_width
+
     def render_spectrum_bars(self, cr, width, height):
 
         bar_count = self.num_bars
-        margin = 8
-        gap = 3
-        bar_area_width = width - margin * 2
-        bar_width = max(1.0, (bar_area_width - gap * (bar_count - 1)) / bar_count)
+        margin, gap, bar_width = self.spectrum_bar_layout(width, bar_count)
         bar_height = height - margin * 2
 
         rainbow = self.color_mode not in ("solid", "classic")
@@ -6080,7 +6223,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # genuinely smooth rather than just "the same bars with their
         # corners connected."
         bar_count = self.num_bars
-        margin = 8
+        margin = self.spectrum_bar_layout(width, bar_count)[0]
         inner_width = width - margin * 2
         bar_height = height - margin * 2
         baseline_y = margin + bar_height
@@ -6192,6 +6335,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return (
             self.num_bars, self.spectrogram_palette,
             self.color_signature,
+            MAIN_PALETTE_VERSION[0] if self.spectrogram_palette == "main" else 0,
             self.spectrogram_color_ceiling,
             (lo.red, lo.green, lo.blue), (hi.red, hi.green, hi.blue),
         )
@@ -7289,29 +7433,48 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         elif self.kind == "spectrogram":
             self.draw_spectrogram_labels(cr, width, height)
 
+    def label_width(self, cr, text):
+
+        cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(10)
+
+        return cr.text_extents(text).width
+
     def draw_spectrum_labels(self, cr, width, height):
 
         bar_count = self.num_bars
-        margin = 8
-        gap = 3
-        bar_area_width = width - margin * 2
-        bar_width = max(1.0, (bar_area_width - gap * (bar_count - 1)) / bar_count)
+        margin, gap, bar_width = self.spectrum_bar_layout(width, bar_count)
+        smooth = self.spectrum_style == "smooth"
+        inner_width = width - margin * 2
+        last_end = -1e9
 
         for freq, label in ((100, "100Hz"), (1000, "1kHz"), (10000, "10kHz")):
 
             index = self.bar_index_for_frequency(freq, bar_count)
 
-
             if index is None:
-
                 continue
-            x = margin + index * (bar_width + gap)
 
+            if smooth and bar_count > 1:
+                x = margin + inner_width * index / (bar_count - 1)
+            else:
+                x = margin + index * (bar_width + gap)
+
+            text_width = self.label_width(cr, label)
+            x = max(2, min(x, width - text_width - 3))
+
+            # Skip a label that would collide with the previous one.
+            if x < last_end + 6:
+                continue
+
+            last_end = x + text_width
             self.draw_text_label(cr, x, height - 4, label)
 
     def draw_spectrogram_labels(self, cr, width, height):
 
         bin_count = self.num_bars
+        last_end = -1e9
+        last_y = 1e9
 
         if self.spectrogram_vertical:
 
@@ -7327,7 +7490,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     continue
                 x = index * column_width
 
-                self.draw_text_label(cr, x + 2, 14, label)
+                x = min(x + 2, width - self.label_width(cr, label) - 3)
+                if x < last_end + 6:
+                    continue
+                last_end = x + self.label_width(cr, label)
+                self.draw_text_label(cr, x, 14, label)
 
         else:
 
@@ -7343,7 +7510,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     continue
                 y = height - (index + 1) * row_height
 
-                self.draw_text_label(cr, 4, y + row_height - 3, label)
+                y = max(14, min(y + row_height - 3, height - 3))
+                if y > last_y - 14:
+                    continue
+                last_y = y
+                self.draw_text_label(cr, 4, y, label)
 
     def draw_text_label(self, cr, x, y, text):
 

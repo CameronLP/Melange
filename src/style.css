@@ -208,6 +208,18 @@ window.transparency-active,
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
 }
 
+/* Fades with the mouse, like the title bar does outside Compact Mode
+   (the grip still works while invisible). */
+.compact-grip {
+    opacity: 0;
+    transition: opacity 250ms ease;
+}
+
+.compact-handle.revealed .compact-grip,
+.compact-handle:hover .compact-grip {
+    opacity: 1;
+}
+
 .compact-handle:hover .compact-grip {
     background-color: rgba(255, 255, 255, 0.85);
 }
