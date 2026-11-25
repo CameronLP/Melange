@@ -1493,6 +1493,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         # Size changes are saved too (not while maximized/fullscreen).
         self.connect("notify::default-width", self.schedule_save)
+
+        # X-Y / Vector Scope: Maintain Aspect Ratio also keeps the
+        # window square - snapped once a resize settles, since GNOME
+        # doesn't let apps constrain the shape while it's being dragged.
+        self.square_timer = None
+        self.last_square_side = None
+        if self.kind in ("xy", "vectorscope"):
+            self.connect("notify::default-width", self.schedule_square_snap)
+            self.connect("notify::default-height", self.schedule_square_snap)
+            self.connect("notify::fullscreened", self.schedule_square_snap)
         self.connect("notify::default-height", self.schedule_save)
         self.settings_button.bind_property(
             "active", self.settings_split, "show-sidebar",
@@ -3127,7 +3137,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.add_scale(box, "Highest Frequency", "freq_max", 1000, SAMPLE_RATE / 2, 50, hertz, self.frequency_range_changed)
 
         if self.kind in ("xy", "vectorscope"):
-            self.row_subtitles["Maintain Aspect Ratio"] = "Keep the plot square, whatever the window's shape"
+            self.row_subtitles["Maintain Aspect Ratio"] = "Keep the plot and the window square"
 
         if self.kind == "peak":
             self.add_choice(
@@ -4069,6 +4079,48 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.maintain_aspect_ratio = switch.get_active()
         self.drawing_area.queue_draw()
+        self.schedule_square_snap()
+
+    SQUARE_SNAP_DELAY_MS = 400
+
+    def schedule_square_snap(self, *args):
+
+        if self.kind not in ("xy", "vectorscope"):
+            return
+
+        if self.square_timer is not None:
+            GLib.source_remove(self.square_timer)
+
+        self.square_timer = GLib.timeout_add(self.SQUARE_SNAP_DELAY_MS, self.snap_square)
+
+    def snap_square(self):
+
+        self.square_timer = None
+
+        if not self.maintain_aspect_ratio or self.is_maximized() or self.is_fullscreen():
+            return False
+
+        surface = self.get_surface()
+        if surface is not None and isinstance(surface, Gdk.Toplevel):
+            tiled = Gdk.ToplevelState.TILED
+            if surface.get_state() & tiled:
+                return False
+
+        width, height = self.get_default_size()
+
+        if width <= 0 or height <= 0 or abs(width - height) <= 2:
+            self.last_square_side = max(width, height)
+            return False
+
+        # Follow whichever side the user changed most.
+        last = self.last_square_side or min(width, height)
+        side = width if abs(width - last) >= abs(height - last) else height
+        side = max(side, AUX_MIN_WIDTH, AUX_MIN_HEIGHT)
+
+        self.last_square_side = side
+        self.set_default_size(side, side)
+
+        return False
 
     def format_scope_zoom(self, value):
 
@@ -7679,6 +7731,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return False
 
     def on_close_request(self, window):
+
+        if getattr(self, "square_timer", None) is not None:
+            GLib.source_remove(self.square_timer)
+            self.square_timer = None
 
         if self.settings_window is not None:
             settings_window, self.settings_window = self.settings_window, None
