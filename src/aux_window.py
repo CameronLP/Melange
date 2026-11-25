@@ -3321,6 +3321,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if action is not None and action.get_state().get_boolean() != self.compact_mode:
             action.set_state(GLib.Variant("b", self.compact_mode))
 
+        handle = getattr(self, "move_handle", None)
+        if handle is not None:
+            handle.set_visible(self.compact_mode and not self.is_fullscreen())
+
         if self.compact_mode:
             if self.hide_timer:
                 GLib.source_remove(self.hide_timer)
@@ -3351,6 +3355,20 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     # --- 3D views ------------------------------------------------------------
 
     def setup_extra_controls(self):
+
+        # Compact Mode has no title bar, and the 3D kinds use left-drag
+        # to rotate - so a grip along the top edge moves the window
+        # (Gtk.WindowHandle: the same native move as a title bar).
+        self.move_handle = Gtk.WindowHandle(valign=Gtk.Align.START)
+        self.move_handle.add_css_class("compact-handle")
+        self.move_handle.set_size_request(-1, 22)
+        self.move_handle.set_tooltip_text("Drag to move")
+        self.move_handle.set_cursor_from_name("grab")
+        grip = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        grip.add_css_class("compact-grip")
+        self.move_handle.set_child(grip)
+        self.toolbar_view.get_content().add_overlay(self.move_handle)
+        self.connect("notify::fullscreened", lambda *args: self.apply_compact_mode())
 
         self.background_changed()
         self.apply_compact_mode()
