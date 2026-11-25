@@ -158,6 +158,16 @@
       the main visualizer's palette (apply_effective_colors); a direct
       per-band "Main Visualizer" choice (like Peak Hold Color's) isn't
       there.
+- [ ] Mini visualizer transparency level slider - requested. This
+      existed briefly as "Background Opacity" (commit 49f744b, removed
+      in 7b586c6 along with Frosted/Glass Finish after a reported
+      problem "especially when resizing" that couldn't be reproduced
+      headlessly - window captures kept the right alpha at every
+      size). Bringing it back: reuse that code (paint_background with
+      alpha, window "transparency-active" class below 100%, Vector
+      Scope alpha-fade trails), but first find out what broke on the
+      real desktop while resizing (needs a description/recording).
+
 - [ ] Rewrite of the mini visualizers, or at least some of them?
       aux_window.py is ~7,000 lines with every kind in one class; a
       split into one module/class per kind (shared base for settings,
