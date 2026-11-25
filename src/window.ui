@@ -74,6 +74,10 @@
     <section>
 
       <item>
+        <attribute name="label" translatable="yes">_Pause</attribute>
+        <attribute name="action">win.pause</attribute>
+      </item>
+      <item>
         <attribute name="label" translatable="yes">Lock Preset</attribute>
         <attribute name="action">win.lock-preset</attribute>
       </item>

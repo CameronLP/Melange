@@ -323,6 +323,13 @@ class ProjectMView(Gtk.GLArea):
         self.last_frame_time = None
         self.offscreen = None            # (framebuffer, texture, width, height)
 
+        # Pause: the last frame is kept in `frozen` and redrawn as-is
+        # (GTK can ask for a redraw at any time, e.g. when the header
+        # hides); projectM does no work and audio is dropped.
+        self.paused = False
+        self.freeze_pending = False
+        self.frozen = None               # (framebuffer, texture, width, height)
+
         self.set_required_version(3, 3)
         self.set_hexpand(True)
         self.set_vexpand(True)
@@ -380,6 +387,7 @@ class ProjectMView(Gtk.GLArea):
 
         self.make_current()
         self.free_offscreen()
+        self.frozen = self.free_buffer(self.frozen)
 
         if self.handle:
             _lib.projectm_destroy(self.handle)
@@ -398,6 +406,9 @@ class ProjectMView(Gtk.GLArea):
         )
 
     def on_tick(self, widget, frame_clock):
+
+        if self.paused and not self.freeze_pending:
+            return GLib.SOURCE_CONTINUE
 
         # Frame Rate cap: skip frames until enough time has passed (a
         # little early is fine - frames only come at the display rate).
@@ -427,6 +438,10 @@ class ProjectMView(Gtk.GLArea):
         width, height = self.get_width() * scale, self.get_height() * scale
 
         if width <= 0 or height <= 0:
+            return True
+
+        if self.paused and self.frozen is not None and not self.freeze_pending:
+            self.draw_frozen_frame(width, height)
             return True
 
         # The area is still 0x0 at realize, so presets are only loaded
@@ -487,7 +502,58 @@ class ProjectMView(Gtk.GLArea):
         _gl.glClear(GL_COLOR_BUFFER_BIT)
         _gl.glColorMask(1, 1, 1, 1)
 
+        if self.freeze_pending:
+            self.freeze_pending = False
+            self.store_frozen_frame(framebuffer.value, width, height)
+
         return True
+
+    # --- pause ----------------------------------------------------------
+
+    def set_paused(self, paused):
+
+        paused = bool(paused)
+
+        if paused == self.paused:
+            return
+
+        self.paused = paused
+        self.pending_audio.clear()
+
+        if paused:
+            # Render one more frame normally and keep it.
+            self.freeze_pending = True
+        else:
+            self.freeze_pending = False
+            self.last_frame_time = None
+
+        self.queue_render()
+
+    def store_frozen_frame(self, framebuffer, width, height):
+
+        self.frozen = self.free_buffer(self.frozen)
+        self.frozen = self.make_buffer(width, height)
+
+        _gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer)
+        _gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, self.frozen[0])
+        _gl.glBlitFramebuffer(
+            0, 0, width, height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_LINEAR
+        )
+        _gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer)
+
+    def draw_frozen_frame(self, width, height):
+
+        target = ctypes.c_int(0)
+        _gl.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, ctypes.byref(target))
+
+        framebuffer, _, frozen_width, frozen_height = self.frozen
+        _gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer)
+        _gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, target.value)
+        _gl.glBlitFramebuffer(
+            0, 0, frozen_width, frozen_height, 0, 0, width, height,
+            GL_COLOR_BUFFER_BIT, GL_LINEAR
+        )
+        _gl.glBindFramebuffer(GL_FRAMEBUFFER, target.value)
 
     def render_projectm_into(self, framebuffer):
 
@@ -506,6 +572,12 @@ class ProjectMView(Gtk.GLArea):
             return self.offscreen[0]
 
         self.free_offscreen()
+        self.offscreen = self.make_buffer(width, height)
+
+        return self.offscreen[0]
+
+    def make_buffer(self, width, height):
+        """A framebuffer with an RGBA texture: (framebuffer, texture, w, h)."""
 
         texture = ctypes.c_uint(0)
         _gl.glGenTextures(1, ctypes.byref(texture))
@@ -525,19 +597,20 @@ class ProjectMView(Gtk.GLArea):
             GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture.value, 0
         )
 
-        self.offscreen = (framebuffer.value, texture.value, width, height)
-
-        return framebuffer.value
+        return (framebuffer.value, texture.value, width, height)
 
     def free_offscreen(self):
 
-        if self.offscreen is None:
-            return
+        self.offscreen = self.free_buffer(self.offscreen)
 
-        framebuffer, texture, _, _ = self.offscreen
-        _gl.glDeleteFramebuffers(1, ctypes.byref(ctypes.c_uint(framebuffer)))
-        _gl.glDeleteTextures(1, ctypes.byref(ctypes.c_uint(texture)))
-        self.offscreen = None
+    def free_buffer(self, buffer):
+
+        if buffer is not None:
+            framebuffer, texture, _, _ = buffer
+            _gl.glDeleteFramebuffers(1, ctypes.byref(ctypes.c_uint(framebuffer)))
+            _gl.glDeleteTextures(1, ctypes.byref(ctypes.c_uint(texture)))
+
+        return None
 
     # --- settings -------------------------------------------------------
 
@@ -630,6 +703,9 @@ class ProjectMView(Gtk.GLArea):
     # --- audio ----------------------------------------------------------
 
     def push_audio(self, data):
+
+        if self.paused:
+            return
 
         # Interleaved S16LE stereo, called on the main thread
         # (window.py flush_pending_audio); consumed on the next frame.

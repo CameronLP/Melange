@@ -165,6 +165,14 @@ window.transparency-active,
 /* Now Playing overlay (window.py, now_playing.py) - same translucent-
    black floating-card look as .nav-arrow-button, just a rectangle
    instead of a circle since it holds artwork + two lines of text. */
+/* "Paused" badge over the visualizer (window.py pause_changed). */
+.paused-badge {
+    background-color: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    border-radius: 9999px;
+    padding: 6px 14px;
+}
+
 .now-playing-card {
     background-color: rgba(0, 0, 0, 0.5);
     border-radius: 12px;
