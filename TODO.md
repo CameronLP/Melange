@@ -153,7 +153,8 @@
       persist, colors, bg, pan, sw, toggle, osc, peak, square, fit,
       vstest, rev2. Worth turning into a checked-in tests/ suite in
       step 2 so they survive the session.
-- [ ] Main window: quicker ways to close the sidebar - requested, then
+- [x] **Done 2026-11-25** (Esc and F9).
+      Main window: quicker ways to close the sidebar - requested, then
       decided (2026-11-25) against closing it on a click in the
       visualizer: in wide windows the sidebar is pinned beside the
       visualizer on purpose (adjust while watching), and a stray click

@@ -988,6 +988,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         # Pause (P): freeze the visualizer on its current frame - no
         # rendering, audio ignored, no preset changes. Next/previous
         # resume it.
+        # F9 (GNOME's usual sidebar shortcut): show/hide the sidebar.
+        toggle_sidebar = Gio.SimpleAction.new("toggle-sidebar", None)
+        toggle_sidebar.connect(
+            "activate",
+            lambda *args: self.sidebar_split.set_show_sidebar(
+                not self.sidebar_split.get_show_sidebar()
+            )
+        )
+        self.add_action(toggle_sidebar)
+
         # Main Visualizer on/off: off hides and pauses projectM (no
         # rendering, no audio into it, no preset changes) while audio
         # still reaches the mini visualizers.
@@ -2679,6 +2689,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.close_mirrors_row.set_sensitive(bool(self.mirror_windows))
 
     def on_key_pressed(self, controller, keyval, keycode, state):
+
+        # Esc closes the sidebar first (then leaves fullscreen).
+        if keyval == Gdk.KEY_Escape and self.sidebar_split.get_show_sidebar():
+            self.sidebar_split.set_show_sidebar(False)
+            return True
 
         if keyval == Gdk.KEY_Escape and self.is_fullscreen():
             self.unfullscreen()

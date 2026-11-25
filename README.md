@@ -188,7 +188,8 @@ them as a profile to keep them.
 | `F` | Favorite the current preset |
 | `Q` | Show the queue |
 | `F11` | Fullscreen |
-| `Esc` | Leave fullscreen |
+| `F9` | Show/hide the sidebar |
+| `Esc` | Close the sidebar, or leave fullscreen |
 | `Ctrl+O` | Load a preset file |
 | `Ctrl+F` | Browse presets |
 | `Ctrl+Shift+F` | Show favorites |
