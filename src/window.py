@@ -2500,6 +2500,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         if width > 0 and (x < width * 0.15 or x > width * 0.85):
             return
 
+        # Not over a button (Turn On on the Main Visualizer Off page,
+        # the floating buttons...): this runs before the button sees the
+        # press, so a window move here used to swallow its click.
+        target = widget.pick(x, y, Gtk.PickFlags.DEFAULT)
+        if target is not None and (
+            isinstance(target, Gtk.Button) or target.get_ancestor(Gtk.Button) is not None
+        ):
+            return
+
         self.get_surface().begin_move(
             gesture.get_current_event_device(),
             gesture.get_current_button(),
