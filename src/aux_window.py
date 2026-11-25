@@ -30,6 +30,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 gi.require_version("GdkPixbuf", "2.0")
 
+from melange.cursor_hider import FullscreenCursorHider
 from gi.repository import Gtk, Adw, Gdk, Gio, GLib, GdkPixbuf
 import cairo
 
@@ -812,6 +813,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.add_action(fullscreen_action)
 
         self.connect("notify::fullscreened", self.update_fullscreen_button_icon)
+
+        # Pointer disappears after a moment's stillness in fullscreen.
+        self.cursor_hider = FullscreenCursorHider(
+            self,
+            may_hide=lambda: not (
+                getattr(self, "settings_popover", None) is not None
+                and self.settings_popover.get_visible()
+            )
+        )
 
         escape_controller = Gtk.EventControllerKey()
         escape_controller.connect("key-pressed", self.on_key_pressed)
@@ -6174,6 +6184,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return False
 
     def on_close_request(self, window):
+
+        self.cursor_hider.stop()
 
         if self.hide_timer:
             GLib.source_remove(self.hide_timer)

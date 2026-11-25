@@ -2594,7 +2594,7 @@
 - [ ] Optional "now playing" overlay in the corner of the canvas
 - [ ] Frequency-range control for what feeds the visualizer (so presets that only react to bass, etc. can be tuned)
 - [ ] Logo + symbolic icon polish - the scalable app icon was replaced (Bottles-based, data/icons/hicolor/scalable/apps), but the symbolic icon at data/icons/hicolor/symbolic/apps/com.cameronlp.Melange-symbolic.svg is still the original template placeholder and doesn't match
-- [ ] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
+- [x] Cursor auto-hide in fullscreen - WebKit manages its own cursor over page content and overrides host-level GtkWidget.set_cursor(), so this needs to be driven from inside the page (JS toggling a `cursor: none` CSS class) instead
       Update 2026-11-24: WebKit is gone - the visualizer is a Gtk.GLArea
       now, so GtkWidget.set_cursor should simply work.
       Requested again ("make mouse disappear in fullscreen") - so it
@@ -2610,6 +2610,17 @@
       cursor after a short idle time in fullscreen independently of the
       header (own timer, any mouse movement shows it again), in the main
       window, mirrors and mini visualizers alike.
+      Done 2026-11-25: new src/cursor_hider.py (FullscreenCursorHider),
+      used by the main window, mirrors and mini visualizers: in
+      fullscreen the pointer hides after 2 s without real movement,
+      independent of the header's Hide Delay, and only over the
+      visualizer (not the sidebar or an open menu/settings popover).
+      Likely cause of it not working before: every motion event un-hid
+      the pointer before the movement check, and GTK sends synthetic
+      motion events when the layout under the pointer changes - e.g. the
+      header hiding - so hiding undid itself. The hider is now the only
+      code that sets the pointer, and ignores movement under 3 px.
+      Verified headless (13/13); confirm on a real desktop.
 - [ ] Reduce memory usage further - real measurement (not guessing) already found and fixed several things: eager loading of the whole baron preset pack at startup, GC churn in the audio hot path, and some unused WebKit persistence/features (see Done). What's left is WebKitGTK's own multi-process baseline itself (UI + network + web-content processes, each a full engine instance) - measured at roughly 500-650MB total for a single window even after the above fixes. Trimming that further means either the WebSocket audio-bridge change above, or the native-rendering direction below; see that for the real lever.
       Update 2026-11-24: with WebKit removed, Melange measured ~195 MB
       RSS in a single process (was ~700 MB across Python + two WebKit

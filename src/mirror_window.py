@@ -22,6 +22,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
+from melange.cursor_hider import FullscreenCursorHider
 from gi.repository import Gtk, Adw, Gdk, Gio, GLib
 
 
@@ -295,6 +296,11 @@ class MirrorWindow(Adw.ApplicationWindow):
             lambda *args: self.refresh_paintable()
         )
 
+        # Pointer disappears after a moment's stillness in fullscreen.
+        self.cursor_hider = FullscreenCursorHider(
+            self, may_hide=lambda: not self.menu_button.get_active()
+        )
+
         self.connect(
             "close-request",
             self.on_close_request
@@ -345,7 +351,6 @@ class MirrorWindow(Adw.ApplicationWindow):
             self.hide_timer = None
 
         self.toolbar_view.set_reveal_top_bars(True)
-        self.set_cursor(None)
 
     def toolbar_leave(self, controller):
 
@@ -357,8 +362,6 @@ class MirrorWindow(Adw.ApplicationWindow):
         )
 
     def mouse_move(self, controller, x, y):
-
-        self.set_cursor(None)
         self.toolbar_view.set_reveal_top_bars(True)
 
         if self.hide_timer:
@@ -378,8 +381,6 @@ class MirrorWindow(Adw.ApplicationWindow):
 
         self.toolbar_view.set_reveal_top_bars(False)
 
-        if self.is_fullscreen():
-            self.set_cursor(Gdk.Cursor.new_from_name("none"))
 
         return False
 
@@ -484,6 +485,8 @@ class MirrorWindow(Adw.ApplicationWindow):
         return False
 
     def on_close_request(self, window):
+
+        self.cursor_hider.stop()
 
         # Pending timers would otherwise fire on (and keep alive) the
         # closed window - same cleanup aux_window.py already does.

@@ -37,6 +37,7 @@ from melange.aux_window import AuxVisualizerWindow
 from melange.now_playing import NowPlayingWatcher
 from melange import projectm_view
 from melange.preset_manager import PresetManager
+from melange.cursor_hider import FullscreenCursorHider
 
 # key -> (halign, valign) - "top-*"/"bottom-*" pick valign, the second
 # word picks halign, same convention as the label text.
@@ -979,6 +980,13 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.build_preset_browser()
         self.build_sidebar()
 
+        # Pointer disappears after a moment's stillness in fullscreen -
+        # only over the visualizer, not while using the sidebar or a menu.
+        self.cursor_hider = FullscreenCursorHider(
+            self,
+            may_hide=lambda: self.pointer_over_visualizer and not self.menu_button.get_active()
+        )
+
         self.menu_button.get_popover().add_child(
             self.build_theme_selector(),
             "theme-selector"
@@ -1012,7 +1020,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.toolbar_view.set_reveal_top_bars(True)
         self.set_nav_arrows_visible(True)
-        self.set_cursor(None)
 
 
 
@@ -1036,8 +1043,6 @@ class MelangeWindow(Adw.ApplicationWindow):
     MOVEMENT_THRESHOLD_PX = 1
 
     def mouse_move(self, controller, x, y):
-
-        self.set_cursor(None)
 
         if self.last_mouse_pos is not None:
 
@@ -2222,17 +2227,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.toolbar_view.set_reveal_top_bars(False)
         self.set_nav_arrows_visible(False)
 
-        # Only in fullscreen - windowed mode still needs a visible
-        # cursor for ordinary desktop interaction (moving/resizing,
-        # other windows, ...).
-        if self.is_fullscreen():
-            self.set_cursor(Gdk.Cursor.new_from_name("none"))
-
         return False
 
     def set_nav_arrows_visible(self, visible):
 
         css_class = "nav-arrow-visible"
+
+        # Back/forward can't do anything while the preset is locked, so
+        # they stay hidden then (the favorite button doesn't).
+        for arrow in (self.prev_arrow_button, self.next_arrow_button):
+            arrow.set_visible(not self.preset_locked)
 
         buttons = (
             self.prev_arrow_button,
@@ -2527,6 +2531,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.cycling_group.set_sensitive(not self.preset_locked)
 
         self.presets.set_cycle_paused(self.preset_locked)
+        self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
 
         self.show_toast(
             "Preset locked" if self.preset_locked else "Preset unlocked"
