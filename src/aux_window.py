@@ -69,7 +69,7 @@ SAVED_SETTINGS = [
     "compact_mode", "freq_min", "freq_max", "xy_goniometer",
     "terrain_auto_rotate", "terrain_rotate_speed",
     "waterfall_auto_rotate", "waterfall_rotate_speed",
-    "view_hint_shown", "vector_auto_gain",
+    "view_hint_shown", "vector_auto_gain", "color_sync", "reverse_colors",
 ]
 
 # Starting camera (azimuth, elevation in degrees) of the 3D kinds -
@@ -398,7 +398,7 @@ PALETTE_STOPS = {
 }
 
 PALETTE_LABELS = [
-    ("main", "Main Visualizer"), ("rainbow", "Rainbow"), ("fire", "Fire"), ("ice", "Ice"),
+    ("rainbow", "Rainbow"), ("fire", "Fire"), ("ice", "Ice"),
     ("viridis", "Viridis"), ("magma", "Magma"), ("plasma", "Plasma"),
     ("ocean", "Ocean"), ("sunset", "Sunset"), ("neon", "Neon"),
     ("forest", "Forest"), ("matrix", "Matrix"), ("candy", "Candy"),
@@ -413,6 +413,10 @@ _PALETTE_LUTS = {}
 # open). Neutral until the first sample arrives.
 PALETTE_STOPS["main"] = [(0.08, 0.08, 0.12), (0.25, 0.25, 0.35), (0.5, 0.5, 0.65), (0.75, 0.75, 0.88), (1.0, 1.0, 1.0)]
 MAIN_PALETTE_VERSION = [0]
+
+# The main frame's most prominent color (vivid and bright, weighted by
+# how much of the frame it covers) - what Solid moves toward.
+MAIN_DOMINANT = [(0.75, 0.75, 0.88)]
 
 
 def update_main_visualizer_palette(pixels):
@@ -446,6 +450,26 @@ def update_main_visualizer_palette(pixels):
         sat = min(1.0, sat * 1.3 + 0.05)
         val = max(val, 0.18 + 0.2 * k)
         stops.append(colorsys.hsv_to_rgb(h, sat, min(1.0, val)))
+
+    # Dominant: hue buckets weighted by saturation x brightness.
+    buckets = {}
+    for c in lit:
+        h, sat, val = colorsys.rgb_to_hsv(*c)
+        weight = sat * val
+        key = int(h * 12) % 12
+        total, rs, gs, bs = buckets.get(key, (0.0, 0.0, 0.0, 0.0))
+        buckets[key] = (total + weight, rs + c[0] * weight, gs + c[1] * weight, bs + c[2] * weight)
+
+    best = max(buckets.values(), key=lambda bucket: bucket[0], default=None)
+
+    if best is not None and best[0] > 0:
+        h, sat, val = colorsys.rgb_to_hsv(best[1] / best[0], best[2] / best[0], best[3] / best[0])
+        dominant = colorsys.hsv_to_rgb(h, min(1.0, sat * 1.2 + 0.1), max(val, 0.7))
+    else:
+        dominant = stops[3]
+
+    old = MAIN_DOMINANT[0]
+    MAIN_DOMINANT[0] = tuple(old[c] + (dominant[c] - old[c]) * 0.35 for c in range(3))
 
     current = PALETTE_STOPS["main"]
     PALETTE_STOPS["main"] = [
@@ -820,6 +844,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # masters nor shrinks to a dot on quiet ones.
         self.vector_auto_gain = True
         self.vector_envelope = 0.0
+
+        # Colors: blend toward the main visualizer's (0 = own colors,
+        # 1 = fully matched), and flip palettes/gradients end to end.
+        self.color_sync = 0.0
+        self.reverse_colors = False
+        self.color_signature = None
+        self.effective_signatures = {}
 
         # Terrain/Waterfall can turn slowly on their own, like Pipes.
         self.terrain_auto_rotate = False
@@ -3102,6 +3133,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def build_shared_controls(self, box):
 
+        self.group_break(box, "Colors")
+        self.add_scale(
+            box, "Match Main Visualizer", "color_sync", 0.0, 1.0, 0.05,
+            lambda value: "Off" if value <= 0 else f"{value * 100:.0f}%"
+        )
+        self.row_subtitles["Match Main Visualizer"] = "Blend toward the main visualizer's colors"
+
+        if self.kind not in ("dvd", "pipes"):
+            self.add_switch(box, "Reverse Colors", "reverse_colors")
+
         self.group_break(box, "Window")
 
         self.add_choice(box, "Background", "background_mode", BACKGROUND_CHOICES, self.background_changed)
@@ -3279,6 +3320,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             sensitive("High Color", palette == "gradient")
 
         sensitive("Rotate Speed", getattr(self, f"{self.kind}_auto_rotate", True))
+        sensitive(
+            "Reverse Colors",
+            palette is not None or self.color_mode not in ("solid", "classic")
+        )
 
     # --- shared settings ---------------------------------------------------
 
@@ -3580,6 +3625,13 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             setattr(self, name, value)
 
         self._icon_cache_key = None
+
+        # "Main Visualizer" used to be a palette choice; it's the Match
+        # Main Visualizer slider now.
+        for name in ("color_mode", f"{self.kind}_palette"):
+            if saved.get(name) == "main" and hasattr(self, name):
+                setattr(self, name, self.default_settings.get(name, "rainbow"))
+                self.color_sync = 1.0
 
         # DVD Bounce had its own Background Color before the shared one.
         if self.kind == "dvd" and "background_mode" not in saved and "dvd_bg_color" in saved:
@@ -4333,6 +4385,113 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def on_draw(self, area, cr, width, height):
 
+        if self.color_sync <= 0 and not self.reverse_colors:
+            self.color_signature = None
+            self.draw_kind(area, cr, width, height)
+            return
+
+        # Swap in the matched/reversed colors for this frame only, so
+        # the saved settings and controls keep the user's own choices.
+        saved = self.apply_effective_colors()
+
+        try:
+            self.draw_kind(area, cr, width, height)
+        finally:
+            for name, value in saved.items():
+                setattr(self, name, value)
+
+    def sync_blend(self, rgb, target):
+
+        k = self.color_sync
+        return tuple(rgb[c] + (target[c] - rgb[c]) * k for c in range(3))
+
+    def effective_palette(self, slot, name, lo=None, hi=None):
+        """A per-window palette: `name` (or the lo/hi gradient),
+        reversed if asked, blended toward the main visualizer's."""
+
+        key = f"effective-{id(self)}-{slot}"
+        sync = self.color_sync
+        signature = (
+            name, self.reverse_colors, round(sync, 3),
+            MAIN_PALETTE_VERSION[0] if sync > 0 else 0,
+            lo.to_string() if lo is not None else None,
+            hi.to_string() if hi is not None else None,
+        )
+
+        if self.effective_signatures.get(key) != signature or key not in _PALETTE_LUTS:
+            lut = []
+            for i in range(256):
+                t = i / 255
+                if self.reverse_colors:
+                    t = 1.0 - t
+                own = palette_color(name, t, lo, hi)
+                if sync > 0:
+                    own = self.sync_blend(own, palette_color("main", t))
+                lut.append(own)
+
+            PALETTE_STOPS[key] = None
+            _PALETTE_LUTS[key] = lut
+            self.effective_signatures[key] = signature
+
+        return key, signature
+
+    def apply_effective_colors(self):
+
+        saved = {}
+        signatures = []
+
+        if self.color_mode not in ("solid", "classic"):
+            saved["color_mode"] = self.color_mode
+            self.color_mode, signature = self.effective_palette("mode", self.color_mode)
+            signatures.append(signature)
+
+        palette_name = f"{self.kind}_palette"
+
+        if hasattr(self, palette_name):
+            saved[palette_name] = getattr(self, palette_name)
+            key, signature = self.effective_palette(
+                "palette", saved[palette_name],
+                getattr(self, f"{self.kind}_color_lo"), getattr(self, f"{self.kind}_color_hi")
+            )
+            setattr(self, palette_name, key)
+            signatures.append(signature)
+
+        if self.color_sync > 0:
+            dominant = MAIN_DOMINANT[0]
+
+            def blended(color):
+                rgb = self.sync_blend((color.red, color.green, color.blue), dominant)
+                result = Gdk.RGBA()
+                result.red, result.green, result.blue, result.alpha = (*rgb, color.alpha)
+                return result
+
+            saved["color"] = self.color
+            self.color = blended(self.color)
+            saved["dvd_color"] = self.dvd_color
+            self.dvd_color = blended(self.dvd_color)
+
+            saved["pipes_band_colors"] = self.pipes_band_colors
+            self.pipes_band_colors = [
+                (lambda c, t: (lambda rgb: Gdk.RGBA(red=rgb[0], green=rgb[1], blue=rgb[2], alpha=1.0))(
+                    self.sync_blend((c.red, c.green, c.blue), palette_color("main", t))
+                ))(color, (i + 1) / len(self.pipes_band_colors))
+                for i, color in enumerate(self.pipes_band_colors)
+            ]
+            signatures.append(("solid", round(self.color_sync, 3), MAIN_PALETTE_VERSION[0]))
+
+        signature = tuple(signatures)
+
+        # 3D surfaces are cached - re-render only when the colors change.
+        if signature != self.color_signature:
+            self.terrain_dirty = True
+            self.waterfall_dirty = True
+
+        self.color_signature = signature
+
+        return saved
+
+    def draw_kind(self, area, cr, width, height):
+
         if self.kind == "vu":
             self.draw_vu_meter(cr, width, height)
         elif self.kind == "peak":
@@ -4494,10 +4653,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if self.color_mode == "classic":
             if level > zones[1]:
-                return (0.9, 0.2, 0.2)
-            if level > zones[0]:
-                return (0.9, 0.8, 0.2)
-            return (0.2, 0.8, 0.3)
+                zone = (0.9, 0.2, 0.2)
+            elif level > zones[0]:
+                zone = (0.9, 0.8, 0.2)
+            else:
+                zone = (0.2, 0.8, 0.3)
+            if self.color_sync > 0:
+                zone = self.sync_blend(zone, palette_color("main", level))
+            return zone
 
         if self.color_mode == "solid":
             return (self.color.red, self.color.green, self.color.blue)
@@ -4511,11 +4674,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if self.color_mode == "classic":
             # Original thresholds: the color of the zone the level is in.
             if level < zones[0]:
-                cr.set_source_rgb(0.2, 0.8, 0.3)
+                zone = (0.2, 0.8, 0.3)
             elif level < zones[1]:
-                cr.set_source_rgb(0.9, 0.8, 0.2)
+                zone = (0.9, 0.8, 0.2)
             else:
-                cr.set_source_rgb(0.9, 0.2, 0.2)
+                zone = (0.9, 0.2, 0.2)
+            if self.color_sync > 0:
+                zone = self.sync_blend(zone, palette_color("main", min(level, 1.0)))
+            cr.set_source_rgb(*zone)
             return
 
         if self.color_mode == "solid":
@@ -5932,7 +6098,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         return (
             self.num_bars, self.spectrogram_palette,
-            MAIN_PALETTE_VERSION[0] if self.spectrogram_palette == "main" else 0,
+            self.color_signature,
             self.spectrogram_color_ceiling,
             (lo.red, lo.green, lo.blue), (hi.red, hi.green, hi.blue),
         )
@@ -7212,6 +7378,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return False
 
     def on_close_request(self, window):
+
+        for key in list(self.effective_signatures):
+            PALETTE_STOPS.pop(key, None)
+            _PALETTE_LUTS.pop(key, None)
+        self.effective_signatures.clear()
 
         if self.context_menu is not None:
             self.context_menu.unparent()
