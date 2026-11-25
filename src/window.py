@@ -3691,7 +3691,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         # section (Presets/Favorites/Queue/Playlists, settings pages)
         # stay at the top.
         header = Adw.HeaderBar()
-        header.set_show_title(False)
+
+        # Where you are: the section name, or in Preferences the page.
+        sidebar_title = Adw.WindowTitle()
+        header.set_title_widget(sidebar_title)
+
+        def update_sidebar_title(*args):
+            section = sections.get_visible_child_name()
+            stack = sections if section != "settings" else self.settings_stack
+            page = stack.get_page(stack.get_visible_child())
+            sidebar_title.set_title(page.get_title() if page else "")
+
+        sections.connect("notify::visible-child", update_sidebar_title)
+        self.settings_stack.connect("notify::visible-child", update_sidebar_title)
+        update_sidebar_title()
 
         section_switcher = Adw.ViewSwitcherBar(stack=sections)
         section_switcher.set_reveal(True)
@@ -3847,20 +3860,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         switcher.set_margin_end(12)
         switcher.set_margin_top(6)
 
-        # Icons only fit the sidebar's width, so the current page's name
-        # is shown underneath.
-        title = Gtk.Label(css_classes=["heading"], margin_top=6)
-
-        def update_title(*args):
-            page = stack.get_page(stack.get_visible_child())
-            title.set_label(page.get_title() if page else "")
-
-        stack.connect("notify::visible-child", update_title)
-        update_title()
-
+        # Icons only fit the sidebar's width; the current page's name is
+        # shown in the sidebar's header (build_sidebar) rather than in a
+        # row of its own, which crowded the tabs and cost vertical space.
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.append(switcher)
-        box.append(title)
         box.append(stack)
         stack.set_vexpand(True)
 
