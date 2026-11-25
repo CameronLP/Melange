@@ -35,7 +35,8 @@ that react to the same audio.
 - **Your own presets.** Open `.milk` files with Load Preset… (Ctrl+O, the
   main menu or the right-click menu) or drop them onto the window. They're
   listed under Your Presets at the top of the preset browser and are
-  remembered between launches.
+  remembered between launches (the − button removes one from the list; the
+  file stays where it is).
 - **Favorites, a queue and playlists.** Star a preset from the visualizer
   (F) or from the browser, queue up what plays next, and save playlists.
 - **A sidebar instead of dialogs.** Presets, Visualizers and Preferences
@@ -245,7 +246,6 @@ flatpak run --filesystem="$PWD" --cwd="$PWD" --command=python3 \
 | `--talk-name=org.mpris.MediaPlayer2.*` | Now Playing: reading the current track from media players |
 | `--filesystem=home:ro` | Now Playing: reading local artwork files |
 | `--share=network`, `--filesystem=xdg-run/gvfs` | Now Playing: downloading artwork that players link to online (GIO fetches `http(s)` URLs through GVfs) |
-| `--device=all`, `--talk-name=org.freedesktop.portal.Desktop`, `--talk-name=org.freedesktop.portal.PermissionStore` | From the initial app template; likely narrower in future |
 
 ## Troubleshooting
 

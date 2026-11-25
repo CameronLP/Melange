@@ -4941,6 +4941,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         ):
             button.set_visible(is_preset)
 
+        list_item.remove_button.set_visible(False)
+
         if is_preset:
             self.bind_preset_row(list_item, node.preset_name)
         else:
@@ -5063,6 +5065,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         box.append(add_button)
 
+        # Only on presets you opened from files (Your Presets): forget
+        # it - the file itself isn't touched.
+        remove_button = Gtk.Button(icon_name="list-remove-symbolic")
+        remove_button.add_css_class("flat")
+        remove_button.set_tooltip_text("Remove from Your Presets")
+        remove_button.set_visible(False)
+
+        box.append(remove_button)
+
         list_item.set_child(box)
 
         # Stashed on the list_item itself (not the widgets) so bind
@@ -5074,6 +5085,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         list_item.favorite_button_handler = None
         list_item.add_button = add_button
         list_item.add_button_handler = None
+        list_item.remove_button = remove_button
+        list_item.remove_button_handler = None
 
     def preset_row_bind(self, factory, list_item):
 
@@ -5095,11 +5108,19 @@ class MelangeWindow(Adw.ApplicationWindow):
         else:
             list_item.preset_label.add_css_class("dim-label")
             list_item.preset_label.set_tooltip_text(
-                "Not available - presets loaded from files only last for the "
-                "session; load the file again to use it"
+                "Not available - the file was moved or deleted; open it "
+                "again (Load Preset…) to use it"
             )
 
         list_item.add_button.set_sensitive(available)
+
+        if list_item.remove_button_handler is not None:
+            list_item.remove_button.disconnect(list_item.remove_button_handler)
+
+        list_item.remove_button.set_visible(name in self.user_loaded_presets)
+        list_item.remove_button_handler = list_item.remove_button.connect(
+            "clicked", lambda button, n=name: self.remove_user_preset(n)
+        )
 
         if list_item.favorite_button_handler is not None:
             list_item.favorite_button.disconnect(list_item.favorite_button_handler)
@@ -5976,6 +5997,20 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.user_loaded_presets.append(name)
 
         return name
+
+    def remove_user_preset(self, name):
+        """Takes a preset opened from a file off the list (and out of
+        Your Presets); the file itself stays where it is."""
+
+        if name not in self.user_loaded_presets:
+            return
+
+        self.user_loaded_presets.remove(name)
+        self.preset_paths.pop(name, None)
+        self.presets.set_catalog([n for n in self.presets.catalog if n != name])
+        self.save_user_presets()
+        self.refresh_preset_lists()
+        self.show_toast(f"Removed \"{name}\" from Your Presets")
 
     # Presets opened from files are remembered between launches (their
     # paths, in user-presets.json); ones whose file is gone are dropped.
