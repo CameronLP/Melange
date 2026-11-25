@@ -114,11 +114,16 @@
 
 ### Requested 2026-11-25
 
-- [ ] With the main visualizer off (menu > Main Visualizer), the title
-      bar should drop the preset name - nothing is showing it. Likely:
-      build_window_title() returns just "Melange" when
-      main_visualizer_on is False (same as Show Preset Name in Title
-      off), and main_visualizer_changed() refreshes the title.
+- [ ] With the main visualizer off (menu > Main Visualizer), the window
+      should act like an ordinary window, since there's nothing to show:
+      - the title bar drops the preset name. Likely: build_window_title()
+        returns just "Melange" when main_visualizer_on is False (same as
+        Show Preset Name in Title off), and main_visualizer_changed()
+        refreshes the title;
+      - the fullscreen button is disabled (and F11 does nothing);
+      - the title bar stays put instead of auto-hiding (no
+        hide_toolbar / pointer-hide while off), and Hide Controls is
+        unavailable.
 - [ ] Sort (or filter) presets by colour? - requested idea, not
       designed. Melange only learns a preset's colours by playing it, so
       options: record each preset's sampled palette (the 32x32 frame
