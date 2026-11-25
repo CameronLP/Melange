@@ -43,11 +43,14 @@ that react to the same audio.
   detected beats, or when the song changes. Set the transition time, shuffle,
   go back and forward through history, lock the current preset (L) or pause
   the picture entirely (P).
-- **Fullscreen, Immersive and Transparency modes.** In fullscreen the
+- **Fullscreen, Hide Controls and Transparency Mode.** In fullscreen the
   pointer, the header bar and the floating buttons hide together after two
-  seconds without movement. Immersive Mode hides the controls. Transparency
-  Mode lets the desktop show through, with an option to become opaque while
-  the mouse is over the window.
+  seconds without movement. Hide Controls (Ctrl+I) hides the header bar and
+  floating buttons. Transparency Mode lets the desktop show through, with an
+  option to become opaque while the mouse is over the window.
+- **Right-click menu.** Right-click the visualizer for next/previous preset,
+  favorite, pause, lock, shuffle, Hide Controls, fullscreen, the preset
+  browser and Preferences.
 - **Now Playing.** An overlay with the title, artist, album and artwork of
   whatever is playing (any MPRIS player), with placement, size, font, colour,
   auto-hide and periodic-fade options.
@@ -191,7 +194,7 @@ them as a profile to keep them.
 | `Ctrl+Shift+F` | Show favorites |
 | `Ctrl+,` | Preferences |
 | `Ctrl+T` | Transparency Mode |
-| `Ctrl+I` | Immersive Mode |
+| `Ctrl+I` | Hide controls |
 | `Ctrl+M` | New mirror window |
 | `Ctrl+Shift+M` | Close all mirrors |
 | `Ctrl+?` | Keyboard shortcuts |

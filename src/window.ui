@@ -105,7 +105,7 @@
            (on_content_right_click) - the header bar (and this menu
            with it) disappears the moment this turns on, by design. -->
       <item>
-        <attribute name="label" translatable="yes">Immersive Mode</attribute>
+        <attribute name="label" translatable="yes">Hide Controls</attribute>
         <attribute name="action">win.immersive-mode</attribute>
       </item>
 

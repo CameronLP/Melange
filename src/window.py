@@ -1194,9 +1194,9 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.reveal_toolbar()
 
         self.show_toast(
-            "Immersive Mode enabled - right-click to exit"
+            "Controls hidden - right-click to show them"
             if self.immersive_mode_enabled
-            else "Immersive Mode disabled"
+            else "Controls shown"
         )
 
     # The only way out of Immersive Mode once it's on (see
@@ -1205,11 +1205,31 @@ class MelangeWindow(Adw.ApplicationWindow):
     # effect on ordinary right-clicks.
     def on_content_right_click(self, gesture, n_press, x, y):
 
-        if not self.immersive_mode_enabled:
-            return
-
+        # Everyday options, wherever the controls are (and the way back
+        # when Hide Controls is on: it shows checked here).
         menu = Gio.Menu()
-        menu.append("Exit Immersive Mode", "win.immersive-mode")
+
+        presets = Gio.Menu()
+        presets.append("Next Preset", "win.next-preset")
+        presets.append("Previous Preset", "win.previous-preset")
+        presets.append("Favorite", "win.toggle-favorite")
+        menu.append_section(None, presets)
+
+        playback = Gio.Menu()
+        playback.append("Pause", "win.pause")
+        playback.append("Lock Preset", "win.lock-preset")
+        playback.append("Shuffle", "win.shuffle-preset")
+        menu.append_section(None, playback)
+
+        view = Gio.Menu()
+        view.append("Hide Controls", "win.immersive-mode")
+        view.append("Fullscreen", "win.toggle-fullscreen")
+        menu.append_section(None, view)
+
+        more = Gio.Menu()
+        more.append("Browse Presets…", "win.browse-presets")
+        more.append("Preferences…", "win.preferences")
+        menu.append_section(None, more)
 
         popover = Gtk.PopoverMenu.new_from_model(menu)
         popover.set_parent(self.content_box)
@@ -1229,6 +1249,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         point.height = 1
 
         popover.set_pointing_to(point)
+        # Detach it once closed (after the chosen item has run), or every
+        # right-click would leave another popover attached.
+        popover.connect("closed", lambda p: GLib.idle_add(p.unparent))
         popover.popup()
 
     OPACITY_FADE_TICK_MS = 16
