@@ -89,6 +89,7 @@ class MelangeApplication(Adw.Application):
         self.set_accels_for_action("win.next-preset", ["Right", "space"])
         self.set_accels_for_action("win.previous-preset", ["Left"])
         self.set_accels_for_action("win.toggle-fullscreen", ["F11"])
+        self.set_accels_for_action("win.pause", ["p"])
         self.set_accels_for_action("win.lock-preset", ["l"])
         self.set_accels_for_action("win.shuffle-preset", ["s"])
 

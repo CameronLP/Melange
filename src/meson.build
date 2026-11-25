@@ -30,6 +30,7 @@ melange_sources = [
   '__init__.py',
   'main.py',
   'aux_window.py',
+  'cursor_hider.py',
   'mirror_window.py',
   'now_playing.py',
   'preset_manager.py',

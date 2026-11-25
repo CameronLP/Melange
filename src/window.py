@@ -37,6 +37,7 @@ from melange.aux_window import AuxVisualizerWindow
 from melange.now_playing import NowPlayingWatcher
 from melange import projectm_view
 from melange.preset_manager import PresetManager
+from melange.cursor_hider import FullscreenCursorHider
 
 # key -> (halign, valign) - "top-*"/"bottom-*" pick valign, the second
 # word picks halign, same convention as the label text.
@@ -265,6 +266,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_periodic_timer = None
         self.now_playing_fade_timer = None
         self.toolbar_hide_delay = 3
+        # Preferences > Appearance > Toolbar: the back/forward arrows
+        # over the visualizer (also hidden while the preset is locked).
+        self.show_nav_arrows = True
+        self.show_favorite_button = True
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
@@ -366,6 +371,17 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
 
         webview_overlay.add_overlay(self.favorite_button)
+
+        paused_icon = Gtk.Image.new_from_icon_name("media-playback-pause-symbolic")
+        paused_label = Gtk.Label(label="Paused")
+        self.paused_badge = Gtk.Box(spacing=6, halign=Gtk.Align.CENTER, valign=Gtk.Align.START)
+        self.paused_badge.set_margin_top(56)
+        self.paused_badge.add_css_class("paused-badge")
+        self.paused_badge.append(paused_icon)
+        self.paused_badge.append(paused_label)
+        self.paused_badge.set_can_target(False)
+        self.paused_badge.set_visible(False)
+        webview_overlay.add_overlay(self.paused_badge)
 
         # Now Playing (now_playing.py) - hidden until a track is
         # actually reported (see on_now_playing_changed), so there's
@@ -568,6 +584,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pinned_sink = None
         self.pactl_event_timer = None
         self.preset_locked = False
+        self.paused = False
         self.preset_list_store = None
         self.preset_browser = None
         self.browser_view_stack = None
@@ -919,6 +936,15 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.add_action(now_playing_enabled_action)
 
+        # Pause (P): freeze the visualizer on its current frame - no
+        # rendering, audio ignored, no preset changes. Next/previous
+        # resume it.
+        pause_action = Gio.SimpleAction.new_stateful(
+            "pause", None, GLib.Variant("b", False)
+        )
+        pause_action.connect("change-state", self.pause_changed)
+        self.add_action(pause_action)
+
         lock_preset_action = Gio.SimpleAction.new_stateful(
             "lock-preset",
             None,
@@ -979,6 +1005,16 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.build_preset_browser()
         self.build_sidebar()
 
+        # Pointer disappears after a moment's stillness in fullscreen -
+        # only over the visualizer, not while using the sidebar or a menu.
+        # The floating back/forward and favorite buttons go at the same
+        # moment as the pointer (moving the mouse brings both back).
+        self.cursor_hider = FullscreenCursorHider(
+            self,
+            may_hide=lambda: self.pointer_over_visualizer and not self.menu_button.get_active(),
+            on_hide=lambda: self.set_nav_arrows_visible(False)
+        )
+
         self.menu_button.get_popover().add_child(
             self.build_theme_selector(),
             "theme-selector"
@@ -1012,7 +1048,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.toolbar_view.set_reveal_top_bars(True)
         self.set_nav_arrows_visible(True)
-        self.set_cursor(None)
 
 
 
@@ -1036,8 +1071,6 @@ class MelangeWindow(Adw.ApplicationWindow):
     MOVEMENT_THRESHOLD_PX = 1
 
     def mouse_move(self, controller, x, y):
-
-        self.set_cursor(None)
 
         if self.last_mouse_pos is not None:
 
@@ -2222,17 +2255,19 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.toolbar_view.set_reveal_top_bars(False)
         self.set_nav_arrows_visible(False)
 
-        # Only in fullscreen - windowed mode still needs a visible
-        # cursor for ordinary desktop interaction (moving/resizing,
-        # other windows, ...).
-        if self.is_fullscreen():
-            self.set_cursor(Gdk.Cursor.new_from_name("none"))
-
         return False
 
     def set_nav_arrows_visible(self, visible):
 
         css_class = "nav-arrow-visible"
+
+        # Each stays hidden when turned off in Preferences, and all three
+        # while the preset is locked (requested: a locked view shows no
+        # floating buttons; F still toggles the favorite).
+        for arrow in (self.prev_arrow_button, self.next_arrow_button):
+            arrow.set_visible(self.show_nav_arrows and not self.preset_locked)
+
+        self.favorite_button.set_visible(self.show_favorite_button and not self.preset_locked)
 
         buttons = (
             self.prev_arrow_button,
@@ -2508,6 +2543,24 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         return True
 
+    def pause_changed(self, action, value):
+
+        action.set_state(value)
+        self.paused = value.get_boolean()
+
+        if self.projectm_view is not None:
+            self.projectm_view.set_paused(self.paused)
+
+        self.presets.set_cycle_paused(self.preset_locked or self.paused)
+        self.paused_badge.set_visible(self.paused)
+
+        self.show_toast("Paused" if self.paused else "Resumed")
+
+    def resume_if_paused(self):
+
+        if self.paused:
+            self.lookup_action("pause").change_state(GLib.Variant("b", False))
+
     def lock_preset_changed(self, action, value):
 
         action.set_state(value)
@@ -2526,7 +2579,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         # a preset *change* actually happening.
         self.cycling_group.set_sensitive(not self.preset_locked)
 
-        self.presets.set_cycle_paused(self.preset_locked)
+        self.presets.set_cycle_paused(self.preset_locked or self.paused)
+        self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
 
         self.show_toast(
             "Preset locked" if self.preset_locked else "Preset unlocked"
@@ -2643,7 +2697,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             return "Instant" if value <= 0 else f"{value:.1f}s"
 
         return self.build_slider_row(
-            "Transition Blend Time",
+            "Transition Time",
             0.0, 10.0, 0.5, 3.0,
             format_blend_time,
             self.set_blend_time,
@@ -3111,6 +3165,38 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="toolbar_hide_delay_scale"
         )
 
+    def build_show_nav_arrows_control(self):
+
+        def show_nav_arrows_changed(enabled):
+            self.show_nav_arrows = enabled
+            self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
+
+        row = self.build_toggle_row(
+            "Show Navigation Arrows",
+            self.show_nav_arrows,
+            show_nav_arrows_changed,
+            store_as="show_nav_arrows_row"
+        )
+        row.set_subtitle("Back and forward buttons over the visualizer")
+
+        return row
+
+    def build_show_favorite_button_control(self):
+
+        def show_favorite_button_changed(enabled):
+            self.show_favorite_button = enabled
+            self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
+
+        row = self.build_toggle_row(
+            "Show Favorite Button",
+            self.show_favorite_button,
+            show_favorite_button_changed,
+            store_as="show_favorite_button_row"
+        )
+        row.set_subtitle("Star button in the visualizer's corner (F also toggles)")
+
+        return row
+
     def build_toggle_row(self, title, initial, on_change, store_as=None):
 
         row = Adw.SwitchRow(title=title)
@@ -3245,7 +3331,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         audio_group.add(self.build_audio_source_control())
         audio_group.add(self.build_sensitivity_control())
 
-        cycling_group = Adw.PreferencesGroup(title="Cycling")
+        cycling_group = Adw.PreferencesGroup(title="Changing Presets")
         cycling_group.add(self.build_cycle_interval_control())
         cycling_group.add(self.build_cycle_jitter_control())
         cycling_group.add(self.build_blend_time_control())
@@ -3276,48 +3362,68 @@ class MelangeWindow(Adw.ApplicationWindow):
         transparency_group.add(self.build_transparency_hover_reveal_control())
         transparency_group.add(self.build_transparency_fade_control())
 
-        now_playing_group = Adw.PreferencesGroup(
-            title="Now Playing",
-            description="Turn on from the main menu."
+        # Now Playing has its own page (it used to be one 12-row group on
+        # Appearance), split by what you're adjusting.
+        np_content_group = Adw.PreferencesGroup(
+            title="Content",
+            description="Turn Now Playing on from the main menu."
         )
-        now_playing_group.add(self.build_now_playing_source_control())
-        now_playing_group.add(self.build_now_playing_placement_control())
-        now_playing_group.add(self.build_now_playing_displayed_fields_control())
-        now_playing_group.add(self.build_now_playing_lock_to_window_control())
-        now_playing_group.add(self.build_now_playing_scale_control())
-        now_playing_group.add(self.build_now_playing_text_size_control())
-        now_playing_group.add(self.build_now_playing_max_width_control())
-        now_playing_group.add(self.build_now_playing_auto_hide_control())
-        now_playing_group.add(self.build_now_playing_periodic_fade_control())
-        now_playing_group.add(self.build_now_playing_scroll_long_titles_control())
-        now_playing_group.add(self.build_now_playing_font_control())
-        now_playing_group.add(self.build_now_playing_text_color_control())
+        np_content_group.add(self.build_now_playing_source_control())
+        np_content_group.add(self.build_now_playing_displayed_fields_control())
+        np_content_group.add(self.build_now_playing_scroll_long_titles_control())
+
+        np_layout_group = Adw.PreferencesGroup(title="Layout")
+        np_layout_group.add(self.build_now_playing_placement_control())
+        np_layout_group.add(self.build_now_playing_lock_to_window_control())
+        np_layout_group.add(self.build_now_playing_scale_control())
+        np_layout_group.add(self.build_now_playing_text_size_control())
+        np_layout_group.add(self.build_now_playing_max_width_control())
+
+        np_style_group = Adw.PreferencesGroup(title="Style")
+        np_style_group.add(self.build_now_playing_font_control())
+        np_style_group.add(self.build_now_playing_text_color_control())
+
+        np_visibility_group = Adw.PreferencesGroup(title="Visibility")
+        np_visibility_group.add(self.build_now_playing_auto_hide_control())
+        np_visibility_group.add(self.build_now_playing_periodic_fade_control())
 
         toolbar_group = Adw.PreferencesGroup(
-            title="Toolbar",
+            title="Controls",
             description=(
-                "How soon the header bar and nav arrows auto-hide "
-                "after the mouse stops moving."
+                "The header bar and the buttons over the visualizer hide "
+                "after the mouse stops moving. In fullscreen the buttons "
+                "also go with the pointer, and they're hidden while the "
+                "preset is locked."
             )
         )
         toolbar_group.add(self.build_toolbar_hide_delay_control())
+        toolbar_group.add(self.build_show_nav_arrows_control())
+        toolbar_group.add(self.build_show_favorite_button_control())
 
+        # When presets change (not the presets themselves).
         playback_page = Adw.PreferencesPage(
-            title="Playback",
-            icon_name="media-playback-start-symbolic"
+            title="Cycling",
+            icon_name="media-playlist-shuffle-symbolic"
         )
 
         playback_page.add(cycling_group)
         playback_page.add(beat_group)
 
         appearance_page = Adw.PreferencesPage(
-            title="Appearance",
+            title="Window",
             icon_name="preferences-desktop-appearance-symbolic"
         )
 
         appearance_page.add(toolbar_group)
         appearance_page.add(transparency_group)
-        appearance_page.add(now_playing_group)
+
+        now_playing_page = Adw.PreferencesPage(
+            title="Now Playing",
+            icon_name="audio-x-generic-symbolic"
+        )
+
+        for group in (np_content_group, np_layout_group, np_style_group, np_visibility_group):
+            now_playing_page.add(group)
 
         rendering_group = Adw.PreferencesGroup(title="Rendering")
         rendering_group.add(self.build_mesh_size_control())
@@ -3327,7 +3433,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         # What drives and draws the visuals - Audio and Rendering used to
         # be two separate, very short pages.
         visualizer_page = Adw.PreferencesPage(
-            title="Visualizer",
+            title="Audio & Rendering",
             icon_name="audio-speakers-symbolic"
         )
 
@@ -3345,8 +3451,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         # things.
         self.settings_pages = [
             ("visualizer", visualizer_page),
-            ("playback", playback_page),
-            ("appearance", appearance_page),
+            ("presets", playback_page),
+            ("window", appearance_page),
+            ("now-playing", now_playing_page),
             ("profiles", profiles_page),
         ]
 
@@ -3640,7 +3747,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         # section (Presets/Favorites/Queue/Playlists, settings pages)
         # stay at the top.
         header = Adw.HeaderBar()
-        header.set_show_title(False)
+
+        # Where you are: the section name, or in Preferences the page.
+        sidebar_title = Adw.WindowTitle()
+        header.set_title_widget(sidebar_title)
+
+        def update_sidebar_title(*args):
+            section = sections.get_visible_child_name()
+            stack = sections if section != "settings" else self.settings_stack
+            page = stack.get_page(stack.get_visible_child())
+            sidebar_title.set_title(page.get_title() if page else "")
+
+        sections.connect("notify::visible-child", update_sidebar_title)
+        self.settings_stack.connect("notify::visible-child", update_sidebar_title)
+        update_sidebar_title()
 
         section_switcher = Adw.ViewSwitcherBar(stack=sections)
         section_switcher.set_reveal(True)
@@ -3796,20 +3916,11 @@ class MelangeWindow(Adw.ApplicationWindow):
         switcher.set_margin_end(12)
         switcher.set_margin_top(6)
 
-        # Icons only fit the sidebar's width, so the current page's name
-        # is shown underneath.
-        title = Gtk.Label(css_classes=["heading"], margin_top=6)
-
-        def update_title(*args):
-            page = stack.get_page(stack.get_visible_child())
-            title.set_label(page.get_title() if page else "")
-
-        stack.connect("notify::visible-child", update_title)
-        update_title()
-
+        # Icons only fit the sidebar's width; the current page's name is
+        # shown in the sidebar's header (build_sidebar) rather than in a
+        # row of its own, which crowded the tabs and cost vertical space.
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box.append(switcher)
-        box.append(title)
         box.append(stack)
         stack.set_vexpand(True)
 
@@ -3846,7 +3957,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         view_stack.add_titled_with_icon(
             self.build_presets_tab(),
-            "presets", "Presets", "view-list-symbolic"
+            "presets", "Browse", "view-list-symbolic"
         )
         view_stack.add_titled_with_icon(
             self.build_favorites_tab(),
@@ -5075,6 +5186,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.show_toast("Preset is locked")
             return
 
+        self.resume_if_paused()
+
         self.presets.next()
 
     def previous_preset(self, button):
@@ -5082,6 +5195,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         if self.preset_locked:
             self.show_toast("Preset is locked")
             return
+
+        self.resume_if_paused()
 
         self.presets.previous()
 
@@ -5121,7 +5236,7 @@ class MelangeWindow(Adw.ApplicationWindow):
     # change preset (see ProjectMView.apply_settings).
     def on_projectm_beat(self):
 
-        if self.preset_locked:
+        if self.preset_locked or self.paused:
             return
 
         self.presets.next()
