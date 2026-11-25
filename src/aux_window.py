@@ -75,7 +75,7 @@ SAVED_SETTINGS = [
 
 # Starting camera (azimuth, elevation in degrees) of the 3D kinds -
 # Reset View / double-click / Home go back to these.
-VIEW_DEFAULTS = {"terrain": (35, 28), "waterfall": (35, 55), "pipes": (35, 28)}
+VIEW_DEFAULTS = {"terrain": (35, 55), "waterfall": (35, 55), "pipes": (35, 28)}
 VIEW_KINDS = tuple(VIEW_DEFAULTS)
 VIEW_HINT = "Drag to rotate · Scroll to zoom · Double-click to reset"
 
@@ -1288,7 +1288,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_rows = deque(maxlen=TERRAIN_ROWS)
         self.last_terrain_frame_time = 0.0
         self.terrain_azimuth = math.radians(35)
-        self.terrain_elevation = math.radians(28)
+        self.terrain_elevation = math.radians(55)
         self.terrain_rotate_start = (self.terrain_azimuth, self.terrain_elevation)
         self.terrain_surface = None
         self.terrain_dirty = True
@@ -5666,6 +5666,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         trail_cr.rectangle(0, 0, width, height)
         trail_cr.fill()
 
+        # The fade above may have used DEST_OUT (see-through background);
+        # the new dots must be painted normally, or they erase themselves.
+        trail_cr.set_operator(cairo.OPERATOR_OVER)
+
         cx, cy = width / 2, height / 2
         radius = min(width, height) / 2 - 12
         count = min(len(self.left), len(self.right))
@@ -6624,6 +6628,29 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
         self.terrain_dirty = True
 
+    def fit_3d_view(self, width, height, z_max, azimuth, elevation, zoom):
+        """(cx, cy, scale) that fit the whole -1..1 x -1..1 x 0..z_max box
+        (plus room for the axis labels) in the window at this angle, so
+        the top of the Z axis isn't cut off. Zoom > 1 still goes past."""
+
+        xs, ys = [], []
+        for x in (-1.0, 1.0):
+            for y in (-1.0, 1.0):
+                for z in (0.0, max(0.05, z_max) * 1.15):
+                    px, py, _ = self.project_3d_point(x, y, z, 0.0, 0.0, 1.0, azimuth, elevation)
+                    xs.append(px)
+                    ys.append(py)
+
+        margin = 18
+        box_w = max(1e-6, max(xs) - min(xs))
+        box_h = max(1e-6, max(ys) - min(ys))
+        scale = min((width - margin * 2) / box_w, (height - margin * 2) / box_h) * zoom
+
+        cx = width / 2 - (min(xs) + max(xs)) / 2 * scale
+        cy = height / 2 - (min(ys) + max(ys)) / 2 * scale
+
+        return cx, cy, scale
+
     def project_3d_point(self, x, y, z, cx, cy, scale, azimuth, elevation):
 
         # A simple oblique/orthographic (not perspective-correct) 3D
@@ -6682,9 +6709,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         row_count = len(rows)
         bin_count = len(rows[0])
 
-        cx = width / 2
-        cy = height * 0.6
-        scale = min(width, height) * 0.42 * self.terrain_zoom
+        cx, cy, scale = self.fit_3d_view(
+            width, height, 1.0, self.terrain_azimuth, self.terrain_elevation, self.terrain_zoom
+        )
 
         # Every row shares one Y (time/depth) position, so its own
         # rotated depth (used for the back-to-front sort below) is the
@@ -6860,9 +6887,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if self.terrain_show_axes:
 
-            cx = width / 2
-            cy = height * 0.6
-            scale = min(width, height) * 0.42 * self.terrain_zoom
+            cx, cy, scale = self.fit_3d_view(
+                width, height, 1.0, self.terrain_azimuth, self.terrain_elevation, self.terrain_zoom
+            )
 
             self.draw_3d_axes(
                 cr, cx, cy, scale,
@@ -6907,9 +6934,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         row_count = len(rows)
         bin_count = len(rows[0])
 
-        cx = width / 2
-        cy = height * 0.55
-        scale = min(width, height) * 0.42 * self.waterfall_zoom
+        cx, cy, scale = self.fit_3d_view(
+            width, height, self.waterfall_height_scale,
+            self.waterfall_azimuth, self.waterfall_elevation, self.waterfall_zoom
+        )
 
         # Each point's own Z comes from that exact (row, bin)'s own
         # level, scaled by waterfall_height_scale - 0 (the default
@@ -7054,9 +7082,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if self.waterfall_show_axes:
 
-            cx = width / 2
-            cy = height * 0.55
-            scale = min(width, height) * 0.42 * self.waterfall_zoom
+            cx, cy, scale = self.fit_3d_view(
+                width, height, self.waterfall_height_scale,
+                self.waterfall_azimuth, self.waterfall_elevation, self.waterfall_zoom
+            )
 
             self.draw_3d_axes(
                 cr, cx, cy, scale,
