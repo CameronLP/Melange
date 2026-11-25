@@ -69,7 +69,7 @@ SAVED_SETTINGS = [
     "compact_mode", "freq_min", "freq_max", "xy_goniometer",
     "terrain_auto_rotate", "terrain_rotate_speed",
     "waterfall_auto_rotate", "waterfall_rotate_speed",
-    "view_hint_shown",
+    "view_hint_shown", "vector_auto_gain",
 ]
 
 # Starting camera (azimuth, elevation in degrees) of the 3D kinds -
@@ -763,6 +763,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # X-Y Scope: rotate 45 degrees (mid up, side across) - the
         # standard goniometer view.
         self.xy_goniometer = False
+
+        # Vector Scope: scale the cloud to recent loudness (fast attack,
+        # ~2s release) so it neither presses into the edges on loud
+        # masters nor shrinks to a dot on quiet ones.
+        self.vector_auto_gain = True
+        self.vector_envelope = 0.0
 
         # Terrain/Waterfall can turn slowly on their own, like Pipes.
         self.terrain_auto_rotate = False
@@ -3024,6 +3030,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.add_scale(box, "Lowest Frequency", "freq_min", 20, 1000, 10, hertz, self.frequency_range_changed)
             self.add_scale(box, "Highest Frequency", "freq_max", 1000, SAMPLE_RATE / 2, 50, hertz, self.frequency_range_changed)
 
+        if self.kind == "vectorscope":
+            self.add_switch(
+                box, "Auto Gain", "vector_auto_gain",
+                subtitle="Keep the cloud a steady size whatever the volume"
+            )
+
         if self.kind == "xy":
             self.add_switch(
                 box, "Goniometer View", "xy_goniometer",
@@ -5068,7 +5080,28 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         trail_cr.fill()
 
         cx, cy = width / 2, height / 2
-        scale = (min(width, height) / 2 - 12) * self.scope_zoom
+        radius = min(width, height) / 2 - 12
+        count = min(len(self.left), len(self.right))
+
+        # Mid/side below are (L±R)/sqrt(2), so a full-scale signal
+        # reaches sqrt(2) - divide that out so the full-scale diamond
+        # (|L|, |R| <= 1) just touches the edges. It used to be plotted
+        # sqrt(2) too big, so loud passages ran into the boundary.
+        scale = radius / math.sqrt(2) * self.scope_zoom
+
+        if self.vector_auto_gain and count:
+            peak = max(
+                max(abs(l + r), abs(l - r)) * 0.70710678
+                for l, r in zip(self.left, self.right)
+            )
+            if peak > self.vector_envelope:
+                self.vector_envelope = peak
+            else:
+                self.vector_envelope = self.vector_envelope * 0.97 + peak * 0.03
+
+            # Loudest recent point at ~80% of the way to the edge; at
+            # most 8x for near-silence.
+            scale *= min(8.0, 0.8 * math.sqrt(2) / max(self.vector_envelope, 0.8 * math.sqrt(2) / 8.0))
 
         # Rotated 45° from a plain L/R plot - Mid ((L+R)/sqrt(2)) on
         # the vertical axis, Side ((L-R)/sqrt(2)) on the horizontal -
@@ -5078,7 +5111,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # is always 0. A plain, unrotated L-vs-R plot (the existing X-Y
         # Scope) doesn't carry this same "read stereo width/phase at a
         # glance" meaning.
-        count = min(len(self.left), len(self.right))
         half_dot = self.vector_dot_size / 2
         rainbow = self.color_mode not in ("solid", "classic")
 
@@ -5132,6 +5164,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         cr.move_to(0, cy)
         cr.line_to(width, cy)
         cr.stroke()
+
+        # Full-scale reference: where |L| or |R| reaches 1 (without
+        # Auto Gain the cloud can't go past it).
+        if not self.vector_auto_gain:
+            edge = radius * self.scope_zoom
+            cr.set_source_rgba(*self.canvas_foreground_rgba(0.12))
+            cr.move_to(cx, cy - edge)
+            cr.line_to(cx + edge, cy)
+            cr.line_to(cx, cy + edge)
+            cr.line_to(cx - edge, cy)
+            cr.close_path()
+            cr.stroke()
 
         if self.show_labels:
 
