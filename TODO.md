@@ -114,6 +114,45 @@
 
 ### Requested 2026-11-25
 
+- [ ] **Mini visualizer refactor** (agreed 2026-11-25: restructure, not
+      rewrite - same drawing and behaviour, every setting/saved file/
+      shortcut unchanged; one step per PR, existing headless tests as
+      the safety net).
+      - [x] Step 1 (PR #13): src/mini_visualizer_base.py with
+            MiniVisualizerWindow - the shared methods (settings sidebar/
+            page/separate window, row builders, saving, backgrounds,
+            colour matching, header auto-hide/Compact, fullscreen,
+            window drag, drawing helpers) and shared module pieces
+            (palettes, choices, persistence, sizes, titles), moved
+            unchanged by script. AuxVisualizerWindow inherits from it.
+      - [ ] Step 2: one class per kind (vu.py, peak.py, spectrum.py,
+            spectrogram.py, oscilloscope.py, xy.py, vectorscope.py,
+            terrain.py, waterfall.py, pipes.py, dvd.py), each holding
+            only its own state, settings and drawing, with a small 3D
+            base (camera, pan/zoom, fit_3d_view, axes, Center/Reset View,
+            auto-rotate) shared by Terrain/Waterfall/Pipes. Split the
+            756-line __init__: the base builds the window chrome and
+            shared state, then calls a per-kind hook, then builds the
+            settings. Move the still-mixed methods (on_key_pressed, the
+            right-click menu, push_audio, update_row_sensitivity,
+            settings_changed, frame_rate_changed, reset_to_defaults,
+            load_saved_settings migrations, apply_effective_colors) so
+            the base never mentions a specific kind. AuxVisualizerWindow
+            becomes a factory (kind -> class) so window.py is unchanged.
+      - [ ] Step 3: settings declared, not hand-built - each kind lists
+            its settings once (e.g. Slider("Decay", "decay", 0.5, 0.99),
+            Switch, Choice, Color), and the settings rows, SAVED_SETTINGS,
+            defaults/reset and the ~67 on_*_changed handlers all come
+            from that list. Replaces the 1,538-line
+            build_settings_controls.
+      - [ ] Step 4: one shared audio analysis (FFT) for all open mini
+            visualizers instead of per window (see the shared-FFT
+            entries below).
+      Test scripts used for this (headless, isolated config) were in
+      the session scratchpad: auxfuzz (every control of every kind),
+      persist, colors, bg, pan, sw, toggle, osc, peak, square, fit,
+      vstest, rev2. Worth turning into a checked-in tests/ suite in
+      step 2 so they survive the session.
 - [ ] Main window: quicker ways to close the sidebar - requested, then
       decided (2026-11-25) against closing it on a click in the
       visualizer: in wide windows the sidebar is pinned beside the
