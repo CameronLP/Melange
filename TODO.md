@@ -117,7 +117,10 @@
 - [x] **Resolved 2026-11-25:** meant the file picker for a .milk file -
       it already existed (Load Preset..., Ctrl+O, and the Browse tab's
       button) but was hard to find; now also in the main menu and the
-      right-click menu. The other ideas below stay open.
+      right-click menu. Opened presets now sit under "Your Presets" at
+      the top of the Browse tree and are remembered between launches
+      (user-presets.json; missing files dropped). Still to do: a way to
+      remove one from Your Presets. The other ideas below stay open.
       "File open preset selector" - requested, waiting on which of
       these is meant (Load Preset... / Ctrl+O already opens a file
       chooser for single .milk files):

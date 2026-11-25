@@ -32,8 +32,10 @@ that react to the same audio.
   [Cream of the Crop](https://github.com/projectM-visualizer/presets-cream-of-the-crop)
   collection and the MilkDrop texture pack, browsable as a Category ›
   Subfolder tree or by search.
-- **Your own presets.** Open `.milk` files with Load Preset… (Ctrl+O) or drop
-  them onto the window. They appear in a section of their own.
+- **Your own presets.** Open `.milk` files with Load Preset… (Ctrl+O, the
+  main menu or the right-click menu) or drop them onto the window. They're
+  listed under Your Presets at the top of the preset browser and are
+  remembered between launches.
 - **Favorites, a queue and playlists.** Star a preset from the visualizer
   (F) or from the browser, queue up what plays next, and save playlists.
 - **A sidebar instead of dialogs.** Presets, Visualizers and Preferences
@@ -171,6 +173,7 @@ Melange keeps its files in `~/.var/app/com.cameronlp.Melange/config/melange/`:
 | `projectm-favorites.json` | Favorite presets |
 | `projectm-playlists.json` | Saved playlists |
 | `profiles.json` | Saved preference profiles |
+| `user-presets.json` | Presets you opened from files (their paths) |
 | `mini_visualizers.json` | Each mini visualizer's settings and size |
 
 The main window's preferences aren't remembered between launches yet. Save
