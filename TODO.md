@@ -934,7 +934,11 @@
 - [ ] Audio not detected on launch - reported bug, not investigated.
       No details yet on reproduction (which audio source, timing,
       whether switching sources or reloading fixes it).
-- [ ] Settings should persist between app launches - requested. This
+- [x] **Done 2026-11-25:** settings.json - every Preferences control
+      (keyed by page + row title) except Audio Source, plus theme, window
+      size/maximized and the Shuffle / Now Playing / queue loop+shuffle
+      toggles; saved 1 s after a change, on close and on Ctrl+Q.
+      Settings should persist between app launches - requested. This
       app currently has zero settings persistence beyond the current
       session, except Settings Profiles' own explicit named-snapshot
       save/load (profile_fields/save_profiles/load_profiles) - there's

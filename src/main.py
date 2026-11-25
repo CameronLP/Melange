@@ -61,7 +61,7 @@ class MelangeApplication(Adw.Application):
 
         quit_action.connect(
             "activate",
-            lambda action, param: self.quit()
+            lambda action, param: self.quit_saving()
         )
 
         self.add_action(quit_action)
@@ -233,6 +233,17 @@ class MelangeApplication(Adw.Application):
         )
 
         about.present(self.get_active_window())
+
+    def quit_saving(self):
+        """Quit (Ctrl+Q), saving the main window's settings first - quitting
+        can skip the window's close-request, where they're also saved."""
+
+        window = self.main_window
+
+        if window is not None and hasattr(window, "save_settings"):
+            window.save_settings()
+
+        self.quit()
 
 
 def main(version):
