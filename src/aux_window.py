@@ -31,8 +31,12 @@ gi.require_version("Adw", "1")
 gi.require_version("GdkPixbuf", "2.0")
 
 from melange.cursor_hider import FullscreenCursorHider
-from gi.repository import Gtk, Adw, Gdk, Gio, GLib, GdkPixbuf
+from gi.repository import Gtk, Adw, Gdk, Gio, GLib, GdkPixbuf, GObject
 import cairo
+
+# Smallest size a mini visualizer window can be resized to.
+AUX_MIN_WIDTH = 100
+AUX_MIN_HEIGHT = 80
 
 AUX_WINDOW_TITLES = {
     "vu": "VU Meter",
@@ -512,6 +516,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.set_title(AUX_WINDOW_TITLES[kind])
 
+        # libadwaita windows default to a 360x200 minimum; these can be
+        # much smaller (e.g. a narrow VU or Peak meter strip).
+        self.set_size_request(AUX_MIN_WIDTH, AUX_MIN_HEIGHT)
+
         # Same auto-hiding header as the main window/mirror windows
         # (see mouse_move/hide_toolbar below) - these are meant to sit
         # in a corner of the screen alongside the visualizer without a
@@ -659,35 +667,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         content_overlay = Gtk.Overlay()
         content_overlay.set_child(self.drawing_area)
 
-        # Gtk.MenuButton, not a plain Gtk.Button with a hand-rolled
-        # popup()/set_parent() - that manual version (tried first) did
-        # not reliably open the popover on click. MenuButton is GTK's
-        # own purpose-built "click this, show that popover" widget
-        # (already used and working elsewhere in this app, e.g. the
-        # hamburger menu), so handing it the popover directly via
-        # set_popover() is the standard, robust way to wire this up
-        # rather than driving Gtk.Popover.popup()/popdown() by hand.
-        # Its CSS node name is "menubutton", not "button", though -
-        # style.css's ".nav-arrow-button" rule (previously
-        # "button.nav-arrow-button") was widened to match either, or
-        # this would render with GTK's bare default menubutton look
-        # instead of matching the other overlay controls.
-        #
-        # build_settings_popover() itself isn't called here, though -
-        # it reads kind-specific state (self.peak_hold_seconds,
-        # self.pipes_max_pipes, self.scope_time_base,
-        # self.vector_persistence...) that, for several kinds, isn't
-        # actually assigned until further down in this same method.
-        # Calling it this early crashed __init__ with an AttributeError
-        # for exactly those kinds (Peak Meter, Oscilloscope, Vector
-        # Scope, Pipes) the moment their window was opened - silently,
-        # from the caller's side (window.py's aux_window_toggled),
-        # since nothing here catches it: the toggle action's state
-        # still flips to "on" but the window itself never gets
-        # created. See the real popover build + set_popover() call at
-        # the end of this method instead, once every kind's state is
-        # guaranteed to exist.
-        self.settings_button = Gtk.MenuButton(
+        # The settings sidebar is built at the end of __init__: its
+        # controls read kind-specific state assigned further down.
+        # Toggles the settings sidebar (see build_settings_sidebar) -
+        # bound both ways to its show-sidebar in __init__'s last lines.
+        self.settings_button = Gtk.ToggleButton(
             icon_name="preferences-system-symbolic",
             tooltip_text="Settings"
         )
@@ -717,7 +701,36 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.toolbar_view.set_content(content_overlay)
 
-        self.set_content(self.toolbar_view)
+        # Settings slide in from the right over the visualizer (always
+        # the overlay/collapsed form - these windows are small). It
+        # replaced a popover that was often taller than the window
+        # itself (Pipes: ~860px in a 360px window) and whose
+        # click-outside dismissal fought with the dropdowns and color
+        # pickers inside it. Clicking the visualizer or Esc closes it.
+        self.settings_split = Adw.OverlaySplitView(
+            collapsed=True,
+            sidebar_position=Gtk.PackType.END,
+            min_sidebar_width=100,
+            max_sidebar_width=320,
+            sidebar_width_fraction=0.6,
+            enable_show_gesture=False,
+        )
+        self.settings_split.set_content(self.toolbar_view)
+
+        self.set_content(self.settings_split)
+
+        # Narrow windows: drop the title text (it's what kept the header
+        # 240px wide), then the fullscreen button (F11 still works).
+        narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 280px"))
+        narrow.add_setter(self.header, "show-title", False)
+        narrow.add_setter(self.settings_split, "sidebar-width-fraction", 1.0)
+        self.add_breakpoint(narrow)
+
+        very_narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 150px"))
+        very_narrow.add_setter(self.header, "show-title", False)
+        very_narrow.add_setter(self.settings_split, "sidebar-width-fraction", 1.0)
+        very_narrow.add_setter(self.fullscreen_button, "visible", False)
+        self.add_breakpoint(very_narrow)
 
         # Drag-to-move from anywhere in the content - scoped to just
         # the drawing area (not content_overlay, its parent) so this
@@ -788,24 +801,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             drag_gesture.connect("drag-begin", self.on_drag_begin)
             self.drawing_area.add_controller(drag_gesture)
 
-        # Belt-and-suspenders click-outside-to-close for the settings
-        # popover, on top of Gtk.Popover's own default autohide - CAPTURE
-        # phase on the window itself so it sees a press anywhere before
-        # any other controller does, but doesn't claim the sequence
-        # (no set_state call), so normal handling elsewhere - the
-        # drag/nav gestures, the header's own buttons, the popover's
-        # own content - still runs afterward exactly as before. A
-        # click that lands on settings_button or inside the popover's
-        # own surface never reaches this handler in the first place -
-        # each owns its own hit region - so this only ever fires for
-        # genuine "elsewhere" clicks, matching what popdown() on an
-        # already-closed popover safely no-ops on anyway.
-        dismiss_popover_click = Gtk.GestureClick()
-        dismiss_popover_click.set_button(0)
-        dismiss_popover_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        dismiss_popover_click.connect("pressed", self.on_window_pressed)
-        self.add_controller(dismiss_popover_click)
-
         # Same fullscreen action/icon-sync/Escape-to-exit pattern as
         # MirrorWindow (mirror_window.py).
         fullscreen_action = Gio.SimpleAction.new("toggle-fullscreen", None)
@@ -817,10 +812,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # Pointer disappears after a moment's stillness in fullscreen.
         self.cursor_hider = FullscreenCursorHider(
             self,
-            may_hide=lambda: not (
-                getattr(self, "settings_popover", None) is not None
-                and self.settings_popover.get_visible()
-            )
+            may_hide=lambda: not self.settings_split.get_show_sidebar()
         )
 
         escape_controller = Gtk.EventControllerKey()
@@ -1139,10 +1131,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # see the comment there for why (every kind's state needs to
         # exist first, and this is the first point in __init__ where
         # that's guaranteed).
-        self.settings_popover = self.build_settings_popover()
-        self.settings_button.set_popover(self.settings_popover)
+        self.settings_split.set_sidebar(
+            self.build_settings_sidebar(self.build_settings_controls())
+        )
+        self.settings_button.bind_property(
+            "active", self.settings_split, "show-sidebar",
+            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
+        )
 
-    def build_settings_popover(self):
+    # Builds every control for this kind as a plain list of
+    # [Label, control...] row boxes (or bare buttons);
+    # build_settings_sidebar turns those into libadwaita rows.
+    def build_settings_controls(self):
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.set_margin_start(10)
@@ -2711,10 +2711,107 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             xy_curved_row.append(xy_curved_switch)
             box.append(xy_curved_row)
 
-        popover = Gtk.Popover()
-        popover.set_child(box)
+        return box
 
-        return popover
+    def build_settings_sidebar(self, controls):
+
+        def children(widget):
+            out = []
+            child = widget.get_first_child()
+            while child is not None:
+                out.append(child)
+                child = child.get_next_sibling()
+            return out
+
+        group = Adw.PreferencesGroup()
+        buttons = []
+
+        for row_box in children(controls):
+            parts = children(row_box)
+            controls.remove(row_box)
+
+            for part in parts:
+                row_box.remove(part)
+
+            if parts and isinstance(parts[0], Gtk.Label):
+                row = Adw.ActionRow(title=parts[0].get_label())
+
+                for part in parts[1:]:
+                    part.set_valign(Gtk.Align.CENTER)
+
+                    if isinstance(part, Gtk.Scale):
+                        part.set_hexpand(False)
+                        part.set_size_request(130, -1)
+
+                    row.add_suffix(part)
+
+                if len(parts) == 2 and isinstance(parts[1], Gtk.Switch):
+                    row.set_activatable_widget(parts[1])
+
+                group.add(row)
+            else:
+                buttons += [part for part in parts if isinstance(part, Gtk.Button)]
+
+        page = Adw.PreferencesPage()
+        page.add(group)
+
+        if buttons:
+            button_box = Gtk.Box(spacing=6, homogeneous=True, margin_top=6)
+
+            for button in buttons:
+                button.add_css_class("pill")
+                button_box.append(button)
+
+            button_group = Adw.PreferencesGroup()
+            button_group.add(button_box)
+            page.add(button_group)
+
+        # Several settings only took effect on the next audio chunk
+        # (nothing redraws while it's quiet or paused); redraw on every
+        # change so it's visible straight away.
+        for widget in self.iter_widgets(page):
+            if isinstance(widget, Gtk.Switch):
+                widget.connect_after("notify::active", self.settings_changed)
+            elif isinstance(widget, (Gtk.Scale, Gtk.SpinButton)):
+                widget.connect_after("value-changed", self.settings_changed)
+            elif isinstance(widget, Gtk.DropDown):
+                widget.connect_after("notify::selected", self.settings_changed)
+            elif isinstance(widget, Gtk.ColorDialogButton):
+                widget.connect_after("notify::rgba", self.settings_changed)
+
+        header = Adw.HeaderBar(show_start_title_buttons=False)
+        header.set_title_widget(
+            Adw.WindowTitle(title="Settings", subtitle=AUX_WINDOW_TITLES[self.kind])
+        )
+
+        sidebar = Adw.ToolbarView()
+        sidebar.add_top_bar(header)
+        sidebar.set_content(page)
+
+        # Scrolls sideways instead of keeping the window from getting
+        # narrower than the settings.
+        scroller = Gtk.ScrolledWindow(
+            hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+            vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+            child=sidebar,
+        )
+
+        return scroller
+
+    def iter_widgets(self, widget):
+
+        yield widget
+        child = widget.get_first_child()
+
+        while child is not None:
+            yield from self.iter_widgets(child)
+            child = child.get_next_sibling()
+
+    def settings_changed(self, *args):
+
+        self.terrain_dirty = True
+        self.waterfall_dirty = True
+        self.drawing_area.queue_draw()
 
     def on_color_changed(self, button, param):
 
@@ -3198,11 +3295,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             bounds.get_y() + start_y,
             gesture.get_current_event_time()
         )
-
-    def on_window_pressed(self, gesture, n_press, x, y):
-
-        if self.settings_popover.get_visible():
-            self.settings_popover.popdown()
 
     def on_terrain_drag_begin(self, gesture, start_x, start_y):
 
@@ -6176,6 +6268,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         )
 
     def on_key_pressed(self, controller, keyval, keycode, state):
+
+        if keyval == Gdk.KEY_Escape and self.settings_split.get_show_sidebar():
+            self.settings_split.set_show_sidebar(False)
+            return True
 
         if keyval == Gdk.KEY_Escape and self.is_fullscreen():
             self.unfullscreen()

@@ -644,7 +644,11 @@
       limiting dimension instead, to confirm that case - which was
       already correct - didn't regress: 1px above vs 4px below,
       basically unchanged from before.
-- [ ] Mini visualizer settings popover doesn't close on click-outside,
+- [x] **Done 2026-11-25:** the popover is gone - settings are now a
+      sidebar inside each mini visualizer (slides in from the right,
+      scrolls, closes on click-outside/Esc, no popup grabs). Original
+      report kept below.
+      Mini visualizer settings popover doesn't close on click-outside,
       and the gear icon itself sometimes doesn't respond - reported
       bug. This is a *known-unresolved* area, not a fresh report: a
       CAPTURE-phase click-outside fix was applied earlier this
