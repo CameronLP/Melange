@@ -398,7 +398,7 @@ PALETTE_STOPS = {
 }
 
 PALETTE_LABELS = [
-    ("rainbow", "Rainbow"), ("fire", "Fire"), ("ice", "Ice"),
+    ("main", "Main Visualizer"), ("rainbow", "Rainbow"), ("fire", "Fire"), ("ice", "Ice"),
     ("viridis", "Viridis"), ("magma", "Magma"), ("plasma", "Plasma"),
     ("ocean", "Ocean"), ("sunset", "Sunset"), ("neon", "Neon"),
     ("forest", "Forest"), ("matrix", "Matrix"), ("candy", "Candy"),
@@ -407,6 +407,54 @@ PALETTE_LABELS = [
 
 _PALETTE_LUTS = {}
 
+# "Main Visualizer" palette: colors sampled from the main window's
+# current frame (update_main_visualizer_palette, fed from
+# projectm_view.sample_colors twice a second while a mini visualizer is
+# open). Neutral until the first sample arrives.
+PALETTE_STOPS["main"] = [(0.08, 0.08, 0.12), (0.25, 0.25, 0.35), (0.5, 0.5, 0.65), (0.75, 0.75, 0.88), (1.0, 1.0, 1.0)]
+MAIN_PALETTE_VERSION = [0]
+
+
+def update_main_visualizer_palette(pixels):
+    """RGBA bytes of a small copy of the main visualizer's frame ->
+    five colors, dark to bright, eased toward over ~1.5 s."""
+
+    colors = [
+        (pixels[i] / 255, pixels[i + 1] / 255, pixels[i + 2] / 255)
+        for i in range(0, len(pixels) - 3, 4)
+    ]
+
+    def luminance(c):
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+    # Mostly-black presets: judge by what's actually lit.
+    lit = [c for c in colors if max(c) > 0.08] or colors
+    lit.sort(key=luminance)
+
+    stops = []
+    count = len(lit)
+
+    for k in range(5):
+        chunk = lit[k * count // 5:(k + 1) * count // 5] or lit[-1:]
+        r = sum(c[0] for c in chunk) / len(chunk)
+        g = sum(c[1] for c in chunk) / len(chunk)
+        b = sum(c[2] for c in chunk) / len(chunk)
+
+        # A little more vivid, and a dark -> bright ladder, so washed-
+        # out or very dark presets still give a usable palette.
+        h, sat, val = colorsys.rgb_to_hsv(r, g, b)
+        sat = min(1.0, sat * 1.3 + 0.05)
+        val = max(val, 0.18 + 0.2 * k)
+        stops.append(colorsys.hsv_to_rgb(h, sat, min(1.0, val)))
+
+    current = PALETTE_STOPS["main"]
+    PALETTE_STOPS["main"] = [
+        tuple(old[c] + (new[c] - old[c]) * 0.35 for c in range(3))
+        for old, new in zip(current, stops)
+    ]
+    _PALETTE_LUTS.pop("main", None)
+    MAIN_PALETTE_VERSION[0] += 1
+
 
 def _palette_lut(name):
 
@@ -414,9 +462,12 @@ def _palette_lut(name):
 
     if lut is None:
         stops = []
-        for hex_color in PALETTE_STOPS[name]:
+        for stop in PALETTE_STOPS[name]:
+            if isinstance(stop, tuple):
+                stops.append(stop)
+                continue
             color = Gdk.RGBA()
-            color.parse(hex_color)
+            color.parse(stop)
             stops.append((color.red, color.green, color.blue))
 
         lut = []
@@ -5863,6 +5914,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         return (
             self.num_bars, self.spectrogram_palette,
+            MAIN_PALETTE_VERSION[0] if self.spectrogram_palette == "main" else 0,
             self.spectrogram_color_ceiling,
             (lo.red, lo.green, lo.blue), (hi.red, hi.green, hi.blue),
         )

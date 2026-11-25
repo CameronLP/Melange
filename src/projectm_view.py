@@ -29,6 +29,7 @@ import array
 import ctypes
 import locale
 import os
+import time
 import zipfile
 from pathlib import Path
 from typing import NamedTuple
@@ -328,6 +329,14 @@ class ProjectMView(Gtk.GLArea):
         # hides); projectM does no work and audio is dropped.
         self.paused = False
         self.freeze_pending = False
+
+        # Color sampling for the mini visualizers' "Main Visualizer"
+        # palette: twice a second the frame is shrunk on the GPU to
+        # 32x32 and read back (4 KB). on_colors(bytes RGBA) gets it;
+        # None = off.
+        self.on_colors = None
+        self.color_sample = None         # (framebuffer, texture, 32, 32)
+        self.last_color_sample = 0.0
         self.frozen = None               # (framebuffer, texture, width, height)
 
         self.set_required_version(3, 3)
@@ -388,6 +397,7 @@ class ProjectMView(Gtk.GLArea):
         self.make_current()
         self.free_offscreen()
         self.frozen = self.free_buffer(self.frozen)
+        self.color_sample = self.free_buffer(self.color_sample)
 
         if self.handle:
             _lib.projectm_destroy(self.handle)
@@ -506,6 +516,12 @@ class ProjectMView(Gtk.GLArea):
             self.freeze_pending = False
             self.store_frozen_frame(framebuffer.value, width, height)
 
+        if self.on_colors is not None:
+            now = time.monotonic()
+            if now - self.last_color_sample >= 0.5:
+                self.last_color_sample = now
+                self.sample_colors(framebuffer.value, width, height)
+
         return True
 
     # --- pause ----------------------------------------------------------
@@ -528,6 +544,28 @@ class ProjectMView(Gtk.GLArea):
             self.last_frame_time = None
 
         self.queue_render()
+
+    def sample_colors(self, framebuffer, width, height):
+
+        size = 32
+
+        if self.color_sample is None:
+            self.color_sample = self.make_buffer(size, size)
+
+        _gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer)
+        _gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, self.color_sample[0])
+        _gl.glBlitFramebuffer(
+            0, 0, width, height, 0, 0, size, size, GL_COLOR_BUFFER_BIT, GL_LINEAR
+        )
+        _gl.glBindFramebuffer(GL_READ_FRAMEBUFFER, self.color_sample[0])
+
+        pixels = (ctypes.c_ubyte * (size * size * 4))()
+        _gl.glReadPixels(0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE, pixels)
+        _gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer)
+
+        callback = self.on_colors
+        data = bytes(pixels)
+        GLib.idle_add(lambda: callback(data) and False)
 
     def store_frozen_frame(self, framebuffer, width, height):
 

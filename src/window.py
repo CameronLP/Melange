@@ -33,7 +33,7 @@ gi.require_version("Pango", "1.0")
 
 from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.mirror_window import MirrorWindow
-from melange.aux_window import AuxVisualizerWindow
+from melange.aux_window import AuxVisualizerWindow, update_main_visualizer_palette
 from melange.now_playing import NowPlayingWatcher
 from melange import projectm_view
 from melange.preset_manager import PresetManager
@@ -285,6 +285,7 @@ class MelangeWindow(Adw.ApplicationWindow):
                 on_preset_failed=self.on_projectm_preset_failed
             )
             self.projectm_view.on_beat = self.on_projectm_beat
+            self.projectm_view.on_colors = self.on_projectm_colors
             visualizer = self.projectm_view
         else:
             print("Visualizer unavailable:", reason)
@@ -2452,6 +2453,12 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if action is not None:
             action.set_state(GLib.Variant("b", False))
+
+    def on_projectm_colors(self, pixels):
+
+        # Only worth working out while a mini visualizer is open.
+        if self.aux_windows:
+            update_main_visualizer_palette(pixels)
 
     def forward_audio_to_aux_windows(self, data):
 
