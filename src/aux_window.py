@@ -40,11 +40,11 @@ import cairo
 # ~/.config/melange/mini_visualizers.json (see load_saved_settings).
 # Everything a setting control changes, plus the 3D views' camera.
 SAVED_SETTINGS = [
-    "color", "color_mode", "num_bars", "decay", "show_labels",
+    "color", "color_style", "line_gradient", "line_color_lo", "line_color_hi", "num_bars", "decay", "show_labels",
     "mirror_reflection", "maintain_aspect_ratio", "scope_zoom",
     "xy_line_width", "xy_points", "xy_curved",
     "vu_style", "vu_peak_hold", "vu_segments",
-    "peak_hold_seconds", "peak_hold_color_custom", "peak_hold_color",
+    "peak_hold_seconds", "peak_hold_color_mode", "peak_hold_color",
     "spectrum_peak_hold", "spectrum_height_scale", "spectrum_style",
     "scope_time_base", "scope_trigger", "vector_persistence", "vector_dot_size",
     "spectrogram_vertical", "spectrogram_speed", "spectrogram_palette",
@@ -69,7 +69,8 @@ SAVED_SETTINGS = [
     "compact_mode", "freq_min", "freq_max", "xy_goniometer",
     "terrain_auto_rotate", "terrain_rotate_speed",
     "waterfall_auto_rotate", "waterfall_rotate_speed",
-    "view_hint_shown",
+    "view_hint_shown", "vector_auto_gain", "color_sync", "reverse_colors",
+    "scope_line_width", "peak_scale",
 ]
 
 # Starting camera (azimuth, elevation in degrees) of the 3D kinds -
@@ -407,6 +408,78 @@ PALETTE_LABELS = [
 
 _PALETTE_LUTS = {}
 
+# "Main Visualizer" palette: colors sampled from the main window's
+# current frame (update_main_visualizer_palette, fed from
+# projectm_view.sample_colors twice a second while a mini visualizer is
+# open). Neutral until the first sample arrives.
+PALETTE_STOPS["main"] = [(0.08, 0.08, 0.12), (0.25, 0.25, 0.35), (0.5, 0.5, 0.65), (0.75, 0.75, 0.88), (1.0, 1.0, 1.0)]
+MAIN_PALETTE_VERSION = [0]
+
+# The main frame's most prominent color (vivid and bright, weighted by
+# how much of the frame it covers) - what Solid moves toward.
+MAIN_DOMINANT = [(0.75, 0.75, 0.88)]
+
+
+def update_main_visualizer_palette(pixels):
+    """RGBA bytes of a small copy of the main visualizer's frame ->
+    five colors, dark to bright, eased toward over ~1.5 s."""
+
+    colors = [
+        (pixels[i] / 255, pixels[i + 1] / 255, pixels[i + 2] / 255)
+        for i in range(0, len(pixels) - 3, 4)
+    ]
+
+    def luminance(c):
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+    # Mostly-black presets: judge by what's actually lit.
+    lit = [c for c in colors if max(c) > 0.08] or colors
+    lit.sort(key=luminance)
+
+    stops = []
+    count = len(lit)
+
+    for k in range(5):
+        chunk = lit[k * count // 5:(k + 1) * count // 5] or lit[-1:]
+        r = sum(c[0] for c in chunk) / len(chunk)
+        g = sum(c[1] for c in chunk) / len(chunk)
+        b = sum(c[2] for c in chunk) / len(chunk)
+
+        # A little more vivid, and a dark -> bright ladder, so washed-
+        # out or very dark presets still give a usable palette.
+        h, sat, val = colorsys.rgb_to_hsv(r, g, b)
+        sat = min(1.0, sat * 1.3 + 0.05)
+        val = max(val, 0.18 + 0.2 * k)
+        stops.append(colorsys.hsv_to_rgb(h, sat, min(1.0, val)))
+
+    # Dominant: hue buckets weighted by saturation x brightness.
+    buckets = {}
+    for c in lit:
+        h, sat, val = colorsys.rgb_to_hsv(*c)
+        weight = sat * val
+        key = int(h * 12) % 12
+        total, rs, gs, bs = buckets.get(key, (0.0, 0.0, 0.0, 0.0))
+        buckets[key] = (total + weight, rs + c[0] * weight, gs + c[1] * weight, bs + c[2] * weight)
+
+    best = max(buckets.values(), key=lambda bucket: bucket[0], default=None)
+
+    if best is not None and best[0] > 0:
+        h, sat, val = colorsys.rgb_to_hsv(best[1] / best[0], best[2] / best[0], best[3] / best[0])
+        dominant = colorsys.hsv_to_rgb(h, min(1.0, sat * 1.2 + 0.1), max(val, 0.7))
+    else:
+        dominant = stops[3]
+
+    old = MAIN_DOMINANT[0]
+    MAIN_DOMINANT[0] = tuple(old[c] + (dominant[c] - old[c]) * 0.35 for c in range(3))
+
+    current = PALETTE_STOPS["main"]
+    PALETTE_STOPS["main"] = [
+        tuple(old[c] + (new[c] - old[c]) * 0.35 for c in range(3))
+        for old, new in zip(current, stops)
+    ]
+    _PALETTE_LUTS.pop("main", None)
+    MAIN_PALETTE_VERSION[0] += 1
+
 
 def _palette_lut(name):
 
@@ -414,9 +487,12 @@ def _palette_lut(name):
 
     if lut is None:
         stops = []
-        for hex_color in PALETTE_STOPS[name]:
+        for stop in PALETTE_STOPS[name]:
+            if isinstance(stop, tuple):
+                stops.append(stop)
+                continue
             color = Gdk.RGBA()
-            color.parse(hex_color)
+            color.parse(stop)
             stops.append((color.red, color.green, color.blue))
 
         lut = []
@@ -447,7 +523,7 @@ def palette_color(name, level, lo=None, hi=None):
     return _palette_lut(name)[int(level * 255 + 0.5)]
 
 
-PALETTE_CHOICES = [("gradient", "Custom Gradient")] + PALETTE_LABELS
+PALETTE_CHOICES = [("gradient", "Custom")] + PALETTE_LABELS
 
 # Same idea as PALETTE_CHOICES, for the kinds that only ever had a
 # single solid Color (X-Y Scope, Spectrum, VU Meter's needle style,
@@ -456,14 +532,28 @@ PALETTE_CHOICES = [("gradient", "Custom Gradient")] + PALETTE_LABELS
 # (today's only behavior) against "Rainbow" instead. Backed by one
 # shared self.color_mode field, the same way self.color itself is
 # already shared generic state across these kinds.
-COLOR_MODE_CHOICES = [("solid", "Solid")] + PALETTE_LABELS
+# Colors group "Color Style" (not "Style" - Spectrum and VU already have
+# a Style row for their shape): how a kind is colored. Where the colors come
+# from (your own vs the main visualizer) is the Match slider.
+STYLE_CHOICES = [("solid", "Solid"), ("gradient", "Gradient")]
 
-# VU/Peak meters: Classic is the hardware green/yellow/red zones.
-METER_COLOR_MODE_CHOICES = [("classic", "Classic"), ("solid", "Solid")] + PALETTE_LABELS
+PEAK_HOLD_COLOR_CHOICES = [("auto", "Automatic"), ("custom", "Custom"), ("main", "Main Visualizer")]
+METER_STYLE_CHOICES = [("classic", "Classic")] + STYLE_CHOICES
 
+# Rows that belong in the Colors group, in display order (whichever a
+# kind has). Built partly by build_settings_controls, partly by
+# build_color_controls; build_settings_page gathers them.
+COLOR_ROW_ORDER = [
+    "Color Style", "Color", "Gradient", "Low Color", "High Color", "High Level",
+    "Reverse", "Bass Color", "Low Mid Color", "High Mid Color", "Treble Color",
+    "Pulse Color", "Peak Hold Color", "Match Main Visualizer",
+    "Background", "Background Color",
+]
+
+# A color (Background Color), the main visualizer's darkest color, or
+# see-through to the desktop.
 BACKGROUND_CHOICES = [
-    ("theme", "Match Theme"), ("black", "Black"),
-    ("transparent", "Transparent"), ("custom", "Custom Color"),
+    ("custom", "Color"), ("main", "Main Visualizer"), ("transparent", "Transparent"),
 ]
 
 # 0 = redraw on every audio chunk (no cap).
@@ -667,6 +757,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     # live audio (a level meter, an oscilloscope trace, a spectrum...),
     # not a copy of what the main preset draws, so it keeps its own
     # small buffer of the latest PCM and draws it directly with Cairo.
+    # What the drawing code reads: "solid", "classic", or a palette key.
+    # Derived from Style + Gradient; the per-frame color swap
+    # (apply_effective_colors) overrides it while drawing.
+    @property
+    def color_mode(self):
+        if self._color_mode_override is not None:
+            return self._color_mode_override
+        if self.color_style in ("solid", "classic"):
+            return self.color_style
+        return self.line_gradient
+
+    @color_mode.setter
+    def color_mode(self, value):
+        self._color_mode_override = value
+
     def __init__(self, primary, kind, **kwargs):
 
         super().__init__(
@@ -738,19 +843,28 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # independently, and X-Y Scope's classic look is the plain
         # green Lissajous trace (self.color's own default, "#33cc55"),
         # not a rainbow one.
-        self.color_mode = (
-            "classic" if kind in ("vu", "peak")
-            else "solid" if kind in ("oscilloscope", "vectorscope", "xy", "spectrum")
-            else "rainbow"
-        )
-        self.color_mode_choices = (
-            METER_COLOR_MODE_CHOICES if kind in ("vu", "peak") else COLOR_MODE_CHOICES
-        )
+        # Colors: Style (Solid / Gradient / Classic for meters), and the
+        # Gradient for line kinds (heatmap kinds have their own
+        # *_palette). color_mode is what the drawing code reads - see
+        # the property below.
+        self._color_mode_override = None
+        self.color_style = "classic" if kind in ("vu", "peak") else "solid"
+        self.line_gradient = "rainbow"
+        self.line_color_lo = Gdk.RGBA()
+        self.line_color_lo.parse("#1a3cff")
+        self.line_color_hi = Gdk.RGBA()
+        self.line_color_hi.parse("#ff3cc8")
 
         # Shared settings (every kind) - see build_shared_controls.
-        self.background_mode = "custom" if kind == "dvd" else "theme"
+        self.background_mode = "custom"
         self.background_color = Gdk.RGBA()
-        self.background_color.parse("#0d0d0d" if kind == "dvd" else "#000000")
+        # Starts as the theme's canvas shade (DVD: its near-black).
+        if kind == "dvd":
+            self.background_color.parse("#0d0d0d")
+        else:
+            r, g, b = self.theme_background_rgb()
+            self.background_color.red, self.background_color.green, self.background_color.blue = r, g, b
+            self.background_color.alpha = 1.0
         self.gain = 1.0
         self.frame_rate_cap = 0
         self.last_draw_queued = 0.0
@@ -764,6 +878,25 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # standard goniometer view.
         self.xy_goniometer = False
 
+        # Vector Scope: scale the cloud to recent loudness (fast attack,
+        # ~2s release) so it neither presses into the edges on loud
+        # masters nor shrinks to a dot on quiet ones.
+        self.vector_auto_gain = True
+        self.vector_envelope = 0.0
+
+        # Oscilloscope trace thickness (px).
+        self.scope_line_width = 1.2
+
+        # Peak meter: "db" (-60..0 dBFS, the default) or "linear".
+        self.peak_scale = "db"
+
+        # Colors: blend toward the main visualizer's (0 = own colors,
+        # 1 = fully matched), and flip palettes/gradients end to end.
+        self.color_sync = 0.0
+        self.reverse_colors = False
+        self.color_signature = None
+        self.effective_signatures = {}
+
         # Terrain/Waterfall can turn slowly on their own, like Pipes.
         self.terrain_auto_rotate = False
         self.terrain_rotate_speed = 6.0
@@ -775,6 +908,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.settings_rows = {}
         self.row_subtitles = {}
+        self.settings_window = None
         self.zoom_scale = None
         self.context_menu = None
         self.xy_line_width = 1.0
@@ -1108,7 +1242,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # near-black/near-white) is the existing default look for the
         # hold marker on VU Meter/Peak Meter/Spectrum, unchanged unless
         # the user opts into a fixed custom color instead.
-        self.peak_hold_color_custom = False
+        self.peak_hold_color_mode = "auto"
         self.peak_hold_color = Gdk.RGBA()
         self.peak_hold_color.parse("#ffffff")
 
@@ -1364,8 +1498,20 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.setup_extra_controls()
 
+        self.settings_split.connect("notify::show-sidebar", self.on_show_sidebar_changed)
+
         # Size changes are saved too (not while maximized/fullscreen).
         self.connect("notify::default-width", self.schedule_save)
+
+        # X-Y / Vector Scope: Maintain Aspect Ratio also keeps the
+        # window square - snapped once a resize settles, since GNOME
+        # doesn't let apps constrain the shape while it's being dragged.
+        self.square_timer = None
+        self.last_square_side = None
+        if self.kind in ("xy", "vectorscope"):
+            self.connect("notify::default-width", self.schedule_square_snap)
+            self.connect("notify::default-height", self.schedule_square_snap)
+            self.connect("notify::fullscreened", self.schedule_square_snap)
         self.connect("notify::default-height", self.schedule_save)
         self.settings_button.bind_property(
             "active", self.settings_split, "show-sidebar",
@@ -1403,31 +1549,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             color_row.append(color_button)
             box.append(color_row)
 
-            color_mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
-            color_mode_label = Gtk.Label(label="Color Mode", xalign=0, hexpand=True)
-            color_mode_row.append(color_mode_label)
-
-            color_mode_dropdown = Gtk.DropDown.new_from_strings(
-                [label for _, label in self.color_mode_choices]
-            )
-
-            current_color_mode_index = next(
-                (
-                    i for i, (key, _) in enumerate(self.color_mode_choices)
-                    if key == self.color_mode
-                ),
-                0
-            )
-            color_mode_dropdown.set_selected(current_color_mode_index)
-
-            color_mode_dropdown.connect(
-                "notify::selected",
-                self.on_color_mode_changed
-            )
-
-            color_mode_row.append(color_mode_dropdown)
-            box.append(color_mode_row)
 
         if self.kind == "vu":
 
@@ -1578,7 +1699,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
 
             waterfall_palette_label = Gtk.Label(
-                label="Palette", xalign=0, hexpand=True
+                label="Gradient", xalign=0, hexpand=True
             )
             waterfall_palette_row.append(waterfall_palette_label)
 
@@ -1906,20 +2027,26 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
             hold_color_row.append(hold_color_label)
 
-            hold_color_switch = Gtk.Switch()
-            hold_color_switch.set_active(self.peak_hold_color_custom)
-            hold_color_switch.set_valign(Gtk.Align.CENTER)
-            hold_color_switch.set_tooltip_text(
-                "Off follows the theme (near-black/near-white), same "
-                "as this window's other structural marks."
+            # Automatic follows the background (near-white/near-black,
+            # like the other structural marks); Main Visualizer uses
+            # its brightest color.
+            hold_keys = [key for key, _ in PEAK_HOLD_COLOR_CHOICES]
+            hold_mode_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in PEAK_HOLD_COLOR_CHOICES]
+            )
+            hold_mode_dropdown.set_valign(Gtk.Align.CENTER)
+            hold_mode_dropdown.set_selected(
+                hold_keys.index(self.peak_hold_color_mode)
+                if self.peak_hold_color_mode in hold_keys else 0
             )
 
-            hold_color_switch.connect(
-                "notify::active",
-                self.on_peak_hold_color_custom_changed
-            )
+            def hold_mode_changed(dropdown, param):
+                index = dropdown.get_selected()
+                if 0 <= index < len(hold_keys):
+                    self.peak_hold_color_mode = hold_keys[index]
 
-            hold_color_row.append(hold_color_switch)
+            hold_mode_dropdown.connect("notify::selected", hold_mode_changed)
+            hold_color_row.append(hold_mode_dropdown)
 
             hold_color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
             hold_color_button.set_valign(Gtk.Align.CENTER)
@@ -2023,7 +2150,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
 
             aspect_label = Gtk.Label(
-                label="Equal Aspect Ratio", xalign=0, hexpand=True
+                label="Maintain Aspect Ratio", xalign=0, hexpand=True
             )
             aspect_row.append(aspect_label)
 
@@ -2166,7 +2293,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             palette_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
-            palette_label = Gtk.Label(label="Palette", xalign=0, hexpand=True)
+            palette_label = Gtk.Label(label="Gradient", xalign=0, hexpand=True)
             palette_row.append(palette_label)
 
             palette_dropdown = Gtk.DropDown.new_from_strings(
@@ -2249,7 +2376,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             )
 
             terrain_palette_label = Gtk.Label(
-                label="Palette", xalign=0, hexpand=True
+                label="Gradient", xalign=0, hexpand=True
             )
             terrain_palette_row.append(terrain_palette_label)
 
@@ -3024,6 +3151,27 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.add_scale(box, "Lowest Frequency", "freq_min", 20, 1000, 10, hertz, self.frequency_range_changed)
             self.add_scale(box, "Highest Frequency", "freq_max", 1000, SAMPLE_RATE / 2, 50, hertz, self.frequency_range_changed)
 
+        if self.kind in ("xy", "vectorscope"):
+            self.row_subtitles["Maintain Aspect Ratio"] = "Keep the plot and the window square"
+
+        if self.kind == "peak":
+            self.add_choice(
+                box, "Scale", "peak_scale", [("db", "Decibels"), ("linear", "Linear")],
+                subtitle="Decibels spread out quiet levels; Linear is raw amplitude"
+            )
+
+        if self.kind == "oscilloscope":
+            self.add_scale(
+                box, "Line Width", "scope_line_width", 0.5, 6.0, 0.1,
+                lambda value: f"{value:.1f}px"
+            )
+
+        if self.kind == "vectorscope":
+            self.add_switch(
+                box, "Auto Gain", "vector_auto_gain",
+                subtitle="Keep the cloud a steady size whatever the volume"
+            )
+
         if self.kind == "xy":
             self.add_switch(
                 box, "Goniometer View", "xy_goniometer",
@@ -3037,12 +3185,40 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 lambda value: f"{value:.0f}°/s"
             )
 
-    def build_shared_controls(self, box):
+    def build_color_controls(self, box):
+        """Rows for the Colors group (build_settings_page moves the
+        kind's own color rows - Color, Gradient, Peak Hold Color, Pipes
+        band colors... - in beside these)."""
 
-        self.group_break(box, "Window")
+        line_kind = self.kind in ("xy", "spectrum", "vu", "peak", "oscilloscope", "vectorscope")
+
+        if line_kind:
+            choices = METER_STYLE_CHOICES if self.kind in ("vu", "peak") else STYLE_CHOICES
+            self.add_choice(box, "Color Style", "color_style", choices)
+            self.add_choice(box, "Gradient", "line_gradient", PALETTE_CHOICES)
+            self.add_color(box, "Low Color", "line_color_lo")
+            self.add_color(box, "High Color", "line_color_hi")
+
+        if self.kind not in ("dvd", "pipes"):
+            self.add_switch(box, "Reverse", "reverse_colors")
+
+        self.add_scale(
+            box, "Match Main Visualizer", "color_sync", 0.0, 1.0, 0.05,
+            lambda value: "Off" if value <= 0 else f"{value * 100:.0f}%"
+        )
+        self.row_subtitles["Match Main Visualizer"] = (
+            "100% uses its colors"
+        )
 
         self.add_choice(box, "Background", "background_mode", BACKGROUND_CHOICES, self.background_changed)
         self.add_color(box, "Background Color", "background_color", self.background_changed)
+
+    def build_shared_controls(self, box):
+
+        self.build_color_controls(box)
+
+        self.group_break(box, "Window")
+
         self.add_scale(box, "Gain", "gain", 0.25, 4.0, 0.05, lambda value: f"×{value:.2f}")
         self.add_choice(
             box, "Frame Rate", "frame_rate_cap", FRAME_RATE_CHOICES, self.frame_rate_changed,
@@ -3062,6 +3238,42 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def build_settings_sidebar(self, controls):
 
+        page = self.build_settings_page(controls)
+
+        header = Adw.HeaderBar(show_start_title_buttons=False)
+
+        close_toggle = Gtk.ToggleButton(
+            icon_name="sidebar-show-right-symbolic",
+            tooltip_text="Settings",
+        )
+        close_toggle.bind_property(
+            "active", self.settings_split, "show-sidebar",
+            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
+        )
+        header.pack_start(close_toggle)
+        header.set_title_widget(
+            Adw.WindowTitle(title="Settings", subtitle=AUX_WINDOW_TITLES[self.kind])
+        )
+
+        sidebar = Adw.ToolbarView()
+        sidebar.add_top_bar(header)
+        sidebar.set_content(page)
+
+        # Scrolls sideways rather than holding the window open (when
+        # it's narrow the settings open in their own window instead -
+        # see on_show_sidebar_changed).
+        scroller = Gtk.ScrolledWindow(
+            hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+            vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
+            child=sidebar,
+        )
+
+        return scroller
+
+    # Settings as libadwaita rows: the sidebar's content, or the
+    # separate settings window's (open_settings_window).
+    def build_settings_page(self, controls):
+
         def children(widget):
             out = []
             child = widget.get_first_child()
@@ -3071,7 +3283,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             return out
 
         page = Adw.PreferencesPage()
-        group = Adw.PreferencesGroup()
+
+        # All color rows go to one Colors group at the top (in
+        # COLOR_ROW_ORDER), whichever part of the builder made them.
+        colors_group = Adw.PreferencesGroup(title="Colors")
+        color_rows = []
+        page.add(colors_group)
+
+        group = Adw.PreferencesGroup(title=AUX_WINDOW_TITLES[self.kind])
 
         if self.kind in VIEW_KINDS:
             group.set_description(VIEW_HINT + " · Arrow keys and +/− work too")
@@ -3112,9 +3331,17 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 if len(parts) == 2 and isinstance(parts[1], Gtk.Switch):
                     row.set_activatable_widget(parts[1])
 
-                group.add(row)
+                if row.get_title() in COLOR_ROW_ORDER:
+                    color_rows.append(row)
+                else:
+                    group.add(row)
             else:
                 buttons += [part for part in parts if isinstance(part, Gtk.Button)]
+
+        color_rows.sort(key=lambda row: COLOR_ROW_ORDER.index(row.get_title()))
+
+        for row in color_rows:
+            colors_group.add(row)
 
         if buttons:
             button_box = Gtk.Box(
@@ -3150,34 +3377,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 (w for w in self.iter_widgets(zoom_row) if isinstance(w, Gtk.Scale)), None
             )
 
-        header = Adw.HeaderBar(show_start_title_buttons=False)
-
-        close_toggle = Gtk.ToggleButton(
-            icon_name="sidebar-show-right-symbolic",
-            tooltip_text="Settings",
-        )
-        close_toggle.bind_property(
-            "active", self.settings_split, "show-sidebar",
-            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
-        )
-        header.pack_start(close_toggle)
-        header.set_title_widget(
-            Adw.WindowTitle(title="Settings", subtitle=AUX_WINDOW_TITLES[self.kind])
-        )
-
-        sidebar = Adw.ToolbarView()
-        sidebar.add_top_bar(header)
-        sidebar.set_content(page)
-
-        # Scrolls sideways instead of keeping the window from getting
-        # narrower than the settings.
-        scroller = Gtk.ScrolledWindow(
-            hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
-            vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
-            child=sidebar,
-        )
-
-        return scroller
+        return page
 
     def iter_widgets(self, widget):
 
@@ -3199,25 +3399,37 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.schedule_save()
 
     def update_row_sensitivity(self):
-        """Grey out rows that don't apply to the current choices."""
+        """Show only the rows that apply to the current choices."""
 
         rows = self.settings_rows
 
-        def sensitive(title, value):
+        def visible(title, value):
             if title in rows:
-                rows[title].set_sensitive(value)
-
-        sensitive("Background Color", self.background_mode == "custom")
-        sensitive("Color", self.color_mode in ("solid", "classic"))
+                rows[title].set_visible(value)
 
         palette = getattr(self, f"{self.kind}_palette", None)
+
         if palette is not None:
-            sensitive("Low Color", palette == "gradient")
-            sensitive("High Color", palette == "gradient")
+            gradient_shown, gradient = True, palette
+        else:
+            gradient_shown, gradient = self.color_style == "gradient", self.line_gradient
 
-        sensitive("Rotate Speed", getattr(self, f"{self.kind}_auto_rotate", True))
+        needle = self.kind == "vu" and self.vu_style == "needle"
 
-    # --- shared settings ---------------------------------------------------
+        visible("Color", self.color_style == "solid" or (self.color_style == "classic" and needle))
+        visible("Gradient", gradient_shown)
+        visible("Low Color", gradient_shown and gradient == "gradient")
+        visible("High Color", gradient_shown and gradient == "gradient")
+        visible("Reverse", gradient_shown)
+        visible("Background Color", self.background_mode == "custom")
+
+        if "Peak Hold Color" in rows:
+            for widget in self.iter_widgets(rows["Peak Hold Color"]):
+                if isinstance(widget, Gtk.ColorDialogButton):
+                    widget.set_visible(self.peak_hold_color_mode == "custom")
+
+        if "Rotate Speed" in rows:
+            rows["Rotate Speed"].set_sensitive(getattr(self, f"{self.kind}_auto_rotate", True))
 
     def tick_interval_ms(self):
 
@@ -3258,6 +3470,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if action is not None and action.get_state().get_boolean() != self.compact_mode:
             action.set_state(GLib.Variant("b", self.compact_mode))
 
+        handle = getattr(self, "move_handle", None)
+        if handle is not None:
+            handle.set_visible(self.compact_mode and not self.is_fullscreen())
+
         if self.compact_mode:
             if self.hide_timer:
                 GLib.source_remove(self.hide_timer)
@@ -3274,11 +3490,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 setattr(self, name, decoded)
 
         self._icon_cache_key = None
-        showing = self.settings_split.get_show_sidebar()
-        self.settings_split.set_sidebar(
-            self.build_settings_sidebar(self.build_settings_controls())
-        )
-        self.settings_split.set_show_sidebar(showing)
+        if self.settings_window is not None:
+            # Reopen it so its controls show the defaults.
+            settings_window, self.settings_window = self.settings_window, None
+            settings_window.destroy()
+            self.reset_to_current_controls()
+            self.open_settings_window()
+        else:
+            self.reset_to_current_controls()
         self.background_changed()
         self.frame_rate_changed()
         self.apply_compact_mode()
@@ -3288,6 +3507,20 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     # --- 3D views ------------------------------------------------------------
 
     def setup_extra_controls(self):
+
+        # Compact Mode has no title bar, and the 3D kinds use left-drag
+        # to rotate - so a grip along the top edge moves the window
+        # (Gtk.WindowHandle: the same native move as a title bar).
+        self.move_handle = Gtk.WindowHandle(valign=Gtk.Align.START)
+        self.move_handle.add_css_class("compact-handle")
+        self.move_handle.set_size_request(-1, 22)
+        self.move_handle.set_tooltip_text("Drag to move")
+        self.move_handle.set_cursor_from_name("grab")
+        grip = Gtk.Box(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+        grip.add_css_class("compact-grip")
+        self.move_handle.set_child(grip)
+        self.toolbar_view.get_content().add_overlay(self.move_handle)
+        self.connect("notify::fullscreened", lambda *args: self.apply_compact_mode())
 
         self.background_changed()
         self.apply_compact_mode()
@@ -3307,7 +3540,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         show_settings = Gio.SimpleAction.new("show-settings", None)
         show_settings.connect(
             "activate", lambda *args: self.settings_split.set_show_sidebar(True)
-        )
+        )  # on_show_sidebar_changed redirects to a window when narrow
         self.add_action(show_settings)
 
         compact = Gio.SimpleAction.new_stateful(
@@ -3360,9 +3593,84 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
             GLib.timeout_add_seconds(6, remove_hint)
 
+    # Below this the sidebar would only show a sliver of each row, so
+    # settings open in their own small window beside the visualizer.
+    SETTINGS_WINDOW_BELOW = (300, 220)
+
+    def on_show_sidebar_changed(self, split, param):
+
+        if not split.get_show_sidebar():
+            return
+
+        min_width, min_height = self.SETTINGS_WINDOW_BELOW
+
+        if self.get_width() >= min_width and self.get_height() >= min_height:
+            return
+
+        # Undo it once the toggle <-> sidebar binding has finished
+        # propagating; doing it inside this notify left the toggle
+        # stuck "on", so the next click did nothing.
+        GLib.idle_add(self.redirect_to_settings_window)
+
+    def redirect_to_settings_window(self):
+
+        self.settings_split.set_show_sidebar(False)
+
+        # The toggle/menu work as open/close for the window too.
+        if self.settings_window is not None:
+            self.settings_window.close()
+        else:
+            self.open_settings_window()
+
+        return False
+
+    def open_settings_window(self):
+
+        page = self.build_settings_page(self.build_settings_controls())
+        self.update_row_sensitivity()
+
+        window = Adw.Window(
+            title=f"{AUX_WINDOW_TITLES[self.kind]} Settings",
+            transient_for=self,
+            default_width=340,
+            default_height=480,
+        )
+        window.set_size_request(260, 200)
+
+        view = Adw.ToolbarView()
+        view.add_top_bar(Adw.HeaderBar())
+        view.set_content(page)
+        window.set_content(view)
+
+        keys = Gtk.EventControllerKey()
+        keys.connect(
+            "key-pressed",
+            lambda controller, keyval, *args: (window.close() or True) if keyval == Gdk.KEY_Escape else False
+        )
+        window.add_controller(keys)
+
+        window.connect("close-request", self.on_settings_window_closed)
+        self.settings_window = window
+        window.present()
+
+    def on_settings_window_closed(self, window):
+
+        self.settings_window = None
+        # The sidebar's controls take over again, showing what changed.
+        self.reset_to_current_controls()
+
+        return False
+
     def reset_to_current_controls(self):
         """Rebuild the sidebar so its controls show the current values
         (after a change made somewhere else, e.g. the right-click menu)."""
+
+        if self.settings_window is not None:
+            self.settings_window.get_content().set_content(
+                self.build_settings_page(self.build_settings_controls())
+            )
+            self.update_row_sensitivity()
+            return
 
         showing = self.settings_split.get_show_sidebar()
         self.settings_split.set_sidebar(
@@ -3500,6 +3808,41 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self._icon_cache_key = None
 
+        # Before Style + Gradient + the Match slider, one "Color Mode"
+        # held all of it (and heatmap Palettes offered Main Visualizer).
+        old_mode = saved.get("color_mode")
+        if isinstance(old_mode, str) and "color_style" not in saved:
+            if old_mode in ("solid", "classic"):
+                self.color_style = old_mode
+            elif old_mode == "main-solid":
+                self.color_style, self.color_sync = "solid", 1.0
+            elif old_mode == "main":
+                self.color_style, self.color_sync = "gradient", 1.0
+            elif old_mode in PALETTE_STOPS or old_mode == "rainbow":
+                self.color_style, self.line_gradient = "gradient", old_mode
+
+        palette_name = f"{self.kind}_palette"
+        if saved.get(palette_name) == "main":
+            setattr(self, palette_name, "rainbow")
+            self.color_sync = 1.0
+
+        # Peak Hold Color used to be an on/off "custom" switch.
+        if saved.get("peak_hold_color_custom") is True and "peak_hold_color_mode" not in saved:
+            self.peak_hold_color_mode = "custom"
+
+        # Background used to offer Match Theme / Black / Frosted too
+        # (Frosted was built on the main visualizer, so it maps there).
+        if self.background_mode == "black":
+            self.background_mode = "custom"
+            self.background_color.parse("#000000")
+        elif self.background_mode == "frosted":
+            self.background_mode = "main"
+        elif self.background_mode not in ("custom", "main", "transparent"):
+            r, g, b = self.theme_background_rgb()
+            self.background_mode = "custom"
+            self.background_color.red, self.background_color.green, self.background_color.blue = r, g, b
+            self.background_color.alpha = 1.0
+
         # DVD Bounce had its own Background Color before the shared one.
         if self.kind == "dvd" and "background_mode" not in saved and "dvd_bg_color" in saved:
             color = decode_setting(saved["dvd_bg_color"], self.background_color)
@@ -3549,14 +3892,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.terrain_dirty = True
         self.drawing_area.queue_draw()
 
-    def on_color_mode_changed(self, dropdown, param):
-
-        index = dropdown.get_selected()
-
-        if 0 <= index < len(self.color_mode_choices):
-            self.color_mode = self.color_mode_choices[index][0]
-            self.drawing_area.queue_draw()
-
     def on_bars_changed(self, spin):
 
         self.num_bars = int(spin.get_value())
@@ -3571,11 +3906,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def on_peak_hold_seconds_changed(self, scale):
 
         self.peak_hold_seconds = scale.get_value()
-
-    def on_peak_hold_color_custom_changed(self, switch, param):
-
-        self.peak_hold_color_custom = switch.get_active()
-        self.drawing_area.queue_draw()
 
     def on_peak_hold_color_changed(self, button, param):
 
@@ -3781,6 +4111,48 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         self.maintain_aspect_ratio = switch.get_active()
         self.drawing_area.queue_draw()
+        self.schedule_square_snap()
+
+    SQUARE_SNAP_DELAY_MS = 400
+
+    def schedule_square_snap(self, *args):
+
+        if self.kind not in ("xy", "vectorscope"):
+            return
+
+        if self.square_timer is not None:
+            GLib.source_remove(self.square_timer)
+
+        self.square_timer = GLib.timeout_add(self.SQUARE_SNAP_DELAY_MS, self.snap_square)
+
+    def snap_square(self):
+
+        self.square_timer = None
+
+        if not self.maintain_aspect_ratio or self.is_maximized() or self.is_fullscreen():
+            return False
+
+        surface = self.get_surface()
+        if surface is not None and isinstance(surface, Gdk.Toplevel):
+            tiled = Gdk.ToplevelState.TILED
+            if surface.get_state() & tiled:
+                return False
+
+        width, height = self.get_default_size()
+
+        if width <= 0 or height <= 0 or abs(width - height) <= 2:
+            self.last_square_side = max(width, height)
+            return False
+
+        # Follow whichever side the user changed most.
+        last = self.last_square_side or min(width, height)
+        side = width if abs(width - last) >= abs(height - last) else height
+        side = max(side, AUX_MIN_WIDTH, AUX_MIN_HEIGHT)
+
+        self.last_square_side = side
+        self.set_default_size(side, side)
+
+        return False
 
     def format_scope_zoom(self, value):
 
@@ -4100,18 +4472,22 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return True
 
     def background_rgb(self):
-        """The chosen background (shared Background setting), or None
-        for Transparent. Match Theme follows light/dark."""
+        """The background color (sampled for Main Visualizer), or None
+        for Transparent."""
 
         if self.background_mode == "transparent":
             return None
-        if self.background_mode == "black":
-            return (0.0, 0.0, 0.0)
-        if self.background_mode == "custom":
-            color = self.background_color
-            return (color.red, color.green, color.blue)
 
-        return self.theme_background_rgb()
+        if self.background_mode == "main":
+            # Its darkest color, darker still so traces stay readable.
+            return tuple(c * 0.55 for c in palette_color("main", 0.0))
+
+        color = self.background_color
+        return (color.red, color.green, color.blue)
+
+    def background_is_opaque(self):
+
+        return self.background_mode != "transparent"
 
     def paint_background(self, cr):
 
@@ -4157,14 +4533,12 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def peak_hold_draw_color(self, fallback_alpha=1.0):
 
-        if self.peak_hold_color_custom:
+        if self.peak_hold_color_mode == "custom":
+            color = self.peak_hold_color
+            return (color.red, color.green, color.blue, color.alpha)
 
-            return (
-                self.peak_hold_color.red,
-                self.peak_hold_color.green,
-                self.peak_hold_color.blue,
-                self.peak_hold_color.alpha
-            )
+        if self.peak_hold_color_mode == "main":
+            return (*palette_color("main", 1.0), fallback_alpha)
 
         return self.canvas_foreground_rgba(fallback_alpha)
 
@@ -4199,6 +4573,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def mouse_move(self, controller, x, y):
 
         if self.compact_mode:
+            # No title bar: just bring the move grip back for a while.
+            self.move_handle.add_css_class("revealed")
+            if self.hide_timer:
+                GLib.source_remove(self.hide_timer)
+            self.hide_timer = GLib.timeout_add_seconds(3, self.hide_toolbar)
             return
 
         self.toolbar_view.set_reveal_top_bars(True)
@@ -4212,6 +4591,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
     def hide_toolbar(self):
 
         self.hide_timer = None
+
+        handle = getattr(self, "move_handle", None)
+
+        # Not while the pointer is on the grip itself.
+        if handle is not None and self.compact_mode:
+            if handle.get_state_flags() & Gtk.StateFlags.PRELIGHT:
+                self.hide_timer = GLib.timeout_add_seconds(1, self.hide_toolbar)
+                return False
+            handle.remove_css_class("revealed")
 
         if self.mouse_over_toolbar:
             return False
@@ -4251,6 +4639,122 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         self.drawing_area.queue_draw()
 
     def on_draw(self, area, cr, width, height):
+
+        self.draw_with_colors(area, cr, width, height)
+
+    def draw_with_colors(self, area, cr, width, height):
+
+        if self.color_sync <= 0 and not self.reverse_colors and self.color_mode != "gradient":
+            self.color_signature = None
+            self.draw_kind(area, cr, width, height)
+            return
+
+        # Swap in the matched/reversed colors for this frame only, so
+        # the saved settings and controls keep the user's own choices.
+        saved = self.apply_effective_colors()
+
+        try:
+            self.draw_kind(area, cr, width, height)
+        finally:
+            for name, value in saved.items():
+                if name == "color_mode":
+                    self._color_mode_override = None
+                else:
+                    setattr(self, name, value)
+
+    def sync_blend(self, rgb, target):
+
+        k = self.color_sync
+        return tuple(rgb[c] + (target[c] - rgb[c]) * k for c in range(3))
+
+    def effective_palette(self, slot, name, lo=None, hi=None):
+        """A per-window palette: `name` (or the lo/hi gradient),
+        reversed if asked, blended toward the main visualizer's."""
+
+        key = f"effective-{id(self)}-{slot}"
+        sync = self.color_sync
+        signature = (
+            name, self.reverse_colors, round(sync, 3),
+            MAIN_PALETTE_VERSION[0] if sync > 0 else 0,
+            lo.to_string() if lo is not None else None,
+            hi.to_string() if hi is not None else None,
+        )
+
+        if self.effective_signatures.get(key) != signature or key not in _PALETTE_LUTS:
+            lut = []
+            for i in range(256):
+                t = i / 255
+                if self.reverse_colors:
+                    t = 1.0 - t
+                own = palette_color(name, t, lo, hi)
+                if sync > 0:
+                    own = self.sync_blend(own, palette_color("main", t))
+                lut.append(own)
+
+            PALETTE_STOPS[key] = None
+            _PALETTE_LUTS[key] = lut
+            self.effective_signatures[key] = signature
+
+        return key, signature
+
+    def apply_effective_colors(self):
+
+        saved = {}
+        signatures = []
+
+        if self.color_mode not in ("solid", "classic"):
+            saved["color_mode"] = self.color_mode
+            self.color_mode, signature = self.effective_palette(
+                "mode", self.color_mode, self.line_color_lo, self.line_color_hi
+            )
+            signatures.append(signature)
+
+        palette_name = f"{self.kind}_palette"
+
+        if hasattr(self, palette_name):
+            saved[palette_name] = getattr(self, palette_name)
+            key, signature = self.effective_palette(
+                "palette", saved[palette_name],
+                getattr(self, f"{self.kind}_color_lo"), getattr(self, f"{self.kind}_color_hi")
+            )
+            setattr(self, palette_name, key)
+            signatures.append(signature)
+
+        if self.color_sync > 0:
+            dominant = MAIN_DOMINANT[0]
+
+            def blended(color):
+                rgb = self.sync_blend((color.red, color.green, color.blue), dominant)
+                result = Gdk.RGBA()
+                result.red, result.green, result.blue, result.alpha = (*rgb, color.alpha)
+                return result
+
+            saved["color"] = self.color
+            self.color = blended(self.color)
+            saved["dvd_color"] = self.dvd_color
+            self.dvd_color = blended(self.dvd_color)
+
+            saved["pipes_band_colors"] = self.pipes_band_colors
+            self.pipes_band_colors = [
+                (lambda c, t: (lambda rgb: Gdk.RGBA(red=rgb[0], green=rgb[1], blue=rgb[2], alpha=1.0))(
+                    self.sync_blend((c.red, c.green, c.blue), palette_color("main", t))
+                ))(color, (i + 1) / len(self.pipes_band_colors))
+                for i, color in enumerate(self.pipes_band_colors)
+            ]
+            signatures.append(("solid", round(self.color_sync, 3), MAIN_PALETTE_VERSION[0]))
+
+        signature = tuple(signatures)
+
+        # 3D surfaces are cached - re-render only when the colors change.
+        if signature != self.color_signature:
+            self.terrain_dirty = True
+            self.waterfall_dirty = True
+
+        self.color_signature = signature
+
+        return saved
+
+    def draw_kind(self, area, cr, width, height):
 
         if self.kind == "vu":
             self.draw_vu_meter(cr, width, height)
@@ -4368,7 +4872,26 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 self.vu_right, self.vu_hold_right, self.vu_hold_right_time, now
             )
 
-        margin = 12
+        if self.vu_style == "needle":
+            if height > width * 1.3:
+                self.draw_meter_pair_stacked(
+                    cr, width, height,
+                    lambda c, x, y, w, h, level, hold: self.draw_vu_needle(c, x, y, w, h, level),
+                    self.vu_left, self.vu_right, None, None
+                )
+                return
+        elif width > height * 1.3:
+            draw = self.draw_vu_led if self.vu_style == "led" else self.draw_vu_bar
+            self.draw_meter_pair_horizontal(
+                cr, width, height,
+                lambda c, x, y, w, h, level, hold: draw(c, x, y, w, h, level, hold),
+                self.vu_left, self.vu_right,
+                self.vu_hold_left if self.vu_peak_hold else None,
+                self.vu_hold_right if self.vu_peak_hold else None,
+            )
+            return
+
+        margin = 12 if width >= 140 else 6
         label_space = 16 if self.show_labels else 0
         cell_width = (width - margin * 3) / 2
         cell_height = height - margin * 2 - label_space
@@ -4413,10 +4936,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         if self.color_mode == "classic":
             if level > zones[1]:
-                return (0.9, 0.2, 0.2)
-            if level > zones[0]:
-                return (0.9, 0.8, 0.2)
-            return (0.2, 0.8, 0.3)
+                zone = (0.9, 0.2, 0.2)
+            elif level > zones[0]:
+                zone = (0.9, 0.8, 0.2)
+            else:
+                zone = (0.2, 0.8, 0.3)
+            if self.color_sync > 0:
+                zone = self.sync_blend(zone, palette_color("main", level))
+            return zone
 
         if self.color_mode == "solid":
             return (self.color.red, self.color.green, self.color.blue)
@@ -4430,11 +4957,14 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if self.color_mode == "classic":
             # Original thresholds: the color of the zone the level is in.
             if level < zones[0]:
-                cr.set_source_rgb(0.2, 0.8, 0.3)
+                zone = (0.2, 0.8, 0.3)
             elif level < zones[1]:
-                cr.set_source_rgb(0.9, 0.8, 0.2)
+                zone = (0.9, 0.8, 0.2)
             else:
-                cr.set_source_rgb(0.9, 0.2, 0.2)
+                zone = (0.9, 0.2, 0.2)
+            if self.color_sync > 0:
+                zone = self.sync_blend(zone, palette_color("main", min(level, 1.0)))
+            cr.set_source_rgb(*zone)
             return
 
         if self.color_mode == "solid":
@@ -4448,6 +4978,44 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             gradient.add_color_stop_rgb(t, *palette_color(self.color_mode, t))
 
         cr.set_source(gradient)
+
+    def draw_meter_pair_horizontal(self, cr, width, height, draw, left, right, hold_left, hold_right):
+        """Wide windows: L above R, filling left -> right. The vertical
+        meter drawing is reused, turned 90 degrees."""
+
+        margin = 8 if height >= 60 else 4
+        label_width = 14 if self.show_labels else 0
+        length = width - margin * 2 - label_width
+        thickness = (height - margin * 3) / 2
+
+        for row, (level, hold, name) in enumerate(((left, hold_left, "L"), (right, hold_right, "R"))):
+            x0 = margin + label_width
+            y0 = margin + row * (thickness + margin)
+
+            cr.save()
+            # Local bottom -> top of a vertical meter becomes left -> right.
+            cr.translate(x0 + length, y0)
+            cr.rotate(math.pi / 2)
+            draw(cr, 0, 0, thickness, length, level, hold)
+            cr.restore()
+
+            if self.show_labels:
+                self.draw_text_label(cr, margin - 1, y0 + thickness / 2 + 4, name)
+
+    def draw_meter_pair_stacked(self, cr, width, height, draw, left, right, hold_left, hold_right):
+        """Tall windows (VU needles): L above R, each full width."""
+
+        margin = 8
+        label_space = 14 if self.show_labels else 0
+        cell_height = (height - margin * 3 - label_space * 2) / 2
+        cell_width = width - margin * 2
+
+        for row, (level, hold, name) in enumerate(((left, hold_left, "L"), (right, hold_right, "R"))):
+            y0 = margin + row * (cell_height + label_space + margin)
+            draw(cr, margin, y0, cell_width, cell_height, level, hold)
+
+            if self.show_labels:
+                self.draw_text_label(cr, width / 2 - 3, y0 + cell_height + label_space - 2, name)
 
     def draw_vu_bar(self, cr, x, y, bar_width, bar_height, level, hold_level=None):
 
@@ -4597,6 +5165,10 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def db_frac(self, level):
 
+        # Peak meter Scale: Linear shows the raw amplitude (0..1).
+        if self.peak_scale == "linear":
+            return max(0.0, min(1.0, level))
+
         # Linear 0..1 amplitude -> a 0..1 position on a -60..0 dBFS
         # scale. Peak meters are traditionally read in dB, not linear
         # amplitude - most of a track's real dynamic range lives in
@@ -4653,12 +5225,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
     def draw_peak_scale(self, cr, x, y, h):
 
-        for db, label in (
-            (0, "0"), (-6, "-6"), (-12, "-12"),
-            (-24, "-24"), (-40, "-40"), (-60, "-60")
-        ):
-            frac = (db + 60) / 60
+        last_y = -1e9
+
+        if self.peak_scale == "linear":
+            ticks = [(1.0, "1.0"), (0.75, ".75"), (0.5, ".5"), (0.25, ".25"), (0.0, "0")]
+        else:
+            ticks = [((db + 60) / 60, str(db)) for db in (0, -6, -12, -24, -40, -60)]
+
+        for frac, label in ticks:
             tick_y = y + h * (1.0 - frac)
+
+            # Short meters: drop ticks that would overlap.
+            if abs(tick_y - last_y) < 13:
+                continue
+
+            last_y = tick_y
             self.draw_text_label(cr, x, tick_y + 3, label)
 
     def draw_peak_meter(self, cr, width, height):
@@ -4685,7 +5266,16 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
             self.peak_right, self.peak_hold_right, self.peak_hold_right_time, now
         )
 
-        margin = 12
+        if width > height * 1.3:
+            self.draw_meter_pair_horizontal(
+                cr, width, height,
+                lambda c, x, y, w, h, level, hold: self.draw_peak_bar(c, x, y, w, h, level, hold),
+                self.db_frac(self.peak_left), self.db_frac(self.peak_right),
+                self.db_frac(self.peak_hold_left), self.db_frac(self.peak_hold_right),
+            )
+            return
+
+        margin = 12 if width >= 140 else 6
         scale_width = 26 if self.show_labels else 0
         label_space = 16 if self.show_labels else 0
 
@@ -4945,7 +5535,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         if count < 2:
             return
 
-        cr.set_line_width(1.2)
+        cr.set_line_width(self.scope_line_width)
 
         if self.color_mode not in ("solid", "classic"):
 
@@ -5043,7 +5633,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                 cairo.FORMAT_ARGB32, max(1, width), max(1, height)
             )
             fresh = cairo.Context(self.vector_surface)
-            if self.background_mode != "transparent":
+            if self.background_is_opaque():
                 fresh.set_source_rgb(*bg)
                 fresh.paint()
 
@@ -5057,7 +5647,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # than vanishing instantly, which is what makes a goniometer's
         # display read as a "cloud" with density/shape instead of a
         # single instantaneous dot.
-        if self.background_mode == "transparent":
+        if not self.background_is_opaque():
             # Fade the trail's alpha instead of painting a color over it.
             trail_cr.set_operator(cairo.OPERATOR_DEST_OUT)
             trail_cr.set_source_rgba(0, 0, 0, 1.0 - self.vector_persistence)
@@ -5068,7 +5658,28 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         trail_cr.fill()
 
         cx, cy = width / 2, height / 2
-        scale = (min(width, height) / 2 - 12) * self.scope_zoom
+        radius = min(width, height) / 2 - 12
+        count = min(len(self.left), len(self.right))
+
+        # Mid/side below are (L±R)/sqrt(2), so a full-scale signal
+        # reaches sqrt(2) - divide that out so the full-scale diamond
+        # (|L|, |R| <= 1) just touches the edges. It used to be plotted
+        # sqrt(2) too big, so loud passages ran into the boundary.
+        scale = radius / math.sqrt(2) * self.scope_zoom
+
+        if self.vector_auto_gain and count:
+            peak = max(
+                max(abs(l + r), abs(l - r)) * 0.70710678
+                for l, r in zip(self.left, self.right)
+            )
+            if peak > self.vector_envelope:
+                self.vector_envelope = peak
+            else:
+                self.vector_envelope = self.vector_envelope * 0.97 + peak * 0.03
+
+            # Loudest recent point at ~80% of the way to the edge; at
+            # most 8x for near-silence.
+            scale *= min(8.0, 0.8 * math.sqrt(2) / max(self.vector_envelope, 0.8 * math.sqrt(2) / 8.0))
 
         # Rotated 45° from a plain L/R plot - Mid ((L+R)/sqrt(2)) on
         # the vertical axis, Side ((L-R)/sqrt(2)) on the horizontal -
@@ -5078,7 +5689,6 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # is always 0. A plain, unrotated L-vs-R plot (the existing X-Y
         # Scope) doesn't carry this same "read stereo width/phase at a
         # glance" meaning.
-        count = min(len(self.left), len(self.right))
         half_dot = self.vector_dot_size / 2
         rainbow = self.color_mode not in ("solid", "classic")
 
@@ -5132,6 +5742,18 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         cr.move_to(0, cy)
         cr.line_to(width, cy)
         cr.stroke()
+
+        # Full-scale reference: where |L| or |R| reaches 1 (without
+        # Auto Gain the cloud can't go past it).
+        if not self.vector_auto_gain:
+            edge = radius * self.scope_zoom
+            cr.set_source_rgba(*self.canvas_foreground_rgba(0.12))
+            cr.move_to(cx, cy - edge)
+            cr.line_to(cx + edge, cy)
+            cr.line_to(cx, cy + edge)
+            cr.line_to(cx - edge, cy)
+            cr.close_path()
+            cr.stroke()
 
         if self.show_labels:
 
@@ -5221,6 +5843,9 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # resize, which is what actually reads as "the icon pulses
         # from its center" - a purely cosmetic correction, doesn't
         # change anything about how the box moves or bounces.
+        # Never bigger than half the window, so it can still bounce.
+        new_size = min(new_size, self.dvd_max_size(width, height))
+
         size_delta = new_size - self.dvd_size
         self.dvd_x -= size_delta / 2
         self.dvd_y -= size_delta / 2
@@ -5550,6 +6175,15 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         cr.restore()
 
+    def dvd_max_size(self, width, height):
+        """dvd_size is the logo's width (DVD), height (Tux) or side."""
+
+        if self.icon_name == DVD_TEXT_ICON:
+            return max(8.0, min(width * 0.5, height * 0.5 * DVD_LOGO_ASPECT))
+        if self.icon_name == TUX_ICON:
+            return max(8.0, min(height * 0.5, width * 0.5 / TUX_ASPECT))
+        return max(8.0, min(width, height) * 0.5)
+
     def draw_dvd_bounce(self, cr, width, height):
 
         self.paint_background(cr)
@@ -5652,13 +6286,21 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                         )
                     )
 
+    def spectrum_bar_layout(self, width, bar_count):
+        """(margin, gap, bar_width) that always fit the width - the gap
+        shrinks with the space per bar instead of a fixed 3px."""
+
+        margin = 8 if width >= 160 else 3
+        area = max(1.0, width - margin * 2)
+        gap = min(3.0, area * 0.25 / max(1, bar_count))
+        bar_width = (area - gap * (bar_count - 1)) / max(1, bar_count)
+
+        return margin, gap, bar_width
+
     def render_spectrum_bars(self, cr, width, height):
 
         bar_count = self.num_bars
-        margin = 8
-        gap = 3
-        bar_area_width = width - margin * 2
-        bar_width = max(1.0, (bar_area_width - gap * (bar_count - 1)) / bar_count)
+        margin, gap, bar_width = self.spectrum_bar_layout(width, bar_count)
         bar_height = height - margin * 2
 
         rainbow = self.color_mode not in ("solid", "classic")
@@ -5708,7 +6350,7 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         # genuinely smooth rather than just "the same bars with their
         # corners connected."
         bar_count = self.num_bars
-        margin = 8
+        margin = self.spectrum_bar_layout(width, bar_count)[0]
         inner_width = width - margin * 2
         bar_height = height - margin * 2
         baseline_y = margin + bar_height
@@ -5819,6 +6461,8 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
 
         return (
             self.num_bars, self.spectrogram_palette,
+            self.color_signature,
+            MAIN_PALETTE_VERSION[0] if self.spectrogram_palette == "main" else 0,
             self.spectrogram_color_ceiling,
             (lo.red, lo.green, lo.blue), (hi.red, hi.green, hi.blue),
         )
@@ -6916,29 +7560,48 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         elif self.kind == "spectrogram":
             self.draw_spectrogram_labels(cr, width, height)
 
+    def label_width(self, cr, text):
+
+        cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.set_font_size(10)
+
+        return cr.text_extents(text).width
+
     def draw_spectrum_labels(self, cr, width, height):
 
         bar_count = self.num_bars
-        margin = 8
-        gap = 3
-        bar_area_width = width - margin * 2
-        bar_width = max(1.0, (bar_area_width - gap * (bar_count - 1)) / bar_count)
+        margin, gap, bar_width = self.spectrum_bar_layout(width, bar_count)
+        smooth = self.spectrum_style == "smooth"
+        inner_width = width - margin * 2
+        last_end = -1e9
 
         for freq, label in ((100, "100Hz"), (1000, "1kHz"), (10000, "10kHz")):
 
             index = self.bar_index_for_frequency(freq, bar_count)
 
-
             if index is None:
-
                 continue
-            x = margin + index * (bar_width + gap)
 
+            if smooth and bar_count > 1:
+                x = margin + inner_width * index / (bar_count - 1)
+            else:
+                x = margin + index * (bar_width + gap)
+
+            text_width = self.label_width(cr, label)
+            x = max(2, min(x, width - text_width - 3))
+
+            # Skip a label that would collide with the previous one.
+            if x < last_end + 6:
+                continue
+
+            last_end = x + text_width
             self.draw_text_label(cr, x, height - 4, label)
 
     def draw_spectrogram_labels(self, cr, width, height):
 
         bin_count = self.num_bars
+        last_end = -1e9
+        last_y = 1e9
 
         if self.spectrogram_vertical:
 
@@ -6954,7 +7617,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     continue
                 x = index * column_width
 
-                self.draw_text_label(cr, x + 2, 14, label)
+                x = min(x + 2, width - self.label_width(cr, label) - 3)
+                if x < last_end + 6:
+                    continue
+                last_end = x + self.label_width(cr, label)
+                self.draw_text_label(cr, x, 14, label)
 
         else:
 
@@ -6970,7 +7637,11 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
                     continue
                 y = height - (index + 1) * row_height
 
-                self.draw_text_label(cr, 4, y + row_height - 3, label)
+                y = max(14, min(y + row_height - 3, height - 3))
+                if y > last_y - 14:
+                    continue
+                last_y = y
+                self.draw_text_label(cr, 4, y, label)
 
     def draw_text_label(self, cr, x, y, text):
 
@@ -7098,6 +7769,19 @@ class AuxVisualizerWindow(Adw.ApplicationWindow):
         return False
 
     def on_close_request(self, window):
+
+        if getattr(self, "square_timer", None) is not None:
+            GLib.source_remove(self.square_timer)
+            self.square_timer = None
+
+        if self.settings_window is not None:
+            settings_window, self.settings_window = self.settings_window, None
+            settings_window.destroy()
+
+        for key in list(self.effective_signatures):
+            PALETTE_STOPS.pop(key, None)
+            _PALETTE_LUTS.pop(key, None)
+        self.effective_signatures.clear()
 
         if self.context_menu is not None:
             self.context_menu.unparent()
