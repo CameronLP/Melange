@@ -266,6 +266,10 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_periodic_timer = None
         self.now_playing_fade_timer = None
         self.toolbar_hide_delay = 3
+        # Preferences > Appearance > Toolbar: the back/forward arrows
+        # over the visualizer (also hidden while the preset is locked).
+        self.show_nav_arrows = True
+        self.show_favorite_button = True
 
         self.toolbar_view.set_extend_content_to_top_edge(True)
         self.headerbar.add_css_class("melange-header")
@@ -982,9 +986,12 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         # Pointer disappears after a moment's stillness in fullscreen -
         # only over the visualizer, not while using the sidebar or a menu.
+        # The floating back/forward and favorite buttons go at the same
+        # moment as the pointer (moving the mouse brings both back).
         self.cursor_hider = FullscreenCursorHider(
             self,
-            may_hide=lambda: self.pointer_over_visualizer and not self.menu_button.get_active()
+            may_hide=lambda: self.pointer_over_visualizer and not self.menu_button.get_active(),
+            on_hide=lambda: self.set_nav_arrows_visible(False)
         )
 
         self.menu_button.get_popover().add_child(
@@ -2233,10 +2240,13 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         css_class = "nav-arrow-visible"
 
-        # Back/forward can't do anything while the preset is locked, so
-        # they stay hidden then (the favorite button doesn't).
+        # Each stays hidden when turned off in Preferences, and all three
+        # while the preset is locked (requested: a locked view shows no
+        # floating buttons; F still toggles the favorite).
         for arrow in (self.prev_arrow_button, self.next_arrow_button):
-            arrow.set_visible(not self.preset_locked)
+            arrow.set_visible(self.show_nav_arrows and not self.preset_locked)
+
+        self.favorite_button.set_visible(self.show_favorite_button and not self.preset_locked)
 
         buttons = (
             self.prev_arrow_button,
@@ -3116,6 +3126,38 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="toolbar_hide_delay_scale"
         )
 
+    def build_show_nav_arrows_control(self):
+
+        def show_nav_arrows_changed(enabled):
+            self.show_nav_arrows = enabled
+            self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
+
+        row = self.build_toggle_row(
+            "Show Navigation Arrows",
+            self.show_nav_arrows,
+            show_nav_arrows_changed,
+            store_as="show_nav_arrows_row"
+        )
+        row.set_subtitle("Back and forward buttons over the visualizer")
+
+        return row
+
+    def build_show_favorite_button_control(self):
+
+        def show_favorite_button_changed(enabled):
+            self.show_favorite_button = enabled
+            self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
+
+        row = self.build_toggle_row(
+            "Show Favorite Button",
+            self.show_favorite_button,
+            show_favorite_button_changed,
+            store_as="show_favorite_button_row"
+        )
+        row.set_subtitle("Star button in the visualizer's corner (F also toggles)")
+
+        return row
+
     def build_toggle_row(self, title, initial, on_change, store_as=None):
 
         row = Adw.SwitchRow(title=title)
@@ -3301,11 +3343,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         toolbar_group = Adw.PreferencesGroup(
             title="Toolbar",
             description=(
-                "How soon the header bar and nav arrows auto-hide "
-                "after the mouse stops moving."
+                "The header bar and the buttons over the visualizer hide "
+                "after the mouse stops moving. In fullscreen the buttons "
+                "also go with the pointer, and they're hidden while the "
+                "preset is locked."
             )
         )
         toolbar_group.add(self.build_toolbar_hide_delay_control())
+        toolbar_group.add(self.build_show_nav_arrows_control())
+        toolbar_group.add(self.build_show_favorite_button_control())
 
         playback_page = Adw.PreferencesPage(
             title="Playback",

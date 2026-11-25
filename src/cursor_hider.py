@@ -38,12 +38,15 @@ class FullscreenCursorHider:
     # bring the pointer straight back the moment it was hidden.
     MOVEMENT_THRESHOLD_PX = 3
 
-    def __init__(self, window, may_hide=None):
+    def __init__(self, window, may_hide=None, on_hide=None):
         """may_hide() - optional extra condition, e.g. "the pointer is
-        over the visualizer, not the sidebar"."""
+        over the visualizer, not the sidebar". on_hide() - called when
+        the pointer hides, for hiding on-screen controls at the same
+        moment."""
 
         self.window = window
         self.may_hide = may_hide or (lambda: True)
+        self.on_hide = on_hide
         self.timer = None
         self.last_position = None
         self.hidden = False
@@ -88,6 +91,9 @@ class FullscreenCursorHider:
         if self.window.is_fullscreen() and self.may_hide():
             self.window.set_cursor(Gdk.Cursor.new_from_name("none"))
             self.hidden = True
+
+            if self.on_hide:
+                self.on_hide()
         elif self.window.is_fullscreen():
             # Not allowed right now (e.g. over the sidebar) - check again.
             self.timer = GLib.timeout_add(int(self.IDLE_SECONDS * 1000), self.on_idle)
