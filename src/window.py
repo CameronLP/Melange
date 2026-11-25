@@ -1072,8 +1072,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def toolbar_enter(self, controller, x, y):
 
-        print(f"[{time.monotonic():.3f}] toolbar_enter x={x:.0f} y={y:.0f}")
-
         self.mouse_over_toolbar = True
 
         if self.hide_timer:
@@ -1090,8 +1088,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
 
     def toolbar_leave(self, controller):
-
-        print(f"[{time.monotonic():.3f}] toolbar_leave")
 
         self.mouse_over_toolbar = False
 
@@ -2298,13 +2294,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
 
     def hide_toolbar(self):
-
-        print(
-            f"[{time.monotonic():.3f}] hide_toolbar firing:",
-            "mouse_over_toolbar=", self.mouse_over_toolbar,
-            "menu_open=", self.menu_open,
-            "is_fullscreen=", self.is_fullscreen()
-        )
 
         self.hide_timer = None
 

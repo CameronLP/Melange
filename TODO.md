@@ -114,7 +114,20 @@
 
 ### Requested 2026-11-25
 
-- [ ] More comprehensive README, "like Twine" - requested as a model
+- [ ] Found while writing the README: data/web/ (app.js, index.html,
+      main.js) is the old Butterchurn page - nothing installs or loads
+      it any more, so it can go.
+- [ ] Found while writing the README: the AppStream metainfo
+      (data/com.cameronlp.Melange.metainfo.xml.in) still has template
+      placeholders ("Keep the summary shorter...", "Developer name") -
+      needs a real summary, description, developer, screenshots
+      (docs/screenshots/) and releases before any Flathub submission.
+- [ ] Permissions: --device=all and the two portal talk-names came from
+      the initial template with no known use (README says so) - check
+      whether Melange still needs them and drop what it doesn't.
+- [x] **Done 2026-11-25** (README rewritten after ~/Projects/twine's, new
+      docs/screenshots/).
+      More comprehensive README, "like Twine" - requested as a model
       for depth/structure. Ties in with the NEXT README entry below
       (screenshots + logo); worth doing as one piece.
 - [x] **Done 2026-11-25 (PR #10).**
@@ -188,7 +201,9 @@
       mode and new kinds (Boing ball, teapot) much easier. Relates to
       the existing "different graphics library" and shared-FFT entries.
 
-- [ ] NEXT (after the now-playing branch): Updated README for GitHub with
+- [x] **Done 2026-11-25** (README rewritten after ~/Projects/twine's, new
+      docs/screenshots/).
+      NEXT (after the now-playing branch): Updated README for GitHub with
       new screenshots and the app logo - requested ("make an updated
       README for the git including screenshots and displaying the
       logo"). The current screenshots/ (preset-1/2, menu, preferences-
