@@ -188,6 +188,7 @@ class MelangeApplication(Adw.Application):
             application_name="Melange",
             application_icon="com.cameronlp.Melange",
             developer_name="Cameron Penne",
+            # Build-time info for debugging; switch to plain "0.1.0" for releases.
             version=f"0.1.0 ({COMMIT}) — {BUILD_TIME}",
             license_type=Gtk.License.GPL_3_0,
             comments=_(

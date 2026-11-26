@@ -197,7 +197,11 @@ VU_STYLE_CHOICES = [
     ("needle", "Needle"),
 ]
 
-SPECTRUM_STYLE_CHOICES = [("bars", "Bars"), ("smooth", "Smooth")]
+SPECTRUM_STYLE_CHOICES = [
+    ("bars", "Bars"),
+    ("smooth", "Smooth"),
+    ("led", "LED Segments"),
+]
 
 # How many past frames the spectrogram keeps on screen at once, and
 # how far apart (in wall-clock time) those frames are taken - a new
@@ -450,7 +454,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # *_palette). color_mode is what the drawing code reads - see
         # the property below.
         self._color_mode_override = None
-        self.color_style = "classic" if kind in ("vu", "peak") else "solid"
+        self.color_style = "classic" if kind in ("vu", "peak", "spectrum") else "solid"
         self.line_gradient = "rainbow"
         self.line_color_lo = Gdk.RGBA()
         self.line_color_lo.parse("#1a3cff")
@@ -832,6 +836,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # either way, just a different render function selected at
         # draw time (on_draw).
         self.spectrum_style = "bars"
+        self.spectrum_led_segments = 28
         self.spectrum_height_scale = 1.0
 
         # Peak Meter state - deliberately separate from vu_left/right
@@ -1560,6 +1565,28 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             spectrum_style_row.append(spectrum_style_dropdown)
             box.append(spectrum_style_row)
+
+            # LED Segments control - only relevant when style is "led"
+            led_segments_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+            led_segments_row.set_sensitive(self.spectrum_style == "led")
+
+            led_segments_label = Gtk.Label(
+                label="LED Segments", xalign=0, hexpand=True
+            )
+            led_segments_row.append(led_segments_label)
+
+            led_segments_spin = Gtk.SpinButton.new_with_range(4, 64, 2)
+            led_segments_spin.set_value(self.spectrum_led_segments)
+            led_segments_spin.set_size_request(80, -1)
+            led_segments_spin.connect(
+                "value-changed",
+                self.on_spectrum_led_segments_changed
+            )
+            led_segments_row.append(led_segments_spin)
+            box.append(led_segments_row)
+            self.spectrum_led_segments_row = led_segments_row
 
             spectrum_hold_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
@@ -2733,7 +2760,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         line_kind = self.kind in ("xy", "spectrum", "vu", "peak", "oscilloscope", "vectorscope")
 
         if line_kind:
-            choices = METER_STYLE_CHOICES if self.kind in ("vu", "peak") else STYLE_CHOICES
+            choices = METER_STYLE_CHOICES if self.kind in ("vu", "peak", "spectrum") else STYLE_CHOICES
             self.add_choice(box, "Color Style", "color_style", choices)
             self.add_choice(box, "Gradient", "line_gradient", PALETTE_CHOICES)
             self.add_color(box, "Low Color", "line_color_lo")
@@ -3226,7 +3253,15 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         if 0 <= index < len(SPECTRUM_STYLE_CHOICES):
             self.spectrum_style = SPECTRUM_STYLE_CHOICES[index][0]
+            led_row = getattr(self, "spectrum_led_segments_row", None)
+            if led_row is not None:
+                led_row.set_sensitive(self.spectrum_style == "led")
             self.drawing_area.queue_draw()
+
+    def on_spectrum_led_segments_changed(self, spin):
+
+        self.spectrum_led_segments = int(spin.get_value())
+        self.drawing_area.queue_draw()
 
     def on_scope_time_base_changed(self, scale):
 
@@ -3880,11 +3915,12 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             self.draw_peak_meter(cr, width, height)
         elif self.kind == "spectrum":
             self.update_spectrum_levels()
-            spectrum_render_func = (
-                self.render_spectrum_smooth
-                if self.spectrum_style == "smooth"
-                else self.render_spectrum_bars
-            )
+            if self.spectrum_style == "smooth":
+                spectrum_render_func = self.render_spectrum_smooth
+            elif self.spectrum_style == "led":
+                spectrum_render_func = self.render_spectrum_led
+            else:
+                spectrum_render_func = self.render_spectrum_bars
             self.render_with_optional_mirror(cr, width, height, spectrum_render_func)
         elif self.kind == "spectrogram":
             self.update_spectrogram_columns()
@@ -5446,6 +5482,58 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
                 if not rainbow:
                     cr.set_source_rgb(self.color.red, self.color.green, self.color.blue)
+
+    def render_spectrum_led(self, cr, width, height):
+
+        # A discrete, hardware-style meter - the same segment logic as
+        # draw_vu_led, just per-bar across the spectrum instead of
+        # a single VU meter column.
+        bar_count = self.num_bars
+        margin, gap, bar_width = self.spectrum_bar_layout(width, bar_count)
+        bar_height = height - margin * 2
+
+        segments = max(2, self.spectrum_led_segments)
+        seg_gap = min(3, bar_height / segments / 4)
+        seg_height = (bar_height - seg_gap * (segments - 1)) / segments
+
+        for i, level in enumerate(self.bar_levels):
+
+            x = margin + i * (bar_width + gap)
+            level = min(level, 1.0) * self.spectrum_height_scale
+
+            hold_segment_index = None
+
+            if self.spectrum_peak_hold and i < len(self.spectrum_bar_holds):
+                hold = min(self.spectrum_bar_holds[i] * self.spectrum_height_scale, 1.0)
+                hold_segment_index = min(
+                    segments - 1, int(hold * segments)
+                )
+
+            for s in range(segments):
+
+                threshold = (s + 1) / segments
+                seg_y = margin + bar_height - (s + 1) * seg_height - s * seg_gap
+
+                color = self.meter_color(threshold, (0.7, 0.9))
+
+                lit = level >= threshold - 1.0 / segments
+
+                if lit:
+                    cr.set_source_rgb(*color)
+                else:
+                    cr.set_source_rgba(color[0], color[1], color[2], 0.12)
+
+                cr.rectangle(x, seg_y, bar_width, seg_height)
+                cr.fill()
+
+                if hold_segment_index is not None and s == hold_segment_index:
+                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                    cr.set_line_width(1.5)
+                    cr.rectangle(
+                        x + 0.75, seg_y + 0.75,
+                        bar_width - 1.5, seg_height - 1.5
+                    )
+                    cr.stroke()
 
     def render_spectrum_smooth(self, cr, width, height):
 

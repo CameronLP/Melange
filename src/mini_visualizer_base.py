@@ -54,7 +54,7 @@ SAVED_SETTINGS = [
     "xy_line_width", "xy_points", "xy_curved",
     "vu_style", "vu_peak_hold", "vu_segments",
     "peak_hold_seconds", "peak_hold_color_mode", "peak_hold_color",
-    "spectrum_peak_hold", "spectrum_height_scale", "spectrum_style",
+    "spectrum_peak_hold", "spectrum_height_scale", "spectrum_style", "spectrum_led_segments",
     "scope_time_base", "scope_trigger", "vector_persistence", "vector_dot_size",
     "spectrogram_vertical", "spectrogram_speed", "spectrogram_palette",
     "spectrogram_color_lo", "spectrogram_color_hi", "spectrogram_color_ceiling",
