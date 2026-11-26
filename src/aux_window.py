@@ -51,6 +51,7 @@ from melange.mini_visualizer_base import (
     PALETTE_CHOICES,
     PALETTE_STOPS,
     PEAK_HOLD_COLOR_CHOICES,
+    PEAK_HOLD_TINT_CHOICES,
     SAVED_SETTINGS,
     STYLE_CHOICES,
     VIEW_DEFAULTS,
@@ -204,10 +205,9 @@ SPECTRUM_STYLE_CHOICES = [
 ]
 
 LED_PEAK_STYLE_CHOICES = [
-    ("authentic", "Authentic"),
+    ("line", "Line"),
     ("outline", "Outline"),
     ("filled", "Filled"),
-    ("inverted", "Inverted"),
 ]
 
 # How many past frames the spectrogram keeps on screen at once, and
@@ -508,6 +508,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # Colors: blend toward the main visualizer's (0 = own colors,
         # 1 = fully matched), and flip palettes/gradients end to end.
         self.color_sync = 0.0
+        self.local_sync_style = 0
         self.reverse_colors = False
         self.color_signature = None
         self.effective_signatures = {}
@@ -531,7 +532,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         self.settings_rows = {}
         self.row_subtitles = {}
-        self.settings_window = None
+        self.settings_dialog = None
         self.zoom_scale = None
         self.context_menu = None
         self.xy_line_width = 1.0
@@ -600,6 +601,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.vu_style = "led"
         self.vu_segments = 15
         self.vu_height_scale = 1.0
+        self.vu_yellow_zone = 0.7
+        self.vu_red_zone = 0.9
 
         # DVD Bounce state. Position/velocity are in the drawing
         # area's own pixel space and only meaningful once it has a
@@ -652,10 +655,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # main window's (the settings sidebar opens on the right). The
         # sidebar itself is built at the end of __init__: its controls
         # read kind-specific state assigned further down. Bound both
-        # ways to show-sidebar there; the sidebar's own header has a
-        # matching toggle to close it.
-        self.settings_button = Gtk.ToggleButton(
-            icon_name="sidebar-show-right-symbolic",
+        self.settings_button = Gtk.Button(
+            icon_name="applications-system-symbolic",
             tooltip_text="Settings"
         )
         self.header.pack_end(self.settings_button)
@@ -677,33 +678,16 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.toolbar_view.set_content(content_overlay)
 
         # Settings slide in from the right over the visualizer (always
-        # the overlay/collapsed form - these windows are small). It
-        # replaced a popover that was often taller than the window
-        # itself (Pipes: ~860px in a 360px window) and whose
-        # click-outside dismissal fought with the dropdowns and color
-        # pickers inside it. Clicking the visualizer or Esc closes it.
-        self.settings_split = Adw.OverlaySplitView(
-            collapsed=True,
-            sidebar_position=Gtk.PackType.END,
-            min_sidebar_width=100,
-            max_sidebar_width=320,
-            sidebar_width_fraction=0.6,
-            enable_show_gesture=False,
-        )
-        self.settings_split.set_content(self.toolbar_view)
-
-        self.set_content(self.settings_split)
+        self.set_content(self.toolbar_view)
 
         # Narrow windows: drop the title text (it's what kept the header
         # 240px wide), then the fullscreen button (F11 still works).
         narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 280px"))
         narrow.add_setter(self.header, "show-title", False)
-        narrow.add_setter(self.settings_split, "sidebar-width-fraction", 1.0)
         self.add_breakpoint(narrow)
 
         very_narrow = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 150px"))
         very_narrow.add_setter(self.header, "show-title", False)
-        very_narrow.add_setter(self.settings_split, "sidebar-width-fraction", 1.0)
         very_narrow.add_setter(self.fullscreen_button, "visible", False)
         self.add_breakpoint(very_narrow)
 
@@ -789,7 +773,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # Pointer disappears after a moment's stillness in fullscreen.
         self.cursor_hider = FullscreenCursorHider(
             self,
-            may_hide=lambda: not self.settings_split.get_show_sidebar(),
+            may_hide=lambda: self.settings_dialog is None,
             on_hide=lambda: self.drawing_area.set_cursor(None),
             on_show=self.update_view_cursor
         )
@@ -821,7 +805,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # generic logic Peak Meter and Spectrum's own hold markers
         # already reuse.
         self.vu_peak_hold = True
-        self.vu_peak_hold_style = "authentic"
+        self.vu_peak_hold_style = "line"
         self.vu_hold_left = 0.0
         self.vu_hold_right = 0.0
         self.vu_hold_left_time = 0.0
@@ -836,7 +820,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # peak_hold_seconds, so adjusting it here doesn't touch a Peak
         # Meter window's own value).
         self.spectrum_peak_hold = True
-        self.spectrum_peak_hold_style = "authentic"
+        self.spectrum_peak_hold_style = "line"
         self.spectrum_bar_holds = []
         self.spectrum_bar_hold_times = []
 
@@ -848,6 +832,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.spectrum_style = "led"
         self.spectrum_led_segments = 28
         self.spectrum_height_scale = 1.0
+        self.spectrum_yellow_zone = 0.7
+        self.spectrum_red_zone = 0.9
 
         # Peak Meter state - deliberately separate from vu_left/right
         # above rather than reusing them: a peak meter tracks the true
@@ -870,8 +856,12 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # hold marker on VU Meter/Peak Meter/Spectrum, unchanged unless
         # the user opts into a fixed custom color instead.
         self.peak_hold_color_mode = "auto"
+        self.peak_hold_tint = "brighter"
+        self.peak_line_thickness = 1.0
+        self.vu_led_thickness = 1.0
+        self.spectrum_led_thickness = 1.0
         self.peak_hold_color = Gdk.RGBA()
-        self.peak_hold_color.parse("#ffffff")
+        self.peak_hold_color.parse("#ff3333")
 
         # Rolling mono buffer feeding the spectrum FFT - audio chunks
         # arrive at whatever size GStreamer hands over (see
@@ -1119,16 +1109,12 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         }
         self.load_saved_settings()
 
-        self.settings_split.set_sidebar(
-            self.build_settings_sidebar(self.build_settings_controls())
-        )
-
         self.setup_extra_controls()
-
-        self.settings_split.connect("notify::show-sidebar", self.on_show_sidebar_changed)
 
         # Size changes are saved too (not while maximized/fullscreen).
         self.connect("notify::default-width", self.schedule_save)
+        self.connect("notify::default-width", self.on_size_check_dialog)
+        self.connect("notify::default-height", self.on_size_check_dialog)
 
         # X-Y / Vector Scope: Maintain Aspect Ratio also keeps the
         # window square - snapped once a resize settles, since GNOME
@@ -1140,14 +1126,11 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             self.connect("notify::default-height", self.schedule_square_snap)
             self.connect("notify::fullscreened", self.schedule_square_snap)
         self.connect("notify::default-height", self.schedule_save)
-        self.settings_button.bind_property(
-            "active", self.settings_split, "show-sidebar",
-            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
-        )
+        self.settings_button.connect("clicked", self.on_settings_button_clicked)
 
     # Builds every control for this kind as a plain list of
     # [Label, control...] row boxes (or bare buttons);
-    # build_settings_sidebar turns those into libadwaita rows.
+    # build_settings_page turns those into libadwaita rows.
     def build_settings_controls(self):
 
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1288,6 +1271,36 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             segments_row.append(segments_spin)
             box.append(segments_row)
+
+            vu_zone_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+            vu_zone_label = Gtk.Label(
+                label="Zones", xalign=0, hexpand=True
+            )
+            vu_zone_row.append(vu_zone_label)
+
+            vu_yellow_spin = Gtk.SpinButton.new_with_range(0.1, 0.9, 0.05)
+            vu_yellow_spin.set_value(self.vu_yellow_zone)
+            vu_yellow_spin.set_size_request(60, -1)
+
+            def vu_yellow_changed(spin):
+                self.vu_yellow_zone = min(spin.get_value(), self.vu_red_zone - 0.05)
+                spin.set_value(self.vu_yellow_zone)
+
+            vu_yellow_spin.connect("value-changed", vu_yellow_changed)
+            vu_zone_row.append(vu_yellow_spin)
+
+            vu_red_spin = Gtk.SpinButton.new_with_range(0.2, 0.98, 0.05)
+            vu_red_spin.set_value(self.vu_red_zone)
+            vu_red_spin.set_size_request(60, -1)
+
+            def vu_red_changed(spin):
+                self.vu_red_zone = max(spin.get_value(), self.vu_yellow_zone + 0.05)
+                spin.set_value(self.vu_red_zone)
+
+            vu_red_spin.connect("value-changed", vu_red_changed)
+            vu_zone_row.append(vu_red_spin)
+            box.append(vu_zone_row)
 
         if self.kind in ("spectrum", "spectrogram", "terrain", "waterfall"):
 
@@ -1647,6 +1660,38 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             box.append(led_segments_row)
             self.spectrum_led_segments_row = led_segments_row
 
+            spec_zone_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            spec_zone_row.set_sensitive(self.spectrum_style == "led")
+
+            spec_zone_label = Gtk.Label(
+                label="Zones", xalign=0, hexpand=True
+            )
+            spec_zone_row.append(spec_zone_label)
+
+            spec_yellow_spin = Gtk.SpinButton.new_with_range(0.1, 0.9, 0.05)
+            spec_yellow_spin.set_value(self.spectrum_yellow_zone)
+            spec_yellow_spin.set_size_request(60, -1)
+
+            def spec_yellow_changed(spin):
+                self.spectrum_yellow_zone = min(spin.get_value(), self.spectrum_red_zone - 0.05)
+                spin.set_value(self.spectrum_yellow_zone)
+
+            spec_yellow_spin.connect("value-changed", spec_yellow_changed)
+            spec_zone_row.append(spec_yellow_spin)
+
+            spec_red_spin = Gtk.SpinButton.new_with_range(0.2, 0.98, 0.05)
+            spec_red_spin.set_value(self.spectrum_red_zone)
+            spec_red_spin.set_size_request(60, -1)
+
+            def spec_red_changed(spin):
+                self.spectrum_red_zone = max(spin.get_value(), self.spectrum_yellow_zone + 0.05)
+                spin.set_value(self.spectrum_red_zone)
+
+            spec_red_spin.connect("value-changed", spec_red_changed)
+            spec_zone_row.append(spec_red_spin)
+            box.append(spec_zone_row)
+            self.spectrum_zone_row = spec_zone_row
+
             spectrum_hold_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
             )
@@ -1786,6 +1831,50 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             hold_color_row.append(hold_color_button)
             box.append(hold_color_row)
+
+            hold_tint_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            hold_tint_label = Gtk.Label(
+                label="Peak Indicator", xalign=0, hexpand=True
+            )
+            hold_tint_row.append(hold_tint_label)
+
+            tint_keys = [key for key, _ in PEAK_HOLD_TINT_CHOICES]
+            hold_tint_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in PEAK_HOLD_TINT_CHOICES]
+            )
+            hold_tint_dropdown.set_valign(Gtk.Align.CENTER)
+            hold_tint_dropdown.set_selected(
+                tint_keys.index(self.peak_hold_tint)
+                if self.peak_hold_tint in tint_keys else 0
+            )
+
+            def hold_tint_changed(dropdown, param):
+                index = dropdown.get_selected()
+                if 0 <= index < len(tint_keys):
+                    self.peak_hold_tint = tint_keys[index]
+
+            hold_tint_dropdown.connect("notify::selected", hold_tint_changed)
+            hold_tint_row.append(hold_tint_dropdown)
+            box.append(hold_tint_row)
+
+            line_thick_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            line_thick_label = Gtk.Label(
+                label="Line Thickness", xalign=0, hexpand=True
+            )
+            line_thick_row.append(line_thick_label)
+
+            line_thick_spin = Gtk.SpinButton.new_with_range(0.5, 3.0, 0.25)
+            line_thick_spin.set_value(self.peak_line_thickness)
+            line_thick_spin.set_size_request(70, -1)
+
+            def line_thick_changed(spin):
+                self.peak_line_thickness = spin.get_value()
+
+            line_thick_spin.connect("value-changed", line_thick_changed)
+            line_thick_row.append(line_thick_spin)
+            box.append(line_thick_row)
 
         if self.kind == "oscilloscope":
 
@@ -2857,13 +2946,53 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         if self.kind not in ("dvd", "pipes"):
             self.add_switch(box, "Reverse", "reverse_colors")
 
-        self.add_scale(
-            box, "Match Main Visualizer", "color_sync", 0.0, 1.0, 0.05,
-            lambda value: "Off" if value <= 0 else f"{value * 100:.0f}%"
-        )
-        self.row_subtitles["Match Main Visualizer"] = (
-            "100% uses its colors"
-        )
+        global_sync = getattr(self.primary, "sync_mini_colors_row", None) and self.primary.sync_mini_colors_row.get_active()
+
+        sync_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        sync_label = Gtk.Label(label="Sync Colors to Main", xalign=0, hexpand=True)
+        sync_row.append(sync_label)
+
+        sync_switch = Gtk.Switch()
+        sync_switch.set_active(global_sync or self.color_sync > 0)
+        sync_switch.set_sensitive(not global_sync)
+        sync_switch.set_valign(Gtk.Align.CENTER)
+
+        def sync_changed(widget, param):
+            if not (getattr(self.primary, "sync_mini_colors_row", None) and self.primary.sync_mini_colors_row.get_active()):
+                self.color_sync = 1.0 if widget.get_active() else 0.0
+                self.settings_changed()
+                update_style_visibility()
+
+        sync_switch.connect("notify::active", sync_changed)
+        sync_row.append(sync_switch)
+        box.append(sync_row)
+
+        style_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        style_label = Gtk.Label(label="Color Style", xalign=0, hexpand=True)
+        style_row.append(style_label)
+
+        sync_style_dropdown = Gtk.DropDown.new_from_strings(["Solid", "Gradient"])
+        if global_sync:
+            global_style = self.primary.universal_style_dropdown.get_selected() if hasattr(self.primary, "universal_style_dropdown") else 0
+            sync_style_dropdown.set_selected(global_style)
+        else:
+            sync_style_dropdown.set_selected(self.local_sync_style)
+        sync_style_dropdown.set_sensitive(not global_sync)
+        sync_style_dropdown.set_valign(Gtk.Align.CENTER)
+
+        def style_changed(widget, param):
+            if not (getattr(self.primary, "sync_mini_colors_row", None) and self.primary.sync_mini_colors_row.get_active()):
+                self.local_sync_style = widget.get_selected()
+                self.settings_changed()
+
+        sync_style_dropdown.connect("notify::selected", style_changed)
+        style_row.append(sync_style_dropdown)
+        box.append(style_row)
+
+        def update_style_visibility():
+            style_row.set_visible(sync_switch.get_active())
+
+        update_style_visibility()
 
         self.add_choice(box, "Background", "background_mode", BACKGROUND_CHOICES, self.background_changed)
         self.add_color(box, "Background Color", "background_color", self.background_changed)
@@ -2980,14 +3109,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 setattr(self, name, decoded)
 
         self._icon_cache_key = None
-        if self.settings_window is not None:
-            # Reopen it so its controls show the defaults.
-            settings_window, self.settings_window = self.settings_window, None
-            settings_window.destroy()
-            self.reset_to_current_controls()
-            self.open_settings_window()
-        else:
-            self.reset_to_current_controls()
+        self.reset_to_current_controls()
         self.background_changed()
         self.frame_rate_changed()
         self.apply_compact_mode()
@@ -3028,9 +3150,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.drawing_area.add_controller(move_drag)
 
         show_settings = Gio.SimpleAction.new("show-settings", None)
-        show_settings.connect(
-            "activate", lambda *args: self.settings_split.set_show_sidebar(True)
-        )  # on_show_sidebar_changed redirects to a window when narrow
+        show_settings.connect("activate", lambda *args: self.open_settings_dialog())
         self.add_action(show_settings)
 
         compact = Gio.SimpleAction.new_stateful(
@@ -3087,10 +3207,31 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             GLib.timeout_add_seconds(6, remove_hint)
 
-    # Below this the sidebar would only show a sliver of each row, so
-    # settings open in their own small window beside the visualizer.
-    SETTINGS_WINDOW_BELOW = (300, 220)
+    def on_size_check_dialog(self, *args):
 
+        if self.settings_dialog is None:
+            return
+
+        large_enough = self.get_width() >= 360 and self.get_height() >= 240
+        floating = getattr(self, "_settings_dialog_floating", False)
+
+        if floating and large_enough:
+            # Window grew large enough - attach dialog to the mini viz.
+            self.settings_dialog.close()
+            self._settings_dialog_floating = False
+            self.open_settings_dialog()
+        elif not floating and not large_enough:
+            # Window shrunk too small - pop out dialog to float freely.
+            self.settings_dialog.close()
+            self._settings_dialog_floating = True
+            self.open_settings_dialog()
+
+    def on_settings_button_clicked(self, button):
+
+        if self.settings_dialog is not None:
+            self.settings_dialog.close()
+        else:
+            self.open_settings_dialog()
 
     def on_context_menu_pressed(self, gesture, n_press, x, y):
 
@@ -3354,6 +3495,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             led_row = getattr(self, "spectrum_led_segments_row", None)
             if led_row is not None:
                 led_row.set_sensitive(self.spectrum_style == "led")
+            zone_row = getattr(self, "spectrum_zone_row", None)
+            if zone_row is not None:
+                zone_row.set_sensitive(self.spectrum_style == "led")
             self.drawing_area.queue_draw()
 
     def on_spectrum_led_segments_changed(self, spin):
@@ -3904,7 +4048,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         return True
 
 
-    def peak_hold_draw_color(self, fallback_alpha=1.0):
+    def peak_hold_draw_color(self, fallback_alpha=1.0, base=None):
 
         if self.peak_hold_color_mode == "custom":
             color = self.peak_hold_color
@@ -3912,6 +4056,20 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         if self.peak_hold_color_mode == "main":
             return (*palette_color("main", 1.0), fallback_alpha)
+
+        # auto mode — tint the base color based on user preference so
+        # the peak either pops, blends, or dims against its segment.
+        if base is not None:
+            tint = {"brighter": 1.45, "same": 1.0, "dimmer": 0.65}.get(
+                self.peak_hold_tint, 1.45
+            )
+            r, g, b = base
+            return (
+                min(1.0, r * tint),
+                min(1.0, g * tint),
+                min(1.0, b * tint),
+                fallback_alpha,
+            )
 
         return self.canvas_foreground_rgba(fallback_alpha)
 
@@ -4300,7 +4458,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         # Color Mode: Classic green/yellow/red zones (like a hardware
         # VU meter), Solid, or a palette running up the bar.
-        self.set_meter_fill(cr, x, y, bar_height, level, (0.7, 0.9))
+        self.set_meter_fill(cr, x, y, bar_height, level, (self.vu_yellow_zone, self.vu_red_zone))
 
         cr.rectangle(x, y + (bar_height - filled_height), bar_width, filled_height)
         cr.fill()
@@ -4308,8 +4466,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         if hold_level is not None:
 
             hold_y = y + bar_height * (1.0 - min(hold_level, 1.0))
+            hold_color = self.meter_color(min(hold_level, 1.0), (self.vu_yellow_zone, self.vu_red_zone))
 
-            cr.set_source_rgba(*self.peak_hold_draw_color())
+            cr.set_source_rgba(*self.peak_hold_draw_color(base=hold_color))
             cr.rectangle(x, hold_y - 2, bar_width, 2)
             cr.fill()
 
@@ -4342,53 +4501,44 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             threshold = (i + 1) / segments
             seg_y = y + h - (i + 1) * seg_height - i * gap
 
-            color = self.meter_color(threshold, (0.7, 0.9))
+            color = self.meter_color(threshold, (self.vu_yellow_zone, self.vu_red_zone))
 
             lit = level >= threshold - 1.0 / segments
 
+            is_hold = hold_segment_index is not None and i == hold_segment_index
+
             if lit:
-                cr.set_source_rgb(*color)
+                if self.peak_hold_tint == "brighter" and not is_hold:
+                    cr.set_source_rgba(color[0], color[1], color[2], 0.35)
+                else:
+                    cr.set_source_rgb(*color)
             else:
                 cr.set_source_rgba(color[0], color[1], color[2], 0.12)
 
-            is_hold = hold_segment_index is not None and i == hold_segment_index
             style = self.vu_peak_hold_style
 
             if is_hold:
                 if style == "filled":
-                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
-                    cr.rectangle(x, seg_y, w, seg_height)
-                    cr.fill()
-                elif style == "inverted":
-                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
                     cr.rectangle(x, seg_y, w, seg_height)
                     cr.fill()
                 else:
-                    # "authentic" and "outline" both draw the normal fill first,
+                    # "line" and "outline" both draw the normal fill first,
                     # then overlay the peak indicator on top.
                     cr.rectangle(x, seg_y, w, seg_height)
                     cr.fill()
                     if style == "outline":
-                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
                         cr.set_line_width(1.5)
                         cr.rectangle(x + 0.75, seg_y + 0.75, w - 1.5, seg_height - 1.5)
                         cr.stroke()
-                    else:  # authentic
-                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
-                        bar_h = seg_height * 0.35
+                    else:  # line — thin horizontal line like Japanese stereos
+                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
+                        bar_h = max(1.0, seg_height * 0.18 * self.vu_led_thickness)
                         bar_y = seg_y + (seg_height - bar_h) / 2
-                        pad = 2.5
+                        pad = 1.5
                         cr.rectangle(x + pad, bar_y, max(1, w - pad * 2), bar_h)
                         cr.fill()
-            elif style == "inverted" and lit:
-                # Dimmed lit segments so the hold segment pops as the brightest.
-                cr.set_source_rgba(color[0], color[1], color[2], 0.35)
-                cr.rectangle(x, seg_y, w, seg_height)
-                cr.fill()
-            elif style == "inverted" and not lit:
-                cr.set_source_rgba(color[0], color[1], color[2], 0.08)
-                cr.rectangle(x, seg_y, w, seg_height)
-                cr.fill()
             else:
                 cr.rectangle(x, seg_y, w, seg_height)
                 cr.fill()
@@ -4524,9 +4674,11 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         cr.fill()
 
         hold_y = y + h * (1.0 - min(hold_frac, 1.0))
+        hold_color = self.meter_color(min(hold_frac, 1.0), (0.8, 0.95))
 
-        cr.set_source_rgba(*self.peak_hold_draw_color())
-        cr.rectangle(x, hold_y - 1, w, 2)
+        cr.set_source_rgba(*self.peak_hold_draw_color(base=hold_color))
+        hold_h = max(1.0, 2.0 * self.peak_line_thickness)
+        cr.rectangle(x, hold_y - hold_h / 2, w, hold_h)
         cr.fill()
 
     def draw_peak_scale(self, cr, x, y, h):
@@ -5631,8 +5783,13 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                     * self.spectrum_height_scale
                 )
                 hold_y = margin + (bar_height - hold_height)
+                bar_color = (
+                    self.mode_color(i / max(1, bar_count - 1))
+                    if rainbow else
+                    (self.color.red, self.color.green, self.color.blue)
+                )
 
-                cr.set_source_rgba(*self.peak_hold_draw_color())
+                cr.set_source_rgba(*self.peak_hold_draw_color(base=bar_color))
                 cr.rectangle(x, hold_y - 2, bar_width, 2)
                 cr.fill()
 
@@ -5670,56 +5827,48 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 threshold = (s + 1) / segments
                 seg_y = margin + bar_height - (s + 1) * seg_height - s * seg_gap
 
-                color = self.meter_color(threshold, (0.7, 0.9))
+                color = self.meter_color(threshold, (self.spectrum_yellow_zone, self.spectrum_red_zone))
 
                 lit = level >= threshold - 1.0 / segments
 
                 is_hold = hold_segment_index is not None and s == hold_segment_index
+
+                if lit:
+                    if self.peak_hold_tint == "brighter" and not is_hold:
+                        cr.set_source_rgba(color[0], color[1], color[2], 0.35)
+                    else:
+                        cr.set_source_rgb(*color)
+                else:
+                    cr.set_source_rgba(color[0], color[1], color[2], 0.12)
+
                 style = self.spectrum_peak_hold_style
 
                 if is_hold:
-                    if style == "filled" or style == "inverted":
-                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                    if style == "filled":
+                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
                         cr.rectangle(x, seg_y, bar_width, seg_height)
                         cr.fill()
                     else:
-                        # "authentic" and "outline" both draw the normal fill first,
+                        # "line" and "outline" both draw the normal fill first,
                         # then overlay the peak indicator on top.
-                        if lit:
-                            cr.set_source_rgb(*color)
-                        else:
-                            cr.set_source_rgba(color[0], color[1], color[2], 0.12)
                         cr.rectangle(x, seg_y, bar_width, seg_height)
                         cr.fill()
                         if style == "outline":
-                            cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                            cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
                             cr.set_line_width(1.5)
                             cr.rectangle(
                                 x + 0.75, seg_y + 0.75,
                                 bar_width - 1.5, seg_height - 1.5
                             )
                             cr.stroke()
-                        else:  # authentic
-                            cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
-                            bar_h = seg_height * 0.35
+                        else:  # line — thin horizontal line like Japanese stereos
+                            cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
+                            bar_h = max(1.0, seg_height * 0.18 * self.spectrum_led_thickness)
                             bar_y = seg_y + (seg_height - bar_h) / 2
-                            pad = 2.5
+                            pad = 1.5
                             cr.rectangle(x + pad, bar_y, max(1, bar_width - pad * 2), bar_h)
                             cr.fill()
-                elif style == "inverted" and lit:
-                    # Dimmed lit segments so the hold segment pops as the brightest.
-                    cr.set_source_rgba(color[0], color[1], color[2], 0.35)
-                    cr.rectangle(x, seg_y, bar_width, seg_height)
-                    cr.fill()
-                elif style == "inverted" and not lit:
-                    cr.set_source_rgba(color[0], color[1], color[2], 0.08)
-                    cr.rectangle(x, seg_y, bar_width, seg_height)
-                    cr.fill()
                 else:
-                    if lit:
-                        cr.set_source_rgb(*color)
-                    else:
-                        cr.set_source_rgba(color[0], color[1], color[2], 0.12)
                     cr.rectangle(x, seg_y, bar_width, seg_height)
                     cr.fill()
 
@@ -5810,8 +5959,13 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
                 x = margin + inner_width * (i / (bar_count - 1))
                 y = baseline_y - bar_height * min(hold, 1.0) * self.spectrum_height_scale
+                bar_color = (
+                    self.mode_color(i / max(1, bar_count - 1))
+                    if self.color_mode not in ("solid", "classic") else
+                    (self.color.red, self.color.green, self.color.blue)
+                )
 
-                cr.set_source_rgba(*self.peak_hold_draw_color(0.8))
+                cr.set_source_rgba(*self.peak_hold_draw_color(0.8, base=bar_color))
                 cr.rectangle(x - 3, y - 1, 6, 2)
                 cr.fill()
 
@@ -7105,11 +7259,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
     def on_key_pressed(self, controller, keyval, keycode, state):
 
-        if keyval == Gdk.KEY_Escape and self.settings_split.get_show_sidebar():
-            self.settings_split.set_show_sidebar(False)
-            return True
-
-        if self.kind in VIEW_KINDS and not self.settings_split.get_show_sidebar():
+        if self.kind in VIEW_KINDS:
             step = math.radians(5)
             moves = {
                 Gdk.KEY_Left: (step, 0), Gdk.KEY_Right: (-step, 0),
@@ -7152,14 +7302,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             GLib.source_remove(self._dirty_timer)
             self._dirty_timer = None
 
-        if self.settings_window is not None:
-            settings_window, self.settings_window = self.settings_window, None
-            settings_window.destroy()
-
         for key in list(self.effective_signatures):
             PALETTE_STOPS.pop(key, None)
             _PALETTE_LUTS.pop(key, None)
         self.effective_signatures.clear()
+
+        if self.settings_dialog is not None:
+            settings_dialog, self.settings_dialog = self.settings_dialog, None
+            settings_dialog.close()
 
         if self.context_menu is not None:
             self.context_menu.unparent()

@@ -34,7 +34,7 @@ gi.require_version("Pango", "1.0")
 from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.mirror_window import MirrorWindow
 from melange.aux_window import AuxVisualizerWindow, update_main_visualizer_palette, reset_all_saved_settings, FFT_SIZE, spectrum_magnitudes
-from melange.mini_visualizer_base import palette_color
+from melange.mini_visualizer_base import palette_color, MAIN_DOMINANT
 from melange.now_playing import NowPlayingWatcher
 from melange import projectm_view
 from melange.preset_manager import PresetManager
@@ -2687,6 +2687,13 @@ class MelangeWindow(Adw.ApplicationWindow):
             if kind not in self.aux_windows:
 
                 aux_window = AuxVisualizerWindow(self, kind)
+                self.apply_mini_viz_color_overrides(aux_window)
+                if kind == "peak" and hasattr(self, "peak_line_thickness_scale"):
+                    aux_window.peak_line_thickness = self.peak_line_thickness_scale.get_value()
+                if kind == "vu" and hasattr(self, "vu_led_thickness_scale"):
+                    aux_window.vu_led_thickness = self.vu_led_thickness_scale.get_value()
+                if kind == "spectrum" and hasattr(self, "spectrum_led_thickness_scale"):
+                    aux_window.spectrum_led_thickness = self.spectrum_led_thickness_scale.get_value()
                 self.aux_windows[kind] = aux_window
                 aux_window.present()
 
@@ -2717,6 +2724,26 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if self.aux_windows or matching:
             update_main_visualizer_palette(pixels)
+
+        # Keep synced solid colors tracking the main palette dynamically.
+        if self.aux_windows:
+            r, g, b = MAIN_DOMINANT[0]
+            for aux in self.aux_windows.values():
+                if getattr(aux, "_sync_active", False) and aux.color_mode == "solid":
+                    color = Gdk.RGBA()
+                    color.red, color.green, color.blue, color.alpha = r, g, b, 1.0
+                    aux.color = color
+                    aux.line_color_lo = color
+                    aux.line_color_hi = color
+                    for prefix in ("terrain", "waterfall", "spectrogram"):
+                        lo = f"{prefix}_color_lo"
+                        hi = f"{prefix}_color_hi"
+                        if hasattr(aux, lo):
+                            setattr(aux, lo, color)
+                        if hasattr(aux, hi):
+                            setattr(aux, hi, color)
+                    if hasattr(aux, "drawing_area"):
+                        aux.drawing_area.queue_draw()
 
         if matching:
             self.apply_now_playing_text_style()
@@ -3783,6 +3810,130 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="beat_cycle_row"
         )
 
+    def build_sync_mini_colors_control(self):
+
+        def on_toggle(enabled):
+            self._update_universal_style_visibility()
+            self.apply_mini_viz_color_overrides()
+            self.schedule_settings_save()
+
+        return self.build_toggle_row(
+            "Sync Colors to Main",
+            False,
+            on_toggle,
+            store_as="sync_mini_colors_row"
+        )
+
+    def _update_universal_style_visibility(self):
+        if hasattr(self, "universal_style_row"):
+            sync_on = getattr(self, "sync_mini_colors_row", None) and self.sync_mini_colors_row.get_active()
+            self.universal_style_row.set_visible(sync_on)
+
+    def apply_mini_viz_color_overrides(self, aux=None):
+        """Apply global color sync / style to one or all aux windows."""
+        if aux is None:
+            for a in list(self.aux_windows.values()):
+                self.apply_mini_viz_color_overrides(a)
+            return
+
+        if not hasattr(self, "sync_mini_colors_row"):
+            return
+
+        global_sync = self.sync_mini_colors_row.get_active()
+        if global_sync:
+            sync = True
+            style = self.universal_style_dropdown.get_selected() if hasattr(self, "universal_style_dropdown") else 0
+        else:
+            sync = aux.color_sync > 0
+            style = getattr(aux, "local_sync_style", 0)
+
+        if sync:
+            if not getattr(aux, "_sync_active", False):
+                aux._sync_originals = {
+                    "color_mode": aux._color_mode_override,
+                    "terrain_palette": getattr(aux, "terrain_palette", None),
+                    "waterfall_palette": getattr(aux, "waterfall_palette", None),
+                    "spectrogram_palette": getattr(aux, "spectrogram_palette", None),
+                    "color": Gdk.RGBA()
+                }
+                c = aux._sync_originals["color"]
+                c.red, c.green, c.blue, c.alpha = aux.color.red, aux.color.green, aux.color.blue, aux.color.alpha
+                aux._sync_originals["line_color_lo"] = Gdk.RGBA()
+                c = aux._sync_originals["line_color_lo"]
+                c.red, c.green, c.blue, c.alpha = aux.line_color_lo.red, aux.line_color_lo.green, aux.line_color_lo.blue, aux.line_color_lo.alpha
+                aux._sync_originals["line_color_hi"] = Gdk.RGBA()
+                c = aux._sync_originals["line_color_hi"]
+                c.red, c.green, c.blue, c.alpha = aux.line_color_hi.red, aux.line_color_hi.green, aux.line_color_hi.blue, aux.line_color_hi.alpha
+                for prefix in ("terrain", "waterfall", "spectrogram"):
+                    lo = f"{prefix}_color_lo"
+                    hi = f"{prefix}_color_hi"
+                    if hasattr(aux, lo):
+                        saved = Gdk.RGBA()
+                        src = getattr(aux, lo)
+                        saved.red, saved.green, saved.blue, saved.alpha = src.red, src.green, src.blue, src.alpha
+                        aux._sync_originals[lo] = saved
+                    if hasattr(aux, hi):
+                        saved = Gdk.RGBA()
+                        src = getattr(aux, hi)
+                        saved.red, saved.green, saved.blue, saved.alpha = src.red, src.green, src.blue, src.alpha
+                        aux._sync_originals[hi] = saved
+                aux._sync_active = True
+
+            if style == 0:  # Solid from main palette
+                from melange.mini_visualizer_base import MAIN_DOMINANT
+                r, g, b = MAIN_DOMINANT[0]
+                color = Gdk.RGBA()
+                color.red, color.green, color.blue, color.alpha = r, g, b, 1.0
+                aux.color_mode = "solid"
+                aux.color = color
+                aux.line_color_lo = color
+                aux.line_color_hi = color
+                for prefix in ("terrain", "waterfall", "spectrogram"):
+                    lo = f"{prefix}_color_lo"
+                    hi = f"{prefix}_color_hi"
+                    if hasattr(aux, lo):
+                        setattr(aux, lo, color)
+                    if hasattr(aux, hi):
+                        setattr(aux, hi, color)
+                    pal = f"{prefix}_palette"
+                    if hasattr(aux, pal):
+                        setattr(aux, pal, "gradient")
+            else:  # Gradient from main palette
+                aux.color_mode = "main"
+                for attr in ("terrain_palette", "waterfall_palette", "spectrogram_palette"):
+                    if hasattr(aux, attr):
+                        setattr(aux, attr, "main")
+        else:
+            if getattr(aux, "_sync_active", False):
+                orig = aux._sync_originals
+                aux.color_mode = orig.get("color_mode")
+                for attr in ("terrain_palette", "waterfall_palette", "spectrogram_palette"):
+                    if hasattr(aux, attr) and orig.get(attr) is not None:
+                        setattr(aux, attr, orig[attr])
+                if "color" in orig:
+                    aux.color = orig["color"]
+                if "line_color_lo" in orig:
+                    aux.line_color_lo = orig["line_color_lo"]
+                if "line_color_hi" in orig:
+                    aux.line_color_hi = orig["line_color_hi"]
+                for prefix in ("terrain", "waterfall", "spectrogram"):
+                    lo = f"{prefix}_color_lo"
+                    hi = f"{prefix}_color_hi"
+                    if hasattr(aux, lo) and lo in orig:
+                        setattr(aux, lo, orig[lo])
+                    if hasattr(aux, hi) and hi in orig:
+                        setattr(aux, hi, orig[hi])
+                aux._sync_active = False
+
+        if aux.kind == "terrain":
+            aux.terrain_dirty = True
+        if aux.kind == "waterfall":
+            aux.waterfall_dirty = True
+        if hasattr(aux, "drawing_area"):
+            aux.drawing_area.queue_draw()
+        if hasattr(aux, "reset_to_current_controls"):
+            aux.reset_to_current_controls()
+
     def build_beat_threshold_control(self):
 
         def format_beat_threshold(value):
@@ -3916,6 +4067,18 @@ class MelangeWindow(Adw.ApplicationWindow):
                 if action is not None and isinstance(value, bool) and action.get_state().get_boolean() != value:
                     action.change_state(GLib.Variant("b", value))
 
+        # Global mini visualizer color sync / style (sidebar, not preferences page)
+        if saved.get("sync_mini_colors") is True and hasattr(self, "sync_mini_colors_row"):
+            self.sync_mini_colors_row.set_active(True)
+        if "sync_mini_style" in saved and hasattr(self, "universal_style_dropdown"):
+            self.universal_style_dropdown.set_selected(saved["sync_mini_style"])
+        if "peak_line_thickness" in saved and hasattr(self, "peak_line_thickness_scale"):
+            self.peak_line_thickness_scale.set_value(saved["peak_line_thickness"])
+        if "vu_led_thickness" in saved and hasattr(self, "vu_led_thickness_scale"):
+            self.vu_led_thickness_scale.set_value(saved["vu_led_thickness"])
+        if "spectrum_led_thickness" in saved and hasattr(self, "spectrum_led_thickness_scale"):
+            self.spectrum_led_thickness_scale.set_value(saved["spectrum_led_thickness"])
+
         theme = saved.get("theme")
         button = getattr(self, "theme_buttons", {}).get(theme) if isinstance(theme, int) else None
         if button is not None:
@@ -3973,6 +4136,11 @@ class MelangeWindow(Adw.ApplicationWindow):
             },
             "theme": int(Adw.StyleManager.get_default().get_color_scheme()),
             "maximized": self.is_maximized(),
+            "sync_mini_colors": getattr(self, "sync_mini_colors_row", None) and self.sync_mini_colors_row.get_active(),
+            "sync_mini_style": self.universal_style_dropdown.get_selected() if hasattr(self, "universal_style_dropdown") else 0,
+            "peak_line_thickness": self.peak_line_thickness_scale.get_value() if hasattr(self, "peak_line_thickness_scale") else 1.0,
+            "vu_led_thickness": self.vu_led_thickness_scale.get_value() if hasattr(self, "vu_led_thickness_scale") else 1.0,
+            "spectrum_led_thickness": self.spectrum_led_thickness_scale.get_value() if hasattr(self, "spectrum_led_thickness_scale") else 1.0,
         }
 
         if not (self.is_maximized() or self.is_fullscreen()) and self.get_width() > 0:
@@ -4652,6 +4820,145 @@ class MelangeWindow(Adw.ApplicationWindow):
                 group.add(Adw.SwitchRow(title=label, action_name=f"win.{action}"))
 
             page.add(group)
+
+        color_group = Adw.PreferencesGroup(
+            title="Colors",
+            description="Override color for all open mini visualizers."
+        )
+        color_group.add(self.build_sync_mini_colors_control())
+
+        style_row = Adw.ActionRow(title="Color Style")
+        self.universal_style_dropdown = Gtk.DropDown.new_from_strings(
+            ["Solid", "Gradient"]
+        )
+        self.universal_style_dropdown.set_selected(0)
+        self.universal_style_dropdown.set_valign(Gtk.Align.CENTER)
+        style_row.add_suffix(self.universal_style_dropdown)
+        color_group.add(style_row)
+        self.universal_style_row = style_row
+
+        self.universal_style_dropdown.connect(
+            "notify::selected",
+            lambda d, p: (self.apply_mini_viz_color_overrides(), self.schedule_settings_save())
+        )
+
+        self.universal_style_row.set_visible(False)
+
+        page.add(color_group)
+
+        peak_group = Adw.PreferencesGroup(
+            title="Peak Meter",
+            description="Settings for all peak level visualizers."
+        )
+
+        def format_peak_thickness(value):
+            return f"{value:.2f}×"
+
+        def on_peak_thickness_changed(value):
+            for a in list(self.aux_windows.values()):
+                if a.kind == "peak":
+                    a.peak_line_thickness = value
+                    a.drawing_area.queue_draw()
+            self.schedule_settings_save()
+
+        peak_thick_row = Adw.ActionRow(title="Line Thickness")
+        peak_thick_row.set_subtitle(format_peak_thickness(1.0))
+
+        peak_thick_scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25
+        )
+        peak_thick_scale.set_value(1.0)
+        peak_thick_scale.set_size_request(160, -1)
+        peak_thick_scale.set_valign(Gtk.Align.CENTER)
+        peak_thick_scale.set_draw_value(False)
+
+        def peak_thick_changed(scale):
+            value = scale.get_value()
+            peak_thick_row.set_subtitle(format_peak_thickness(value))
+            on_peak_thickness_changed(value)
+
+        peak_thick_scale.connect("value-changed", peak_thick_changed)
+        peak_thick_row.add_suffix(peak_thick_scale)
+        peak_group.add(peak_thick_row)
+        self.peak_line_thickness_scale = peak_thick_scale
+
+        page.add(peak_group)
+
+        vu_group = Adw.PreferencesGroup(
+            title="VU Meter",
+            description="Settings for all VU level visualizers."
+        )
+
+        def format_vu_thickness(value):
+            return f"{value:.2f}×"
+
+        def on_vu_thickness_changed(value):
+            for a in list(self.aux_windows.values()):
+                if a.kind == "vu":
+                    a.vu_led_thickness = value
+                    a.drawing_area.queue_draw()
+            self.schedule_settings_save()
+
+        vu_thick_row = Adw.ActionRow(title="LED Hold Line")
+        vu_thick_row.set_subtitle(format_vu_thickness(1.0))
+
+        vu_thick_scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25
+        )
+        vu_thick_scale.set_value(1.0)
+        vu_thick_scale.set_size_request(160, -1)
+        vu_thick_scale.set_valign(Gtk.Align.CENTER)
+        vu_thick_scale.set_draw_value(False)
+
+        def vu_thick_changed(scale):
+            value = scale.get_value()
+            vu_thick_row.set_subtitle(format_vu_thickness(value))
+            on_vu_thickness_changed(value)
+
+        vu_thick_scale.connect("value-changed", vu_thick_changed)
+        vu_thick_row.add_suffix(vu_thick_scale)
+        vu_group.add(vu_thick_row)
+        self.vu_led_thickness_scale = vu_thick_scale
+
+        page.add(vu_group)
+
+        spectrum_group = Adw.PreferencesGroup(
+            title="Spectrum",
+            description="Settings for all spectrum visualizers."
+        )
+
+        def format_spectrum_thickness(value):
+            return f"{value:.2f}×"
+
+        def on_spectrum_thickness_changed(value):
+            for a in list(self.aux_windows.values()):
+                if a.kind == "spectrum":
+                    a.spectrum_led_thickness = value
+                    a.drawing_area.queue_draw()
+            self.schedule_settings_save()
+
+        spectrum_thick_row = Adw.ActionRow(title="LED Hold Line")
+        spectrum_thick_row.set_subtitle(format_spectrum_thickness(1.0))
+
+        spectrum_thick_scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25
+        )
+        spectrum_thick_scale.set_value(1.0)
+        spectrum_thick_scale.set_size_request(160, -1)
+        spectrum_thick_scale.set_valign(Gtk.Align.CENTER)
+        spectrum_thick_scale.set_draw_value(False)
+
+        def spectrum_thick_changed(scale):
+            value = scale.get_value()
+            spectrum_thick_row.set_subtitle(format_spectrum_thickness(value))
+            on_spectrum_thickness_changed(value)
+
+        spectrum_thick_scale.connect("value-changed", spectrum_thick_changed)
+        spectrum_thick_row.add_suffix(spectrum_thick_scale)
+        spectrum_group.add(spectrum_thick_row)
+        self.spectrum_led_thickness_scale = spectrum_thick_scale
+
+        page.add(spectrum_group)
 
         reset_group = Adw.PreferencesGroup()
         reset_button = Gtk.Button(label="Reset All Mini Visualizers…", halign=Gtk.Align.CENTER)

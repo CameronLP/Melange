@@ -53,8 +53,10 @@ SAVED_SETTINGS = [
     "mirror_reflection", "maintain_aspect_ratio", "scope_zoom",
     "xy_line_width", "xy_points", "xy_curved",
     "vu_style", "vu_peak_hold", "vu_peak_hold_style", "vu_segments", "vu_height_scale",
-    "peak_hold_seconds", "peak_hold_color_mode", "peak_hold_color",
+    "vu_yellow_zone", "vu_red_zone",
+    "peak_hold_seconds", "peak_hold_color_mode", "peak_hold_tint", "peak_line_thickness", "vu_led_thickness", "spectrum_led_thickness", "peak_hold_color",
     "spectrum_peak_hold", "spectrum_peak_hold_style", "spectrum_height_scale", "spectrum_style", "spectrum_led_segments",
+    "spectrum_yellow_zone", "spectrum_red_zone",
     "scope_time_base", "scope_trigger", "vector_persistence", "vector_dot_size",
     "spectrogram_vertical", "spectrogram_speed", "spectrogram_palette",
     "spectrogram_color_lo", "spectrogram_color_hi", "spectrogram_color_ceiling",
@@ -78,7 +80,7 @@ SAVED_SETTINGS = [
     "compact_mode", "freq_min", "freq_max", "xy_goniometer",
     "terrain_auto_rotate", "terrain_rotate_speed",
     "waterfall_auto_rotate", "waterfall_rotate_speed",
-    "view_hint_shown", "vector_auto_gain", "color_sync", "reverse_colors",
+    "view_hint_shown", "vector_auto_gain", "color_sync", "local_sync_style", "reverse_colors",
     "terrain_pan_x", "terrain_pan_y", "waterfall_pan_x", "waterfall_pan_y",
     "pipes_pan_x", "pipes_pan_y",
     "scope_line_width", "peak_scale",
@@ -410,6 +412,8 @@ STYLE_CHOICES = [("solid", "Solid"), ("gradient", "Gradient")]
 
 PEAK_HOLD_COLOR_CHOICES = [("auto", "Automatic"), ("custom", "Custom"), ("main", "Main Visualizer")]
 
+PEAK_HOLD_TINT_CHOICES = [("brighter", "Brighter"), ("same", "Same"), ("dimmer", "Dimmer")]
+
 
 METER_STYLE_CHOICES = [("classic", "Classic")] + STYLE_CHOICES
 
@@ -595,42 +599,7 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
         reset_row.append(reset_button)
         box.append(reset_row)
 
-    def build_settings_sidebar(self, controls):
-
-        page = self.build_settings_page(controls)
-
-        header = Adw.HeaderBar(show_start_title_buttons=False)
-
-        close_toggle = Gtk.ToggleButton(
-            icon_name="sidebar-show-right-symbolic",
-            tooltip_text="Settings",
-        )
-        close_toggle.bind_property(
-            "active", self.settings_split, "show-sidebar",
-            GObject.BindingFlags.BIDIRECTIONAL | GObject.BindingFlags.SYNC_CREATE
-        )
-        header.pack_start(close_toggle)
-        header.set_title_widget(
-            Adw.WindowTitle(title="Settings", subtitle=AUX_WINDOW_TITLES[self.kind])
-        )
-
-        sidebar = Adw.ToolbarView()
-        sidebar.add_top_bar(header)
-        sidebar.set_content(page)
-
-        # Scrolls sideways rather than holding the window open (when
-        # it's narrow the settings open in their own window instead -
-        # see on_show_sidebar_changed).
-        scroller = Gtk.ScrolledWindow(
-            hscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
-            vscrollbar_policy=Gtk.PolicyType.EXTERNAL,
-            child=sidebar,
-        )
-
-        return scroller
-
-    # Settings as libadwaita rows: the sidebar's content, or the
-    # separate settings window's (open_settings_window).
+    # Settings as libadwaita rows: the dialog's content.
     def build_settings_page(self, controls):
 
         def children(widget):
@@ -753,87 +722,60 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
 
         return max(16, int(1000 / fps))
 
-    def on_show_sidebar_changed(self, split, param):
-
-        if not split.get_show_sidebar():
-            return
-
-        min_width, min_height = self.SETTINGS_WINDOW_BELOW
-
-        if self.get_width() >= min_width and self.get_height() >= min_height:
-            return
-
-        # Undo it once the toggle <-> sidebar binding has finished
-        # propagating; doing it inside this notify left the toggle
-        # stuck "on", so the next click did nothing.
-        GLib.idle_add(self.redirect_to_settings_window)
-
-    def redirect_to_settings_window(self):
-
-        self.settings_split.set_show_sidebar(False)
-
-        # The toggle/menu work as open/close for the window too.
-        if self.settings_window is not None:
-            self.settings_window.close()
-        else:
-            self.open_settings_window()
-
-        return False
-
-    def open_settings_window(self):
+    def open_settings_dialog(self):
 
         page = self.build_settings_page(self.build_settings_controls())
         self.update_row_sensitivity()
 
-        window = Adw.Window(
+        dialog = Adw.Dialog(
             title=f"{AUX_WINDOW_TITLES[self.kind]} Settings",
-            transient_for=self,
-            default_width=340,
-            default_height=480,
         )
-        window.set_size_request(260, 200)
+        dialog.set_content_width(360)
+        dialog.set_content_height(480)
+        dialog.set_size_request(260, 200)
 
         view = Adw.ToolbarView()
         view.add_top_bar(Adw.HeaderBar())
         view.set_content(page)
-        window.set_content(view)
+        dialog.set_child(view)
 
         keys = Gtk.EventControllerKey()
         keys.connect(
             "key-pressed",
-            lambda controller, keyval, *args: (window.close() or True) if keyval == Gdk.KEY_Escape else False
+            lambda controller, keyval, *args: (dialog.close() or True) if keyval == Gdk.KEY_Escape else False
         )
-        window.add_controller(keys)
+        dialog.add_controller(keys)
 
-        window.connect("close-request", self.on_settings_window_closed)
-        self.settings_window = window
-        window.present()
+        dialog.connect("closed", self.on_settings_dialog_closed)
+        self.settings_dialog = dialog
+        # If the mini visualizer itself is tiny, present without a
+        # parent so the dialog floats freely on the desktop (pop-out).
+        if self.get_width() < 360 or self.get_height() < 240:
+            self._settings_dialog_floating = True
+            dialog.set_presentation_mode(Adw.DialogPresentationMode.FLOATING)
+            dialog.present()
+        else:
+            self._settings_dialog_floating = False
+            dialog.set_presentation_mode(Adw.DialogPresentationMode.BOTTOM_SHEET)
+            dialog.present(self)
 
-    def on_settings_window_closed(self, window):
+    def on_settings_dialog_closed(self, dialog):
 
-        self.settings_window = None
-        # The sidebar's controls take over again, showing what changed.
+        self.settings_dialog = None
+        self._settings_dialog_floating = False
         self.reset_to_current_controls()
 
         return False
 
     def reset_to_current_controls(self):
-        """Rebuild the sidebar so its controls show the current values
+        """Rebuild the dialog so its controls show the current values
         (after a change made somewhere else, e.g. the right-click menu)."""
 
-        if self.settings_window is not None:
-            self.settings_window.get_content().set_content(
+        if self.settings_dialog is not None:
+            self.settings_dialog.get_child().set_content(
                 self.build_settings_page(self.build_settings_controls())
             )
             self.update_row_sensitivity()
-            return
-
-        showing = self.settings_split.get_show_sidebar()
-        self.settings_split.set_sidebar(
-            self.build_settings_sidebar(self.build_settings_controls())
-        )
-        self.settings_split.set_show_sidebar(showing)
-        self.update_row_sensitivity()
 
     def schedule_save(self, *args):
 
