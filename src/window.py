@@ -33,7 +33,7 @@ gi.require_version("Pango", "1.0")
 
 from gi.repository import Gtk, Adw, GLib, Gdk, Gio, Gst, GObject, Pango
 from melange.mirror_window import MirrorWindow
-from melange.aux_window import AuxVisualizerWindow, update_main_visualizer_palette, reset_all_saved_settings
+from melange.aux_window import AuxVisualizerWindow, update_main_visualizer_palette, reset_all_saved_settings, FFT_SIZE, spectrum_magnitudes
 from melange.mini_visualizer_base import palette_color
 from melange.now_playing import NowPlayingWatcher
 from melange import projectm_view
@@ -656,6 +656,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.playlists = self.load_playlists()
         self.mirror_windows = []
         self.aux_windows = {}
+        self.shared_spectrum_buffer = []
+        self.shared_magnitudes = None
         self.current_preset_name = None
         self.current_playlist_name = None
 
@@ -2722,6 +2724,8 @@ class MelangeWindow(Adw.ApplicationWindow):
     def forward_audio_to_aux_windows(self, data):
 
         if not self.aux_windows:
+            self.shared_spectrum_buffer = []
+            self.shared_magnitudes = None
             return False
 
         samples = array.array("h")
@@ -2730,8 +2734,22 @@ class MelangeWindow(Adw.ApplicationWindow):
         left = [s / 32768.0 for s in samples[0::2]]
         right = [s / 32768.0 for s in samples[1::2]]
 
+        # Maintain a shared mono buffer and compute FFT magnitudes once.
+        # Each aux window keeps its own buffer as a fallback (for when
+        # per-window gain != 1.0), but when gain is neutral they can
+        # reuse this pre-computed result instead of redoing the same
+        # transform independently.
+        mono = [(l + r) / 2.0 for l, r in zip(left, right)]
+        self.shared_spectrum_buffer.extend(mono)
+        self.shared_spectrum_buffer = self.shared_spectrum_buffer[-FFT_SIZE:]
+
+        if len(self.shared_spectrum_buffer) == FFT_SIZE:
+            self.shared_magnitudes = spectrum_magnitudes(self.shared_spectrum_buffer)
+        else:
+            self.shared_magnitudes = None
+
         for aux_window in self.aux_windows.values():
-            aux_window.push_audio(left, right)
+            aux_window.push_audio(left, right, self.shared_magnitudes)
 
         return False
 

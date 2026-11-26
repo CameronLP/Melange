@@ -277,29 +277,12 @@ def random_bounce_color():
 # Every aux window is handed the very same left/right list objects per
 # audio chunk (window.py forward_audio_to_aux_windows), and VU, DVD and
 # Pipes each took the RMS of both on every draw - so the last few
-# results are remembered by list identity. The list itself is kept in
-# the cache entry, so an id can't be reused while it's cached.
-_rms_cache = {}
-
-
 def rms(samples):
 
     if not samples:
         return 0.0
 
-    cached = _rms_cache.get(id(samples))
-
-    if cached is not None and cached[0] is samples:
-        return cached[1]
-
-    value = math.sqrt(sum(s * s for s in samples) / len(samples))
-
-    if len(_rms_cache) >= 8:
-        _rms_cache.clear()
-
-    _rms_cache[id(samples)] = (samples, value)
-
-    return value
+    return math.sqrt(sum(s * s for s in samples) / len(samples))
 
 
 # Bit-reversal permutation and twiddle factors per FFT length, built
@@ -377,25 +360,15 @@ def real_fft_magnitudes(samples):
     return magnitudes
 
 
-# Every FFT-based aux window (Spectrum, Spectrogram, Terrain,
-# Waterfall, Pipes) keeps its own copy of the same last FFT_SIZE mono
-# samples and used to run its own FFT on them - identical work, once
-# per open window. This memoizes on the buffer's contents, so however
-# many windows are open, each new piece of audio is analysed once.
-# The returned list is shared: callers must treat it as read-only.
-_magnitude_cache = [None, None]
-
-
 def spectrum_magnitudes(buffer):
 
-    key = tuple(buffer)
+    if len(buffer) != FFT_SIZE:
+        raise ValueError(
+            f"spectrum_magnitudes expects exactly {FFT_SIZE} samples, got {len(buffer)}"
+        )
 
-    if key != _magnitude_cache[0]:
-        windowed = [s * w for s, w in zip(key, _HANN_WINDOW)]
-        _magnitude_cache[0] = key
-        _magnitude_cache[1] = real_fft_magnitudes(windowed)
-
-    return _magnitude_cache[1]
+    windowed = [s * w for s, w in zip(buffer, _HANN_WINDOW)]
+    return real_fft_magnitudes(windowed)
 
 
 class AuxVisualizerWindow(MiniVisualizerWindow):
@@ -495,7 +468,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             self.background_color.red, self.background_color.green, self.background_color.blue = r, g, b
             self.background_color.alpha = 1.0
         self.gain = 1.0
-        self.frame_rate_cap = 0
+        self._shared_magnitudes = None
+        self._dirty_timer = None
+        self.frame_rate_cap = 30
         self.last_draw_queued = 0.0
         self.compact_mode = False
 
@@ -2781,13 +2756,27 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
     def settings_changed(self, *args):
 
-        self.terrain_dirty = True
-        self.waterfall_dirty = True
-        self.vector_surface = None
-        self.spectrogram_image_key = None
+        # Debounce the expensive surface dirty flags so rapid slider
+        # drags don't rebuild the 3D cache on every single value change.
+        dirty_timer = getattr(self, "_dirty_timer", None)
+        if dirty_timer is not None:
+            GLib.source_remove(dirty_timer)
+            self._dirty_timer = None
+
         self.update_row_sensitivity()
         self.drawing_area.queue_draw()
         self.schedule_save()
+
+        def _apply_dirty():
+            self.terrain_dirty = True
+            self.waterfall_dirty = True
+            self.vector_surface = None
+            self.spectrogram_image_key = None
+            self._dirty_timer = None
+            self.drawing_area.queue_draw()
+            return False
+
+        self._dirty_timer = GLib.timeout_add(150, _apply_dirty)
 
     def update_row_sensitivity(self):
         """Show only the rows that apply to the current choices."""
@@ -3779,7 +3768,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         return self.canvas_foreground_rgba(fallback_alpha)
 
 
-    def push_audio(self, left, right):
+    def push_audio(self, left, right, shared_magnitudes=None):
 
         if self.gain != 1.0:
             gain = self.gain
@@ -3796,6 +3785,13 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             self.spectrum_buffer.extend(mono)
             self.spectrum_buffer = self.spectrum_buffer[-FFT_SIZE:]
 
+            # When the forwarder already computed magnitudes and our
+            # gain hasn't altered the signal, we can reuse them.
+            if self.gain == 1.0 and shared_magnitudes is not None:
+                self._shared_magnitudes = shared_magnitudes
+            else:
+                self._shared_magnitudes = None
+
         if self.kind == "oscilloscope":
             self.scope_left.extend(left)
             self.scope_right.extend(right)
@@ -3807,6 +3803,16 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             self.last_draw_queued = now
 
         self.drawing_area.queue_draw()
+
+
+    def current_magnitudes(self):
+        """Return precomputed magnitudes when the forwarder provided
+        them and our gain hasn't altered the signal, otherwise compute
+        locally from ``self.spectrum_buffer``."""
+        shared = getattr(self, "_shared_magnitudes", None)
+        if shared is not None:
+            return shared
+        return spectrum_magnitudes(self.spectrum_buffer)
 
 
     def apply_effective_colors(self):
@@ -5360,7 +5366,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         if len(self.spectrum_buffer) == FFT_SIZE:
 
-            magnitudes = spectrum_magnitudes(self.spectrum_buffer)
+            magnitudes = self.current_magnitudes()
 
             new_levels = self.bars_from_magnitudes(magnitudes, bar_count)
 
@@ -5550,7 +5556,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         self.last_spectrogram_frame_time = now
 
-        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
+        magnitudes = self.current_magnitudes()
 
         self.spectrogram_append_count += 1
         self.spectrogram_columns.append(
@@ -5712,7 +5718,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         self.last_terrain_frame_time = now
 
-        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
+        magnitudes = self.current_magnitudes()
 
         self.terrain_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
         self.terrain_dirty = True
@@ -6001,7 +6007,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         self.last_waterfall_frame_time = now
 
-        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
+        magnitudes = self.current_magnitudes()
 
         self.waterfall_rows.append(self.bars_from_magnitudes(magnitudes, bin_count))
         self.waterfall_dirty = True
@@ -6275,7 +6281,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         self.last_pipes_band_frame_time = now
 
-        magnitudes = spectrum_magnitudes(self.spectrum_buffer)
+        magnitudes = self.current_magnitudes()
 
         for i, (f_lo, f_hi) in enumerate(PIPES_BANDS):
 
@@ -6865,6 +6871,10 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         if getattr(self, "square_timer", None) is not None:
             GLib.source_remove(self.square_timer)
             self.square_timer = None
+
+        if getattr(self, "_dirty_timer", None) is not None:
+            GLib.source_remove(self._dirty_timer)
+            self._dirty_timer = None
 
         if self.settings_window is not None:
             settings_window, self.settings_window = self.settings_window, None
