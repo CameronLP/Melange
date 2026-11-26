@@ -6894,6 +6894,23 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             GLib.source_remove(self.pipes_timer)
             self.pipes_timer = None
 
+        # Release heavy Cairo surfaces and caches immediately.
+        self.vector_surface = None
+        self.spectrogram_image = None
+        self.spectrogram_image_key = None
+        self.terrain_surface = None
+        self.waterfall_surface = None
+        self._icon_cache_key = None
+        self._icon_pixbuf = None
+        self._dvd_logo_cache.clear()
+
+        # Detach gesture controllers from child widgets so their
+        # callbacks (bound to this window) are released before teardown.
+        for widget in (self.drawing_area, self.header):
+            if widget is not None:
+                for controller in list(widget.observe_controllers()):
+                    widget.remove_controller(controller)
+
         self.primary.aux_window_closed(self.kind)
 
         # Same deferred-destroy workaround as MirrorWindow.on_close_request

@@ -2571,6 +2571,35 @@ class MelangeWindow(Adw.ApplicationWindow):
         for aux_window in list(self.aux_windows.values()):
             aux_window.close()
 
+        # Cancel all pending timers so they don't fire on a closed window.
+        for timer_name in (
+            "hide_timer", "opacity_fade_timer",
+            "now_playing_scroll_timer", "now_playing_position_timer",
+            "now_playing_auto_hide_timer", "now_playing_periodic_timer",
+            "now_playing_fade_timer", "settings_save_timer", "pactl_event_timer"
+        ):
+            timer = getattr(self, timer_name, None)
+            if timer is not None:
+                GLib.source_remove(timer)
+                setattr(self, timer_name, None)
+
+        # Stop ticking label animations.
+        self.now_playing_artist_ticker.stop()
+        self.now_playing_album_ticker.stop()
+
+        # Stop preset cycling so its timer doesn't hold us alive.
+        self.presets.set_active(False)
+
+        # Stop the MPRIS watcher so D-Bus callbacks don't keep us alive.
+        if self.now_playing_watcher is not None:
+            self.now_playing_watcher.stop()
+
+        # Tear down the audio capture pipeline.
+        self.teardown_gst_pipeline()
+
+        # Stop cursor auto-hide.
+        self.cursor_hider.stop()
+
         # Returning False here (the usual "let the default handler
         # run" convention for this signal) was found - while building
         # the mirror-window close path above - to leave the window
@@ -2578,9 +2607,28 @@ class MelangeWindow(Adw.ApplicationWindow):
         # an idle callback (deferring past this signal's own emission)
         # and returning True is what actually works; see the identical
         # fix and its verification in mirror_window.py.
-        GLib.idle_add(self.destroy)
+        GLib.idle_add(
+            self.destroy_and_dispose,
+            priority=GLib.PRIORITY_DEFAULT
+        )
 
         return True
+
+    def destroy_and_dispose(self):
+        """Break Python/GObject reference cycles so the window is freed."""
+
+        self.destroy()
+
+        for controller in list(self.observe_controllers()):
+            self.remove_controller(controller)
+
+        for action_name in self.list_actions():
+            self.remove_action(action_name)
+
+        self.run_dispose()
+        self.__dict__.clear()
+
+        return False
 
     def new_mirror_window_clicked(self, action, param):
 

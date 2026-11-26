@@ -1171,6 +1171,13 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
             self.remove_action(action_name)
 
         self.run_dispose()
+
+        # Clean up any per-window palette entries that might have been
+        # missed if the close path bypassed the normal cleanup.
+        for key in list(getattr(self, "effective_signatures", {})):
+            PALETTE_STOPS.pop(key, None)
+            _PALETTE_LUTS.pop(key, None)
+
         self.__dict__.clear()
 
         return False

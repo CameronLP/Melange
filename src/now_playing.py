@@ -59,7 +59,7 @@ class NowPlayingWatcher:
 
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 
-        self.bus.signal_subscribe(
+        self._subscription_id = self.bus.signal_subscribe(
             "org.freedesktop.DBus",
             "org.freedesktop.DBus",
             "NameOwnerChanged",
@@ -250,6 +250,28 @@ class NowPlayingWatcher:
         )
 
         self.on_change(self._info_from_proxy(active[0], self.players[active[0]]))
+
+    def stop(self):
+        """Unsubscribe from D-Bus signals and drop all player proxies so
+        the watcher can be garbage-collected."""
+
+        if getattr(self, "_subscription_id", None) is not None:
+            self.bus.signal_unsubscribe(self._subscription_id)
+            self._subscription_id = None
+
+        for proxy in list(self.players.values()):
+            try:
+                proxy.disconnect_by_func(self._on_properties_changed)
+            except Exception:
+                pass
+
+        self.players.clear()
+        self.identities.clear()
+        self.last_active.clear()
+        self.desktop_entries.clear()
+        self.on_change = None
+        self.on_players_changed = None
+        self.bus = None
 
     def _info_from_proxy(self, bus_name, proxy):
 
