@@ -32,6 +32,12 @@ from pathlib import Path
 
 from .window import MelangeWindow
 
+try:
+    from ._version import COMMIT, BUILD_TIME
+except ImportError:
+    COMMIT = "dev"
+    BUILD_TIME = "unknown"
+
 css = Gtk.CssProvider()
 
 css.load_from_path(
@@ -182,7 +188,7 @@ class MelangeApplication(Adw.Application):
             application_name="Melange",
             application_icon="com.cameronlp.Melange",
             developer_name="Cameron Penne",
-            version="0.1.0",
+            version=f"0.1.0 ({COMMIT}) — {BUILD_TIME}",
             license_type=Gtk.License.GPL_3_0,
             comments=_(
                 "A MilkDrop-style music visualizer for the desktop"
