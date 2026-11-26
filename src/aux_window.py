@@ -203,6 +203,13 @@ SPECTRUM_STYLE_CHOICES = [
     ("led", "LED Segments"),
 ]
 
+LED_PEAK_STYLE_CHOICES = [
+    ("authentic", "Authentic"),
+    ("outline", "Outline"),
+    ("filled", "Filled"),
+    ("inverted", "Inverted"),
+]
+
 # How many past frames the spectrogram keeps on screen at once, and
 # how far apart (in wall-clock time) those frames are taken - a new
 # column every FFT_SIZE samples (~11.6ms at 44100Hz) would scroll by
@@ -590,8 +597,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # (draw_vu_needle) - all three read the same underlying
         # vu_left/vu_right ballistics (draw_vu_meter), just rendered
         # differently.
-        self.vu_style = "bars"
+        self.vu_style = "led"
         self.vu_segments = 15
+        self.vu_height_scale = 1.0
 
         # DVD Bounce state. Position/velocity are in the drawing
         # area's own pixel space and only meaningful once it has a
@@ -813,6 +821,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # generic logic Peak Meter and Spectrum's own hold markers
         # already reuse.
         self.vu_peak_hold = True
+        self.vu_peak_hold_style = "authentic"
         self.vu_hold_left = 0.0
         self.vu_hold_right = 0.0
         self.vu_hold_left_time = 0.0
@@ -827,6 +836,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # peak_hold_seconds, so adjusting it here doesn't touch a Peak
         # Meter window's own value).
         self.spectrum_peak_hold = True
+        self.spectrum_peak_hold_style = "authentic"
         self.spectrum_bar_holds = []
         self.spectrum_bar_hold_times = []
 
@@ -835,7 +845,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # rectangles (render_spectrum_bars) - same underlying data
         # either way, just a different render function selected at
         # draw time (on_draw).
-        self.spectrum_style = "bars"
+        self.spectrum_style = "led"
         self.spectrum_led_segments = 28
         self.spectrum_height_scale = 1.0
 
@@ -1211,6 +1221,55 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             vu_hold_row.append(vu_hold_switch)
             box.append(vu_hold_row)
+
+            vu_hold_style_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            vu_hold_style_label = Gtk.Label(
+                label="Peak Hold Style", xalign=0, hexpand=True
+            )
+            vu_hold_style_row.append(vu_hold_style_label)
+
+            vu_hold_style_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in LED_PEAK_STYLE_CHOICES]
+            )
+            vu_hold_style_drop_index = next(
+                (
+                    i for i, (key, _) in enumerate(LED_PEAK_STYLE_CHOICES)
+                    if key == self.vu_peak_hold_style
+                ),
+                0
+            )
+            vu_hold_style_dropdown.set_selected(vu_hold_style_drop_index)
+
+            vu_hold_style_dropdown.connect(
+                "notify::selected",
+                self.on_vu_peak_hold_style_changed
+            )
+
+            vu_hold_style_row.append(vu_hold_style_dropdown)
+            box.append(vu_hold_style_row)
+
+            height_scale_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            height_scale_label = Gtk.Label(
+                label="Height Scale", xalign=0, hexpand=True
+            )
+            height_scale_row.append(height_scale_label)
+
+            height_scale_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.25, 2.5, 0.05
+            )
+            height_scale_scale.set_value(self.vu_height_scale)
+            height_scale_scale.set_size_request(120, -1)
+            height_scale_scale.set_draw_value(False)
+
+            height_scale_scale.connect(
+                "value-changed",
+                self.on_vu_height_scale_changed
+            )
+
+            height_scale_row.append(height_scale_scale)
+            box.append(height_scale_row)
 
             segments_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -1608,6 +1667,35 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             spectrum_hold_row.append(spectrum_hold_switch)
             box.append(spectrum_hold_row)
+
+            spectrum_hold_style_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            spectrum_hold_style_label = Gtk.Label(
+                label="Peak Hold Style", xalign=0, hexpand=True
+            )
+            spectrum_hold_style_row.append(spectrum_hold_style_label)
+
+            spectrum_hold_style_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in LED_PEAK_STYLE_CHOICES]
+            )
+            spectrum_hold_style_drop_index = next(
+                (
+                    i for i, (key, _) in enumerate(LED_PEAK_STYLE_CHOICES)
+                    if key == self.spectrum_peak_hold_style
+                ),
+                0
+            )
+            spectrum_hold_style_dropdown.set_selected(spectrum_hold_style_drop_index)
+
+            spectrum_hold_style_dropdown.connect(
+                "notify::selected",
+                self.on_spectrum_peak_hold_style_changed
+            )
+
+            spectrum_hold_style_row.append(spectrum_hold_style_dropdown)
+            box.append(spectrum_hold_style_row)
 
             height_scale_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
@@ -3243,6 +3331,16 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         self.spectrum_peak_hold = switch.get_active()
 
+    def on_spectrum_peak_hold_style_changed(self, dropdown, param):
+
+        index = dropdown.get_selected()
+
+        if index < 0 or index >= len(LED_PEAK_STYLE_CHOICES):
+            return
+
+        self.spectrum_peak_hold_style = LED_PEAK_STYLE_CHOICES[index][0]
+        self.drawing_area.queue_draw()
+
     def on_spectrum_height_scale_changed(self, scale):
 
         self.spectrum_height_scale = scale.get_value()
@@ -3568,9 +3666,24 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         self.vu_peak_hold = switch.get_active()
 
+    def on_vu_peak_hold_style_changed(self, dropdown, param):
+
+        index = dropdown.get_selected()
+
+        if index < 0 or index >= len(LED_PEAK_STYLE_CHOICES):
+            return
+
+        self.vu_peak_hold_style = LED_PEAK_STYLE_CHOICES[index][0]
+        self.drawing_area.queue_draw()
+
     def on_vu_segments_changed(self, spin):
 
         self.vu_segments = int(spin.get_value())
+        self.drawing_area.queue_draw()
+
+    def on_vu_height_scale_changed(self, scale):
+
+        self.vu_height_scale = scale.get_value()
         self.drawing_area.queue_draw()
 
     def on_labels_changed(self, switch, param):
@@ -4031,17 +4144,22 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 self.draw_meter_pair_stacked(
                     cr, width, height,
                     lambda c, x, y, w, h, level, hold: self.draw_vu_needle(c, x, y, w, h, level),
-                    self.vu_left, self.vu_right, None, None
+                    min(self.vu_left * self.vu_height_scale, 1.0),
+                    min(self.vu_right * self.vu_height_scale, 1.0),
+                    None, None
                 )
                 return
         elif width > height * 1.3:
             draw = self.draw_vu_led if self.vu_style == "led" else self.draw_vu_bar
+            hold_left = self.vu_hold_left if self.vu_peak_hold else None
+            hold_right = self.vu_hold_right if self.vu_peak_hold else None
             self.draw_meter_pair_horizontal(
                 cr, width, height,
                 lambda c, x, y, w, h, level, hold: draw(c, x, y, w, h, level, hold),
-                self.vu_left, self.vu_right,
-                self.vu_hold_left if self.vu_peak_hold else None,
-                self.vu_hold_right if self.vu_peak_hold else None,
+                min(self.vu_left * self.vu_height_scale, 1.0),
+                min(self.vu_right * self.vu_height_scale, 1.0),
+                min(hold_left * self.vu_height_scale, 1.0) if hold_left is not None else None,
+                min(hold_right * self.vu_height_scale, 1.0) if hold_right is not None else None,
             )
             return
 
@@ -4056,22 +4174,27 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         hold_left = self.vu_hold_left if self.vu_peak_hold else None
         hold_right = self.vu_hold_right if self.vu_peak_hold else None
 
+        vu_left = min(self.vu_left * self.vu_height_scale, 1.0)
+        vu_right = min(self.vu_right * self.vu_height_scale, 1.0)
+        vu_hold_left = min(hold_left * self.vu_height_scale, 1.0) if hold_left is not None else None
+        vu_hold_right = min(hold_right * self.vu_height_scale, 1.0) if hold_right is not None else None
+
         if self.vu_style == "led":
             self.draw_vu_led(
-                cr, left_x, margin, cell_width, cell_height, self.vu_left, hold_left
+                cr, left_x, margin, cell_width, cell_height, vu_left, vu_hold_left
             )
             self.draw_vu_led(
-                cr, right_x, margin, cell_width, cell_height, self.vu_right, hold_right
+                cr, right_x, margin, cell_width, cell_height, vu_right, vu_hold_right
             )
         elif self.vu_style == "needle":
-            self.draw_vu_needle(cr, left_x, margin, cell_width, cell_height, self.vu_left)
-            self.draw_vu_needle(cr, right_x, margin, cell_width, cell_height, self.vu_right)
+            self.draw_vu_needle(cr, left_x, margin, cell_width, cell_height, vu_left)
+            self.draw_vu_needle(cr, right_x, margin, cell_width, cell_height, vu_right)
         else:
             self.draw_vu_bar(
-                cr, left_x, margin, cell_width, cell_height, self.vu_left, hold_left
+                cr, left_x, margin, cell_width, cell_height, vu_left, vu_hold_left
             )
             self.draw_vu_bar(
-                cr, right_x, margin, cell_width, cell_height, self.vu_right, hold_right
+                cr, right_x, margin, cell_width, cell_height, vu_right, vu_hold_right
             )
 
         if self.show_labels:
@@ -4228,14 +4351,47 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             else:
                 cr.set_source_rgba(color[0], color[1], color[2], 0.12)
 
-            cr.rectangle(x, seg_y, w, seg_height)
-            cr.fill()
+            is_hold = hold_segment_index is not None and i == hold_segment_index
+            style = self.vu_peak_hold_style
 
-            if hold_segment_index is not None and i == hold_segment_index:
-                cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
-                cr.set_line_width(1.5)
-                cr.rectangle(x + 0.75, seg_y + 0.75, w - 1.5, seg_height - 1.5)
-                cr.stroke()
+            if is_hold:
+                if style == "filled":
+                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                    cr.rectangle(x, seg_y, w, seg_height)
+                    cr.fill()
+                elif style == "inverted":
+                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                    cr.rectangle(x, seg_y, w, seg_height)
+                    cr.fill()
+                else:
+                    # "authentic" and "outline" both draw the normal fill first,
+                    # then overlay the peak indicator on top.
+                    cr.rectangle(x, seg_y, w, seg_height)
+                    cr.fill()
+                    if style == "outline":
+                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                        cr.set_line_width(1.5)
+                        cr.rectangle(x + 0.75, seg_y + 0.75, w - 1.5, seg_height - 1.5)
+                        cr.stroke()
+                    else:  # authentic
+                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                        bar_h = seg_height * 0.35
+                        bar_y = seg_y + (seg_height - bar_h) / 2
+                        pad = 2.5
+                        cr.rectangle(x + pad, bar_y, max(1, w - pad * 2), bar_h)
+                        cr.fill()
+            elif style == "inverted" and lit:
+                # Dimmed lit segments so the hold segment pops as the brightest.
+                cr.set_source_rgba(color[0], color[1], color[2], 0.35)
+                cr.rectangle(x, seg_y, w, seg_height)
+                cr.fill()
+            elif style == "inverted" and not lit:
+                cr.set_source_rgba(color[0], color[1], color[2], 0.08)
+                cr.rectangle(x, seg_y, w, seg_height)
+                cr.fill()
+            else:
+                cr.rectangle(x, seg_y, w, seg_height)
+                cr.fill()
 
     def draw_vu_needle(self, cr, x, y, w, h, level):
 
@@ -5518,22 +5674,54 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
                 lit = level >= threshold - 1.0 / segments
 
-                if lit:
-                    cr.set_source_rgb(*color)
+                is_hold = hold_segment_index is not None and s == hold_segment_index
+                style = self.spectrum_peak_hold_style
+
+                if is_hold:
+                    if style == "filled" or style == "inverted":
+                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                        cr.rectangle(x, seg_y, bar_width, seg_height)
+                        cr.fill()
+                    else:
+                        # "authentic" and "outline" both draw the normal fill first,
+                        # then overlay the peak indicator on top.
+                        if lit:
+                            cr.set_source_rgb(*color)
+                        else:
+                            cr.set_source_rgba(color[0], color[1], color[2], 0.12)
+                        cr.rectangle(x, seg_y, bar_width, seg_height)
+                        cr.fill()
+                        if style == "outline":
+                            cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                            cr.set_line_width(1.5)
+                            cr.rectangle(
+                                x + 0.75, seg_y + 0.75,
+                                bar_width - 1.5, seg_height - 1.5
+                            )
+                            cr.stroke()
+                        else:  # authentic
+                            cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
+                            bar_h = seg_height * 0.35
+                            bar_y = seg_y + (seg_height - bar_h) / 2
+                            pad = 2.5
+                            cr.rectangle(x + pad, bar_y, max(1, bar_width - pad * 2), bar_h)
+                            cr.fill()
+                elif style == "inverted" and lit:
+                    # Dimmed lit segments so the hold segment pops as the brightest.
+                    cr.set_source_rgba(color[0], color[1], color[2], 0.35)
+                    cr.rectangle(x, seg_y, bar_width, seg_height)
+                    cr.fill()
+                elif style == "inverted" and not lit:
+                    cr.set_source_rgba(color[0], color[1], color[2], 0.08)
+                    cr.rectangle(x, seg_y, bar_width, seg_height)
+                    cr.fill()
                 else:
-                    cr.set_source_rgba(color[0], color[1], color[2], 0.12)
-
-                cr.rectangle(x, seg_y, bar_width, seg_height)
-                cr.fill()
-
-                if hold_segment_index is not None and s == hold_segment_index:
-                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9))
-                    cr.set_line_width(1.5)
-                    cr.rectangle(
-                        x + 0.75, seg_y + 0.75,
-                        bar_width - 1.5, seg_height - 1.5
-                    )
-                    cr.stroke()
+                    if lit:
+                        cr.set_source_rgb(*color)
+                    else:
+                        cr.set_source_rgba(color[0], color[1], color[2], 0.12)
+                    cr.rectangle(x, seg_y, bar_width, seg_height)
+                    cr.fill()
 
     def render_spectrum_smooth(self, cr, width, height):
 
