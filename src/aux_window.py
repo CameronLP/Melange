@@ -972,6 +972,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.pipes_rotate_start = (self.pipes_azimuth, self.pipes_elevation)
         self.pipes_zoom = 1.0
         self.pipes_show_grid = False
+        self.pipes_style = "round"
         self.pipes_max_pipes = 4
         self.pipes_speed_scale = 1.0
         self.pipes_reactivity = 1.0

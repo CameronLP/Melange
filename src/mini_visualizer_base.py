@@ -608,7 +608,8 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
         from melange.kind_settings import KIND_REGISTRY
         if self.kind in KIND_REGISTRY:
             from melange.mini_viz_settings import build_settings_page as _build_page
-            page = _build_page(self, KIND_REGISTRY[self.kind]())
+            descriptors = KIND_REGISTRY[self.kind]()
+            page = _build_page(self, descriptors)
             self.zoom_scale = None
             zoom_row = self.settings_rows.get("Zoom")
             if zoom_row is not None and self.kind in VIEW_KINDS:
