@@ -220,14 +220,22 @@ def _build_row(window, setting: Setting):
         )
         scale.set_value(getattr(window, setting.attr))
         scale.set_size_request(120, -1)
-        scale.set_draw_value(False)
+        scale.set_draw_value(True)
+        scale.set_value_pos(Gtk.PositionType.RIGHT)
+        scale.set_format_value_func(
+            lambda widget, value: setting.format_fn(value)
+        )
         scale.set_hexpand(False)
         scale.set_valign(Gtk.Align.CENTER)
+        # Set the row subtitle to the current value so it stays visible
+        row.set_subtitle(setting.format_fn(getattr(window, setting.attr)))
         row.add_suffix(scale)
 
-        def _scale_changed(widget, attr=setting.attr):
+        def _scale_changed(widget, attr=setting.attr, fmt=setting.format_fn):
             cast = type(getattr(window, attr))
             setattr(window, attr, cast(widget.get_value()))
+            # Update subtitle with formatted value
+            row.set_subtitle(fmt(widget.get_value()))
 
         scale.connect("value-changed", lambda w: _scale_changed(w, setting.attr))
 
