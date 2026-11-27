@@ -817,26 +817,16 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         # VU Meter lagging peak-hold caps (Bars/LED styles - Needle
         # has no natural "hold line" the way a real analog dial
-        # doesn't either) - same update_peak_hold/peak_hold_seconds
-        # generic logic Peak Meter and Spectrum's own hold markers
-        # already reuse.
-        self.vu_peak_hold = True
-        self.vu_peak_hold_style = "line"
+        # Shared peak-hold state (lagging caps for VU / Spectrum /
+        # Peak Meter). Each kind keeps its own hold values per-channel
+        # or per-bar, but the toggle, style, and seconds are unified.
+        self.peak_hold = True
+        self.peak_hold_style = "line"
         self.vu_hold_left = 0.0
         self.vu_hold_right = 0.0
         self.vu_hold_left_time = 0.0
         self.vu_hold_right_time = 0.0
 
-        # Spectrum-only lagging peak caps - a small marker above each
-        # bar that jumps to a new peak instantly then falls back down
-        # on its own, the classic hardware EQ "peak indicator" look.
-        # Reuses update_peak_hold/peak_hold_seconds, the same generic
-        # peak-hold logic and settings field the Peak Meter window
-        # already has (each window instance keeps its own copy of
-        # peak_hold_seconds, so adjusting it here doesn't touch a Peak
-        # Meter window's own value).
-        self.spectrum_peak_hold = True
-        self.spectrum_peak_hold_style = "line"
         self.spectrum_bar_holds = []
         self.spectrum_bar_hold_times = []
 
@@ -1213,12 +1203,12 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             vu_hold_row.append(vu_hold_label)
 
             vu_hold_switch = Gtk.Switch()
-            vu_hold_switch.set_active(self.vu_peak_hold)
+            vu_hold_switch.set_active(self.peak_hold)
             vu_hold_switch.set_valign(Gtk.Align.CENTER)
 
             vu_hold_switch.connect(
                 "notify::active",
-                self.on_vu_peak_hold_changed
+                self.on_peak_hold_changed
             )
 
             vu_hold_row.append(vu_hold_switch)
@@ -1237,7 +1227,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             vu_hold_style_drop_index = next(
                 (
                     i for i, (key, _) in enumerate(LED_PEAK_STYLE_CHOICES)
-                    if key == self.vu_peak_hold_style
+                    if key == self.peak_hold_style
                 ),
                 0
             )
@@ -1245,7 +1235,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             vu_hold_style_dropdown.connect(
                 "notify::selected",
-                self.on_vu_peak_hold_style_changed
+                self.on_peak_hold_style_changed
             )
 
             vu_hold_style_row.append(vu_hold_style_dropdown)
@@ -1768,12 +1758,12 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             spectrum_hold_row.append(spectrum_hold_label)
 
             spectrum_hold_switch = Gtk.Switch()
-            spectrum_hold_switch.set_active(self.spectrum_peak_hold)
+            spectrum_hold_switch.set_active(self.peak_hold)
             spectrum_hold_switch.set_valign(Gtk.Align.CENTER)
 
             spectrum_hold_switch.connect(
                 "notify::active",
-                self.on_spectrum_peak_hold_changed
+                self.on_peak_hold_changed
             )
 
             spectrum_hold_row.append(spectrum_hold_switch)
@@ -1794,7 +1784,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             spectrum_hold_style_drop_index = next(
                 (
                     i for i, (key, _) in enumerate(LED_PEAK_STYLE_CHOICES)
-                    if key == self.spectrum_peak_hold_style
+                    if key == self.peak_hold_style
                 ),
                 0
             )
@@ -1802,7 +1792,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             spectrum_hold_style_dropdown.connect(
                 "notify::selected",
-                self.on_spectrum_peak_hold_style_changed
+                self.on_peak_hold_style_changed
             )
 
             spectrum_hold_style_row.append(spectrum_hold_style_dropdown)
@@ -3538,6 +3528,18 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             setattr(self, palette_name, "rainbow")
             self.color_sync = 1.0
 
+        # Legacy per-kind peak-hold toggles migrated to unified names.
+        if "peak_hold" not in saved:
+            if "vu_peak_hold" in saved:
+                self.peak_hold = decode_setting(saved["vu_peak_hold"], True)
+            elif "spectrum_peak_hold" in saved:
+                self.peak_hold = decode_setting(saved["spectrum_peak_hold"], True)
+        if "peak_hold_style" not in saved:
+            if "vu_peak_hold_style" in saved:
+                self.peak_hold_style = decode_setting(saved["vu_peak_hold_style"], "line")
+            elif "spectrum_peak_hold_style" in saved:
+                self.peak_hold_style = decode_setting(saved["spectrum_peak_hold_style"], "line")
+
         # Peak Hold Color used to be an on/off "custom" switch.
         if saved.get("peak_hold_color_custom") is True and "peak_hold_color_mode" not in saved:
             self.peak_hold_color_mode = "custom"
@@ -3589,20 +3591,6 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
     def on_peak_hold_color_changed(self, button, param):
 
         self.peak_hold_color = button.get_rgba()
-        self.drawing_area.queue_draw()
-
-    def on_spectrum_peak_hold_changed(self, switch, param):
-
-        self.spectrum_peak_hold = switch.get_active()
-
-    def on_spectrum_peak_hold_style_changed(self, dropdown, param):
-
-        index = dropdown.get_selected()
-
-        if index < 0 or index >= len(LED_PEAK_STYLE_CHOICES):
-            return
-
-        self.spectrum_peak_hold_style = LED_PEAK_STYLE_CHOICES[index][0]
         self.drawing_area.queue_draw()
 
     def on_spectrum_height_scale_changed(self, scale):
@@ -3945,18 +3933,18 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.vu_style = VU_STYLE_CHOICES[index][0]
         self.drawing_area.queue_draw()
 
-    def on_vu_peak_hold_changed(self, switch, param):
+    def on_peak_hold_changed(self, switch, param):
 
-        self.vu_peak_hold = switch.get_active()
+        self.peak_hold = switch.get_active()
 
-    def on_vu_peak_hold_style_changed(self, dropdown, param):
+    def on_peak_hold_style_changed(self, dropdown, param):
 
         index = dropdown.get_selected()
 
         if index < 0 or index >= len(LED_PEAK_STYLE_CHOICES):
             return
 
-        self.vu_peak_hold_style = LED_PEAK_STYLE_CHOICES[index][0]
+        self.peak_hold_style = LED_PEAK_STYLE_CHOICES[index][0]
         self.drawing_area.queue_draw()
 
     def on_vu_segments_changed(self, spin):
@@ -4425,7 +4413,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.vu_left = max(rms_left, self.vu_left * self.decay)
         self.vu_right = max(rms_right, self.vu_right * self.decay)
 
-        if self.vu_peak_hold:
+        if self.peak_hold:
 
             now = time.monotonic()
 
@@ -4448,8 +4436,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 return
         elif width > height * 1.3:
             draw = self.draw_vu_led if self.vu_style == "led" else self.draw_vu_bar
-            hold_left = self.vu_hold_left if self.vu_peak_hold else None
-            hold_right = self.vu_hold_right if self.vu_peak_hold else None
+            hold_left = self.vu_hold_left if self.peak_hold else None
+            hold_right = self.vu_hold_right if self.peak_hold else None
             self.draw_meter_pair_horizontal(
                 cr, width, height,
                 lambda c, x, y, w, h, level, hold: draw(c, x, y, w, h, level, hold),
@@ -4468,8 +4456,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         left_x = margin
         right_x = margin * 2 + cell_width
 
-        hold_left = self.vu_hold_left if self.vu_peak_hold else None
-        hold_right = self.vu_hold_right if self.vu_peak_hold else None
+        hold_left = self.vu_hold_left if self.peak_hold else None
+        hold_right = self.vu_hold_right if self.peak_hold else None
 
         vu_left = min(self.vu_left * self.vu_height_scale, 1.0)
         vu_right = min(self.vu_right * self.vu_height_scale, 1.0)
@@ -4656,7 +4644,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             else:
                 cr.set_source_rgba(color[0], color[1], color[2], 0.12)
 
-            style = self.vu_peak_hold_style
+            style = self.peak_hold_style
 
             if is_hold:
                 if style == "filled":
@@ -5886,7 +5874,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                     new_levels[i], self.bar_levels[i] * self.decay
                 )
 
-            if self.spectrum_peak_hold:
+            if self.peak_hold:
 
                 # A small lagging cap above each bar - jumps to a new
                 # peak instantly, lingers, then falls back down on its
@@ -5947,7 +5935,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             cr.rectangle(x, margin + (bar_height - filled), bar_width, filled)
             cr.fill()
 
-            if self.spectrum_peak_hold and i < len(self.spectrum_bar_holds):
+            if self.peak_hold and i < len(self.spectrum_bar_holds):
 
                 hold_height = (
                     bar_height * min(self.spectrum_bar_holds[i], 1.0)
@@ -5992,7 +5980,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             hold_segment_index = None
 
-            if self.spectrum_peak_hold and i < len(self.spectrum_bar_holds):
+            if self.peak_hold and i < len(self.spectrum_bar_holds):
                 hold = min(self.spectrum_bar_holds[i] * self.spectrum_height_scale, 1.0)
                 hold_segment_index = min(
                     segments - 1, int(hold * segments)
@@ -6022,7 +6010,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 else:
                     cr.set_source_rgba(color[0], color[1], color[2], 0.12)
 
-                style = self.spectrum_peak_hold_style
+                style = self.peak_hold_style
 
                 if is_hold:
                     if style == "filled":
@@ -6133,7 +6121,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         cr.set_line_width(1.2)
         cr.stroke()
 
-        if self.spectrum_peak_hold:
+        if self.peak_hold:
 
             for i, hold in enumerate(self.spectrum_bar_holds):
 
