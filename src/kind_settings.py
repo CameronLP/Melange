@@ -216,13 +216,10 @@ def background_group() -> Group:
 def window_group() -> Group:
     """Shared window settings."""
     return Group("Window", [
-        Scale(
+        Choice(
             attr="frame_rate_cap",
             title="Frame Rate",
-            min=0,
-            max=100,
-            step=1,
-            format_fn=lambda v: "Unlimited" if v == 0 else f"{v:.0f} fps",
+            options=FRAME_RATE_CHOICES,
         ),
     ])
 
