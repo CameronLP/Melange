@@ -183,7 +183,7 @@ def color_group() -> Group:
         Toggle(
             attr="reverse_colors",
             title="Reverse Colors",
-            visible_when=lambda w: w.color_style == "gradient",
+            visible_when=lambda w: w.color_style in ("gradient", "classic"),
         ),
         Scale(
             attr="color_sync",
@@ -518,6 +518,11 @@ def spectrum_settings() -> list:
                 max=3.0,
                 step=0.25,
                 format_fn=format_times,
+            ),
+            Choice(
+                attr="spectrum_gradient_direction",
+                title="Gradient Direction",
+                options=SPECTRUM_GRADIENT_CHOICES,
             ),
             Toggle(attr="show_labels", title="Show Labels"),
             Toggle(attr="mirror_reflection", title="Mirror Reflection"),
