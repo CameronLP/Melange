@@ -1005,6 +1005,8 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
             self.draw_kind(area, cr, width, height)
             return
 
+        prior_override = self._color_mode_override
+
         # Swap in the matched/reversed colors for this frame only, so
         # the saved settings and controls keep the user's own choices.
         saved = self.apply_effective_colors()
@@ -1012,10 +1014,9 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
         try:
             self.draw_kind(area, cr, width, height)
         finally:
+            self._color_mode_override = prior_override
             for name, value in saved.items():
-                if name == "color_mode":
-                    self._color_mode_override = value
-                else:
+                if name != "color_mode":
                     setattr(self, name, value)
 
     def sync_blend(self, rgb, target):

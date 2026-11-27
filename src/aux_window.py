@@ -520,7 +520,6 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # Colors: blend toward the main visualizer's (0 = own colors,
         # 1 = fully matched), and flip palettes/gradients end to end.
         self.color_sync = 0.0
-        self.local_sync_style = 0
         self.reverse_colors = False
         self.color_signature = None
         self.effective_signatures = {}
@@ -1285,8 +1284,6 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 setattr(self, name, decoded)
 
         self._color_mode_override = None
-        self._sync_active = False
-        self._sync_originals = None
 
         self._icon_cache_key = None
         

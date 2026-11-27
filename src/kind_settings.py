@@ -204,6 +204,7 @@ def background_group() -> Group:
             attr="background_mode",
             title="Background",
             options=BACKGROUND_CHOICES,
+            on_change="background_changed",
         ),
         Color(
             attr="background_color",
