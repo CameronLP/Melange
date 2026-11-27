@@ -7,7 +7,7 @@ Each kind exports a ``<kind>_settings()`` function returning a list of
 ``mini_viz_settings.py`` turns those into an ``Adw.PreferencesPage``.
 """
 
-from src.mini_viz_settings import (
+from melange.mini_viz_settings import (
     Group, Toggle, Scale, Choice, Color,
     format_hz, format_percent, format_times, format_px, format_dps,
     collect_saved_attrs,
@@ -590,11 +590,7 @@ def terrain_settings() -> list:
                 format_fn=format_times,
             ),
             Toggle(attr="terrain_show_axes", title="Show Axes"),
-            Choice(
-                attr="terrain_auto_rotate",
-                title="Auto-Rotate",
-                options=TERRAIN_AUTO_ROTATE_CHOICES,
-            ),
+            Toggle(attr="terrain_auto_rotate", title="Auto-Rotate"),
             Scale(
                 attr="terrain_rotate_speed",
                 title="Rotate Speed",
@@ -602,7 +598,13 @@ def terrain_settings() -> list:
                 max=60,
                 step=1,
                 format_fn=format_dps,
-                visible_when=lambda w: w.terrain_auto_rotate != "none",
+                visible_when=lambda w: w.terrain_auto_rotate,
+            ),
+            Choice(
+                attr="terrain_rotate_direction",
+                title="Rotate Direction",
+                options=[(1, "Clockwise"), (-1, "Counter-Clockwise")],
+                visible_when=lambda w: w.terrain_auto_rotate,
             ),
         ]),
         frequency_range_group(),
@@ -647,11 +649,7 @@ def waterfall_settings() -> list:
                 format_fn=format_times,
             ),
             Toggle(attr="waterfall_textured", title="Textured"),
-            Choice(
-                attr="waterfall_auto_rotate",
-                title="Auto-Rotate",
-                options=TERRAIN_AUTO_ROTATE_CHOICES,
-            ),
+            Toggle(attr="waterfall_auto_rotate", title="Auto-Rotate"),
             Scale(
                 attr="waterfall_rotate_speed",
                 title="Rotate Speed",
@@ -659,7 +657,13 @@ def waterfall_settings() -> list:
                 max=60,
                 step=1,
                 format_fn=format_dps,
-                visible_when=lambda w: w.waterfall_auto_rotate != "none",
+                visible_when=lambda w: w.waterfall_auto_rotate,
+            ),
+            Choice(
+                attr="waterfall_rotate_direction",
+                title="Rotate Direction",
+                options=[(1, "Clockwise"), (-1, "Counter-Clockwise")],
+                visible_when=lambda w: w.waterfall_auto_rotate,
             ),
         ]),
         frequency_range_group(),

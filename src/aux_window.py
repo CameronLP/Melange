@@ -1183,8 +1183,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         """Show only the rows that apply to the current choices."""
 
         # ── New declarative progressive disclosure ───────────────────────
-        from src.kind_settings import KIND_REGISTRY
-        from src.mini_viz_settings import update_row_sensitivity as _update
+        from melange.kind_settings import KIND_REGISTRY
+        from melange.mini_viz_settings import update_row_sensitivity as _update
         if self.kind in KIND_REGISTRY:
             _update(self, KIND_REGISTRY[self.kind]())
             return
