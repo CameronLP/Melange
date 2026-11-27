@@ -63,6 +63,8 @@ melange_sources = [
   'preset_manager.py',
   'projectm_view.py',
   'window.py',
+  'kind_settings.py',
+  'mini_viz_settings.py',
   'style.css'
 ]
 
