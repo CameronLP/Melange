@@ -183,14 +183,14 @@ def _build_row(window, setting: Setting):
 
     Uses GTK4/libadwaita 1.0-compatible widgets (not Adw.SwitchRow/etc.)
     so it works with any libadwaita version >= 1.0.
+
+    All rows are built regardless of visibility so progressive disclosure
+    can show/hide them dynamically after the page is created.
     """
     import gi
     gi.require_version("Gtk", "4.0")
     gi.require_version("Adw", "1")
     from gi.repository import Gtk, Adw
-
-    if not setting.is_visible(window):
-        return None
 
     row = Adw.ActionRow(
         title=setting.title,
