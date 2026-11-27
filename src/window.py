@@ -216,6 +216,12 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.pointer_over_visualizer = False
         self.opacity_fade_timer = None
         self.now_playing_enabled = False
+
+        # How often the main visualizer frame is sampled for color
+        # (seconds). Lower = smoother color transitions in synced mini
+        # visualizers and Now Playing, but slightly more GPU work.
+        self.color_sample_interval = 0.15
+
         self.now_playing_placement = "bottom-left"
         self.now_playing_info = None
         self.now_playing_art_token = 0
@@ -253,6 +259,9 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.change_preset_on_new_song = False
         self.last_song_key = None
 
+        # Now Playing > Style: "always show placeholder icon instead of real artwork".
+        self.now_playing_always_show_placeholder = False
+
         # Preferences > Window: the preset's name in the title bar.
         self.show_preset_in_title = True
 
@@ -263,7 +272,15 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_bg_source = "custom"
 
         # Now Playing > Style > Placeholder Icon: "note" or "player".
-        self.now_playing_placeholder_style = "note"
+        self.now_playing_placeholder_style = "auto"
+
+        # Now Playing > Content: keep the card visible even when no
+        # track is playing, with a "Nothing playing" placeholder.
+        self.now_playing_persist_when_idle = False
+
+        # Now Playing > Content: custom image file to use instead of
+        # the MPRIS-provided artwork.
+        self.now_playing_art_override_path = None
 
         # Now Playing > Style: the card's background (Show Background on).
         self.now_playing_bg_color = Gdk.RGBA()
@@ -318,6 +335,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             )
             self.projectm_view.on_beat = self.on_projectm_beat
             self.projectm_view.on_colors = self.on_projectm_colors
+            self.projectm_view.color_sample_interval = self.color_sample_interval
             visualizer = self.projectm_view
         else:
             print("Visualizer unavailable:", reason)
@@ -1466,8 +1484,13 @@ class MelangeWindow(Adw.ApplicationWindow):
     def update_now_playing_visibility(self):
 
         self.now_playing_box.set_visible(
-            self.now_playing_enabled and self.now_playing_info is not None
+            self.now_playing_enabled
+            and self.main_visualizer_on
+            and (self.now_playing_info is not None or self.now_playing_persist_when_idle)
         )
+
+        if self.now_playing_info is None and self.now_playing_persist_when_idle:
+            self.show_now_playing_idle_placeholder()
 
     # One label/widget per optional field, each independently toggled
     # by its own Preferences switch and (title/artist/art) also hidden
@@ -1516,6 +1539,18 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if self.now_playing_info is not None:
             self.load_now_playing_art(self.now_playing_info["art_url"])
+
+    def now_playing_always_show_placeholder_changed(self, enabled):
+
+        self.now_playing_always_show_placeholder = enabled
+
+        if self.now_playing_info is not None:
+            self.load_now_playing_art(self.now_playing_info["art_url"])
+
+    def now_playing_persist_when_idle_changed(self, enabled):
+
+        self.now_playing_persist_when_idle = enabled
+        self.update_now_playing_visibility()
 
     def now_playing_show_artwork_changed(self, enabled):
 
@@ -1572,6 +1607,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.apply_now_playing_text_style()
         self.apply_now_playing_width()
+        self.apply_now_playing_art_size()
 
         # The width/size change may have pushed the current title
         # across the "too long to fit" threshold either way, and a
@@ -1586,7 +1622,22 @@ class MelangeWindow(Adw.ApplicationWindow):
     def now_playing_text_factor_changed(self, value):
 
         self.now_playing_text_factor = value
-        self.recompute_now_playing_scale()
+
+        if self.now_playing_lock_to_window:
+            width = self.get_width() or self.NOW_PLAYING_REFERENCE_WIDTH
+            scale = max(
+                self.NOW_PLAYING_MIN_SCALE,
+                min(self.NOW_PLAYING_MAX_SCALE, width / self.NOW_PLAYING_REFERENCE_WIDTH)
+            )
+        else:
+            scale = self.now_playing_scale
+
+        self.now_playing_text_size = (
+            self.NOW_PLAYING_BASE_TEXT_SIZE * scale * value
+        )
+
+        self.apply_now_playing_text_style()
+        self.refresh_now_playing_title()
 
     def now_playing_width_factor_changed(self, value):
 
@@ -1637,6 +1688,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.now_playing_font_desc = font_desc_string
         self.apply_now_playing_text_style()
+        self.apply_now_playing_art_size()
         self.refresh_now_playing_title()
 
     # max-width-chars, not a literal pixel width - matches how this
@@ -2155,9 +2207,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             label.set_attributes(attrs)
             label.add_css_class("now-playing-text")
 
-        self.apply_now_playing_art_size()
-        self.apply_now_playing_title_frame_width()
-
     NOW_PLAYING_POSITION_TICK_MS = 1000
 
     def restart_now_playing_position_timer(self):
@@ -2236,31 +2285,56 @@ class MelangeWindow(Adw.ApplicationWindow):
         "vlc", "totem", "mpv", "celluloid", "videos", "clapper", "showtime",
         "haruna", "smplayer", "kodi", "mplayer", "dragon",
     )
+    PLACEHOLDER_VIDEO_URLS = (
+        ".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm",
+        "youtube.com", "youtu.be", "vimeo.com", "twitch.tv",
+    )
+    PLACEHOLDER_STREAM_URLS = (
+        ".m3u", ".m3u8", ".pls", ".xspf", ".asx",
+    )
 
     def now_playing_placeholder_icon(self):
 
         default = "audio-x-generic-symbolic"
+        info = self.now_playing_info or {}
+        style = self.now_playing_placeholder_style
 
-        if self.now_playing_placeholder_style != "player":
+        if style == "player":
+            theme = Gtk.IconTheme.get_for_display(self.get_display())
+            entry = (info.get("desktop_entry") or "").removesuffix(".desktop")
+
+            for name in (f"{entry}-symbolic", entry, f"{entry.lower()}-symbolic", entry.lower()):
+                if entry and theme.has_icon(name):
+                    return name
+
+            text = f"{entry} {info.get('identity', '')}".lower()
+
+            if any(word in text for word in self.PLACEHOLDER_BROWSERS):
+                return "web-browser-symbolic"
+            if any(word in text for word in self.PLACEHOLDER_VIDEO_PLAYERS):
+                return "video-x-generic-symbolic"
+            if not info.get("length_us"):
+                return "network-wireless-symbolic"
+
             return default
 
-        info = self.now_playing_info or {}
-        theme = Gtk.IconTheme.get_for_display(self.get_display())
-        entry = (info.get("desktop_entry") or "").removesuffix(".desktop")
+        if style == "auto":
+            genre = (info.get("genre") or "").lower()
+            url = (info.get("url") or "").lower()
 
-        for name in (f"{entry}-symbolic", entry, f"{entry.lower()}-symbolic", entry.lower()):
-            if entry and theme.has_icon(name):
-                return name
+            if "podcast" in genre:
+                return "audio-input-microphone-symbolic"
 
-        text = f"{entry} {info.get('identity', '')}".lower()
+            if any(u in url for u in self.PLACEHOLDER_VIDEO_URLS):
+                return "video-x-generic-symbolic"
 
-        if any(word in text for word in self.PLACEHOLDER_BROWSERS):
-            return "web-browser-symbolic"
-        if any(word in text for word in self.PLACEHOLDER_VIDEO_PLAYERS):
-            return "video-x-generic-symbolic"
-        if not info.get("length_us"):
-            # No length: usually a live stream or internet radio.
-            return "network-wireless-symbolic"
+            if any(u in url for u in self.PLACEHOLDER_STREAM_URLS):
+                return "network-wireless-symbolic"
+
+            if not info.get("length_us"):
+                return "network-wireless-symbolic"
+
+            return default
 
         return default
 
@@ -2276,6 +2350,14 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_art_placeholder.set_visible(True)
         self.now_playing_art_frame.set_visible(True)
 
+    def show_now_playing_idle_placeholder(self):
+
+        self.now_playing_title_label.set_label("Nothing playing")
+        self.now_playing_artist_label.set_label("Waiting for music…")
+        self.now_playing_album_label.set_visible(False)
+        self.now_playing_time_label.set_visible(False)
+        self.show_now_playing_art_placeholder()
+
     # Guards against a slow/late art fetch for a track that's since
     # been skipped past clobbering whatever's already showing - each
     # call gets a fresh token, and the async callback only applies its
@@ -2289,9 +2371,14 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_art_frame.set_visible(False)
             return
 
-        if not art_url:
-            self.show_now_playing_art_placeholder()
-            return
+        override = getattr(self, "now_playing_art_override_path", None)
+        if override:
+            file_obj = Gio.File.new_for_path(override)
+        else:
+            if not art_url or self.now_playing_always_show_placeholder:
+                self.show_now_playing_art_placeholder()
+                return
+            file_obj = Gio.File.new_for_uri(art_url)
 
         def on_loaded(source, result):
 
@@ -2317,12 +2404,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.now_playing_art.set_paintable(texture)
             self.now_playing_art_frame.set_visible(True)
 
-        # Gio.File.load_contents_async transparently handles both
-        # file:// (the common case - most players cache art locally)
-        # and http(s):// (network share is already granted) through
-        # the same GVfs-backed API, so no separate download path is
-        # needed for either.
-        Gio.File.new_for_uri(art_url).load_contents_async(None, on_loaded)
+        file_obj.load_contents_async(None, on_loaded)
 
     # A real win.now-playing-enabled action (not just a Preferences
     # toggle) now, matching Transparency Mode/Immersive Mode - a
@@ -2688,12 +2770,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
                 aux_window = AuxVisualizerWindow(self, kind)
                 self.apply_mini_viz_color_overrides(aux_window)
-                if kind == "peak" and hasattr(self, "peak_line_thickness_scale"):
-                    aux_window.peak_line_thickness = self.peak_line_thickness_scale.get_value()
-                if kind == "vu" and hasattr(self, "vu_led_thickness_scale"):
-                    aux_window.vu_led_thickness = self.vu_led_thickness_scale.get_value()
-                if kind == "spectrum" and hasattr(self, "spectrum_led_thickness_scale"):
-                    aux_window.spectrum_led_thickness = self.spectrum_led_thickness_scale.get_value()
+                self.apply_mini_viz_background_overrides(aux_window)
                 self.aux_windows[kind] = aux_window
                 aux_window.present()
 
@@ -2892,6 +2969,7 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.paused_badge.set_visible(self.paused and self.main_visualizer_on)
         self.presets.set_cycle_paused(self.preset_locked or self.paused or not self.main_visualizer_on)
         self.set_nav_arrows_visible(self.toolbar_view.get_reveal_top_bars())
+        self.update_now_playing_visibility()
 
     def pause_changed(self, action, value):
 
@@ -3286,7 +3364,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.build_now_playing_show_artist_control(),
             self.build_now_playing_show_album_control(),
             self.build_now_playing_show_artwork_control(),
-            self.build_now_playing_show_art_placeholder_control(),
             self.build_now_playing_show_time_control(),
             self.build_now_playing_show_background_control()
         ):
@@ -3483,7 +3560,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
     def build_now_playing_placeholder_style_control(self):
 
-        styles = [("note", "Music Note"), ("player", "Player's Icon")]
+        styles = [("auto", "Auto (by Type)"), ("note", "Music Note"), ("player", "Player's Icon")]
         row = Adw.ComboRow(
             title="Placeholder Icon",
             subtitle="Shown when a track has no artwork",
@@ -3499,6 +3576,96 @@ class MelangeWindow(Adw.ApplicationWindow):
         self.now_playing_placeholder_style_row = row
 
         return row
+
+    def build_now_playing_always_placeholder_control(self):
+
+        return self.build_toggle_row(
+            "Always Use Placeholder",
+            self.now_playing_always_show_placeholder,
+            self.now_playing_always_show_placeholder_changed,
+        )
+
+    def build_now_playing_persist_when_idle_control(self):
+
+        return self.build_toggle_row(
+            "Show When Nothing's Playing",
+            self.now_playing_persist_when_idle,
+            self.now_playing_persist_when_idle_changed,
+        )
+
+    def build_now_playing_art_override_control(self):
+
+        row = Adw.ActionRow(
+            title="Custom Artwork",
+            subtitle="None",
+        )
+
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+
+        choose_btn = Gtk.Button(
+            icon_name="folder-open-symbolic",
+            tooltip_text="Choose image…"
+        )
+        choose_btn.add_css_class("flat")
+        choose_btn.connect("clicked", self.on_now_playing_art_override_clicked)
+        box.append(choose_btn)
+
+        clear_btn = Gtk.Button(
+            icon_name="edit-clear-symbolic",
+            tooltip_text="Clear"
+        )
+        clear_btn.add_css_class("flat")
+        clear_btn.connect("clicked", self.on_now_playing_art_override_clear)
+        box.append(clear_btn)
+
+        row.add_suffix(box)
+        self.now_playing_art_override_row = row
+        self.update_now_playing_art_override_ui()
+
+        return row
+
+    def update_now_playing_art_override_ui(self):
+
+        path = getattr(self, "now_playing_art_override_path", None)
+        row = getattr(self, "now_playing_art_override_row", None)
+        if row is not None:
+            row.set_subtitle(path if path else "None")
+
+    def on_now_playing_art_override_clicked(self, button):
+
+        dialog = Gtk.FileDialog()
+        dialog.set_title("Choose Artwork")
+
+        image_filter = Gtk.FileFilter()
+        image_filter.set_name("Images")
+        image_filter.add_mime_type("image/*")
+
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(image_filter)
+        dialog.set_filters(filters)
+
+        dialog.open(self, None, self.on_now_playing_art_override_chosen)
+
+    def on_now_playing_art_override_chosen(self, dialog, result):
+
+        try:
+            gfile = dialog.open_finish(result)
+        except GLib.Error:
+            return
+
+        self.now_playing_art_override_path = gfile.get_path()
+        self.update_now_playing_art_override_ui()
+        self.schedule_settings_save()
+        if self.now_playing_show_artwork:
+            self.load_now_playing_art("")
+
+    def on_now_playing_art_override_clear(self, button):
+
+        self.now_playing_art_override_path = None
+        self.update_now_playing_art_override_ui()
+        self.schedule_settings_save()
+        if self.now_playing_show_artwork and self.now_playing_info is not None:
+            self.load_now_playing_art(self.now_playing_info["art_url"])
 
     NOW_PLAYING_COLOR_SOURCES = [
         ("custom", "Chosen Color"), ("theme", "System Theme"), ("main", "Main Visualizer"),
@@ -3576,7 +3743,10 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         # System Theme follows light/dark as it changes.
         Adw.StyleManager.get_default().connect(
-            "notify::dark", lambda *args: self.apply_now_playing_text_style()
+            "notify::dark", lambda *args: (
+                self.apply_now_playing_text_style(),
+                self._redraw_system_background_aux_windows()
+            )
         )
 
         return [text_row, bg_row]
@@ -3829,6 +3999,13 @@ class MelangeWindow(Adw.ApplicationWindow):
             sync_on = getattr(self, "sync_mini_colors_row", None) and self.sync_mini_colors_row.get_active()
             self.universal_style_row.set_visible(sync_on)
 
+    def on_color_sample_interval_changed(self, value):
+
+        self.color_sample_interval = value
+        if self.projectm_view is not None:
+            self.projectm_view.color_sample_interval = value
+        self.schedule_settings_save()
+
     def apply_mini_viz_color_overrides(self, aux=None):
         """Apply global color sync / style to one or all aux windows."""
         if aux is None:
@@ -3839,13 +4016,8 @@ class MelangeWindow(Adw.ApplicationWindow):
         if not hasattr(self, "sync_mini_colors_row"):
             return
 
-        global_sync = self.sync_mini_colors_row.get_active()
-        if global_sync:
-            sync = True
-            style = self.universal_style_dropdown.get_selected() if hasattr(self, "universal_style_dropdown") else 0
-        else:
-            sync = aux.color_sync > 0
-            style = getattr(aux, "local_sync_style", 0)
+        sync = self.sync_mini_colors_row.get_active()
+        style = self.universal_style_dropdown.get_selected() if hasattr(self, "universal_style_dropdown") else 0
 
         if sync:
             if not getattr(aux, "_sync_active", False):
@@ -3854,6 +4026,7 @@ class MelangeWindow(Adw.ApplicationWindow):
                     "terrain_palette": getattr(aux, "terrain_palette", None),
                     "waterfall_palette": getattr(aux, "waterfall_palette", None),
                     "spectrogram_palette": getattr(aux, "spectrogram_palette", None),
+                    "reverse_colors": aux.reverse_colors,
                     "color": Gdk.RGBA()
                 }
                 c = aux._sync_originals["color"]
@@ -3888,7 +4061,7 @@ class MelangeWindow(Adw.ApplicationWindow):
                 aux.color = color
                 aux.line_color_lo = color
                 aux.line_color_hi = color
-                for prefix in ("terrain", "waterfall", "spectrogram"):
+                for prefix in ("terrain", "waterfall"):
                     lo = f"{prefix}_color_lo"
                     hi = f"{prefix}_color_hi"
                     if hasattr(aux, lo):
@@ -3898,6 +4071,9 @@ class MelangeWindow(Adw.ApplicationWindow):
                     pal = f"{prefix}_palette"
                     if hasattr(aux, pal):
                         setattr(aux, pal, "gradient")
+                # Spectrogram always maps intensity to a gradient palette.
+                if hasattr(aux, "spectrogram_palette"):
+                    aux.spectrogram_palette = "main"
             else:  # Gradient from main palette
                 aux.color_mode = "main"
                 for attr in ("terrain_palette", "waterfall_palette", "spectrogram_palette"):
@@ -3910,6 +4086,8 @@ class MelangeWindow(Adw.ApplicationWindow):
                 for attr in ("terrain_palette", "waterfall_palette", "spectrogram_palette"):
                     if hasattr(aux, attr) and orig.get(attr) is not None:
                         setattr(aux, attr, orig[attr])
+                if "reverse_colors" in orig:
+                    aux.reverse_colors = orig["reverse_colors"]
                 if "color" in orig:
                     aux.color = orig["color"]
                 if "line_color_lo" in orig:
@@ -3933,6 +4111,56 @@ class MelangeWindow(Adw.ApplicationWindow):
             aux.drawing_area.queue_draw()
         if hasattr(aux, "reset_to_current_controls"):
             aux.reset_to_current_controls()
+
+    def apply_mini_viz_background_overrides(self, aux=None):
+        """Apply global background sync to one or all aux windows."""
+        if aux is None:
+            for a in list(self.aux_windows.values()):
+                self.apply_mini_viz_background_overrides(a)
+            return
+
+        if not hasattr(self, "universal_bg_dropdown"):
+            return
+
+        apply = getattr(self, "bg_apply_row", None) and self.bg_apply_row.get_active()
+
+        mode_index = self.universal_bg_dropdown.get_selected()
+        modes = {0: None, 1: "main", 2: "system"}
+        mode = modes.get(mode_index) if apply else None
+
+        if mode is not None:
+            if not getattr(aux, "_bg_sync_active", False):
+                aux._bg_sync_original = getattr(aux, "background_mode", "custom")
+                aux._bg_sync_active = True
+            aux.background_mode = mode
+        else:
+            if getattr(aux, "_bg_sync_active", False):
+                orig = getattr(aux, "_bg_sync_original", "custom")
+                aux.background_mode = orig
+                aux._bg_sync_active = False
+
+        if hasattr(aux, "background_changed"):
+            aux.background_changed()
+        if hasattr(aux, "drawing_area"):
+            aux.drawing_area.queue_draw()
+        if hasattr(aux, "reset_to_current_controls"):
+            aux.reset_to_current_controls()
+
+    def _redraw_system_background_aux_windows(self):
+        for aux in list(self.aux_windows.values()):
+            global_main = (
+                hasattr(self, "universal_bg_dropdown")
+                and self.universal_bg_dropdown.get_selected() == 1
+            )
+            global_system = (
+                hasattr(self, "universal_bg_dropdown")
+                and self.universal_bg_dropdown.get_selected() == 2
+            )
+            local_main = getattr(aux, "background_mode", None) == "main"
+            local_system = getattr(aux, "background_mode", None) == "system"
+            if global_main or global_system or local_main or local_system:
+                if hasattr(aux, "drawing_area"):
+                    aux.drawing_area.queue_draw()
 
     def build_beat_threshold_control(self):
 
@@ -4059,6 +4287,10 @@ class MelangeWindow(Adw.ApplicationWindow):
                     if value is not None:
                         setter(value)
 
+        # Propagate restored color sample interval to the visualizer.
+        if self.projectm_view is not None:
+            self.projectm_view.color_sample_interval = self.color_sample_interval
+
         actions = saved.get("actions", {})
         if isinstance(actions, dict):
             for name in self.REMEMBERED_ACTIONS:
@@ -4067,17 +4299,17 @@ class MelangeWindow(Adw.ApplicationWindow):
                 if action is not None and isinstance(value, bool) and action.get_state().get_boolean() != value:
                     action.change_state(GLib.Variant("b", value))
 
-        # Global mini visualizer color sync / style (sidebar, not preferences page)
+        # Global mini visualizer color sync / style / background (sidebar, not preferences page)
         if saved.get("sync_mini_colors") is True and hasattr(self, "sync_mini_colors_row"):
             self.sync_mini_colors_row.set_active(True)
         if "sync_mini_style" in saved and hasattr(self, "universal_style_dropdown"):
             self.universal_style_dropdown.set_selected(saved["sync_mini_style"])
-        if "peak_line_thickness" in saved and hasattr(self, "peak_line_thickness_scale"):
-            self.peak_line_thickness_scale.set_value(saved["peak_line_thickness"])
-        if "vu_led_thickness" in saved and hasattr(self, "vu_led_thickness_scale"):
-            self.vu_led_thickness_scale.set_value(saved["vu_led_thickness"])
-        if "spectrum_led_thickness" in saved and hasattr(self, "spectrum_led_thickness_scale"):
-            self.spectrum_led_thickness_scale.set_value(saved["spectrum_led_thickness"])
+        if "sync_mini_bg" in saved and hasattr(self, "universal_bg_dropdown"):
+            self.universal_bg_dropdown.set_selected(saved["sync_mini_bg"])
+
+        if "now_playing_art_override" in saved:
+            self.now_playing_art_override_path = saved["now_playing_art_override"]
+            self.update_now_playing_art_override_ui()
 
         theme = saved.get("theme")
         button = getattr(self, "theme_buttons", {}).get(theme) if isinstance(theme, int) else None
@@ -4138,9 +4370,8 @@ class MelangeWindow(Adw.ApplicationWindow):
             "maximized": self.is_maximized(),
             "sync_mini_colors": getattr(self, "sync_mini_colors_row", None) and self.sync_mini_colors_row.get_active(),
             "sync_mini_style": self.universal_style_dropdown.get_selected() if hasattr(self, "universal_style_dropdown") else 0,
-            "peak_line_thickness": self.peak_line_thickness_scale.get_value() if hasattr(self, "peak_line_thickness_scale") else 1.0,
-            "vu_led_thickness": self.vu_led_thickness_scale.get_value() if hasattr(self, "vu_led_thickness_scale") else 1.0,
-            "spectrum_led_thickness": self.spectrum_led_thickness_scale.get_value() if hasattr(self, "spectrum_led_thickness_scale") else 1.0,
+            "sync_mini_bg": self.universal_bg_dropdown.get_selected() if hasattr(self, "universal_bg_dropdown") else 0,
+            "now_playing_art_override": self.now_playing_art_override_path,
         }
 
         if not (self.is_maximized() or self.is_fullscreen()) and self.get_width() > 0:
@@ -4264,14 +4495,20 @@ class MelangeWindow(Adw.ApplicationWindow):
         )
         np_content_group.add(self.build_now_playing_source_control())
         np_content_group.add(self.build_now_playing_displayed_fields_control())
-        np_content_group.add(self.build_now_playing_scroll_long_titles_control())
+        np_content_group.add(self.build_now_playing_persist_when_idle_control())
+        np_content_group.add(self.build_now_playing_art_override_control())
+        np_content_group.add(self.build_now_playing_placeholder_style_control())
+        np_content_group.add(self.build_now_playing_always_placeholder_control())
+
+        np_placement_group = Adw.PreferencesGroup(title="Placement")
+        np_placement_group.add(self.build_now_playing_placement_control())
+        np_placement_group.add(self.build_now_playing_lock_to_window_control())
 
         np_layout_group = Adw.PreferencesGroup(title="Layout")
-        np_layout_group.add(self.build_now_playing_placement_control())
-        np_layout_group.add(self.build_now_playing_lock_to_window_control())
         np_layout_group.add(self.build_now_playing_scale_control())
         np_layout_group.add(self.build_now_playing_text_size_control())
         np_layout_group.add(self.build_now_playing_max_width_control())
+        np_layout_group.add(self.build_now_playing_scroll_long_titles_control())
 
         np_style_group = Adw.PreferencesGroup(title="Style")
         # Order: font; text colour (where it comes from, then your own);
@@ -4287,7 +4524,6 @@ class MelangeWindow(Adw.ApplicationWindow):
         for row in (
             font_row, text_source_row, text_color_row, *outline_rows,
             bg_source_row, *background_rows,
-            self.build_now_playing_placeholder_style_control(),
         ):
             np_style_group.add(row)
 
@@ -4331,7 +4567,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             icon_name="audio-x-generic-symbolic"
         )
 
-        for group in (np_content_group, np_layout_group, np_style_group, np_visibility_group):
+        for group in (np_content_group, np_placement_group, np_layout_group, np_style_group, np_visibility_group):
             now_playing_page.add(group)
 
         rendering_group = Adw.PreferencesGroup(title="Rendering")
@@ -4844,121 +5080,65 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         self.universal_style_row.set_visible(False)
 
+        bg_row = Adw.ActionRow(title="Background")
+        self.universal_bg_dropdown = Gtk.DropDown.new_from_strings(
+            ["Default", "Main Visualizer", "System Theme"]
+        )
+        self.universal_bg_dropdown.set_selected(0)
+        self.universal_bg_dropdown.set_valign(Gtk.Align.CENTER)
+        bg_row.add_suffix(self.universal_bg_dropdown)
+        color_group.add(bg_row)
+
+        self.universal_bg_dropdown.connect(
+            "notify::selected",
+            lambda d, p: (self._update_main_bg_style_visibility(), self.apply_mini_viz_background_overrides(), self.schedule_settings_save())
+        )
+
+        self.bg_apply_row = self.build_toggle_row(
+            "Apply to Backgrounds",
+            False,
+            lambda enabled: (self.apply_mini_viz_background_overrides(), self.schedule_settings_save()),
+            store_as="bg_apply_row"
+        )
+        color_group.add(self.bg_apply_row)
+
+        plain_row = Adw.ActionRow(title="Main Viz Style")
+        self.main_bg_plain_dropdown = Gtk.DropDown.new_from_strings(
+            ["Tinted", "Black & White"]
+        )
+        self.main_bg_plain_dropdown.set_selected(0)
+        self.main_bg_plain_dropdown.set_valign(Gtk.Align.CENTER)
+        plain_row.add_suffix(self.main_bg_plain_dropdown)
+        color_group.add(plain_row)
+        self.main_bg_plain_row = plain_row
+
+        self.main_bg_plain_dropdown.connect(
+            "notify::selected",
+            lambda d, p: (self.apply_mini_viz_background_overrides(), self.schedule_settings_save())
+        )
+
+        self.main_bg_plain_row.set_visible(False)
+
+        sample_rate_row = Adw.SpinRow(
+            title="Color Sampling Rate",
+            subtitle="How often the main visualizer color is read for synced mini visualizers",
+            adjustment=Gtk.Adjustment(
+                value=self.color_sample_interval,
+                lower=0.05,
+                upper=1.0,
+                step_increment=0.05,
+            ),
+            climb_rate=0.05,
+            digits=2,
+        )
+        sample_rate_row.get_adjustment().connect(
+            "value-changed",
+            lambda adj: self.on_color_sample_interval_changed(adj.get_value())
+        )
+        color_group.add(sample_rate_row)
+        self.color_sample_interval_row = sample_rate_row
+
         page.add(color_group)
-
-        peak_group = Adw.PreferencesGroup(
-            title="Peak Meter",
-            description="Settings for all peak level visualizers."
-        )
-
-        def format_peak_thickness(value):
-            return f"{value:.2f}×"
-
-        def on_peak_thickness_changed(value):
-            for a in list(self.aux_windows.values()):
-                if a.kind == "peak":
-                    a.peak_line_thickness = value
-                    a.drawing_area.queue_draw()
-            self.schedule_settings_save()
-
-        peak_thick_row = Adw.ActionRow(title="Line Thickness")
-        peak_thick_row.set_subtitle(format_peak_thickness(1.0))
-
-        peak_thick_scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25
-        )
-        peak_thick_scale.set_value(1.0)
-        peak_thick_scale.set_size_request(160, -1)
-        peak_thick_scale.set_valign(Gtk.Align.CENTER)
-        peak_thick_scale.set_draw_value(False)
-
-        def peak_thick_changed(scale):
-            value = scale.get_value()
-            peak_thick_row.set_subtitle(format_peak_thickness(value))
-            on_peak_thickness_changed(value)
-
-        peak_thick_scale.connect("value-changed", peak_thick_changed)
-        peak_thick_row.add_suffix(peak_thick_scale)
-        peak_group.add(peak_thick_row)
-        self.peak_line_thickness_scale = peak_thick_scale
-
-        page.add(peak_group)
-
-        vu_group = Adw.PreferencesGroup(
-            title="VU Meter",
-            description="Settings for all VU level visualizers."
-        )
-
-        def format_vu_thickness(value):
-            return f"{value:.2f}×"
-
-        def on_vu_thickness_changed(value):
-            for a in list(self.aux_windows.values()):
-                if a.kind == "vu":
-                    a.vu_led_thickness = value
-                    a.drawing_area.queue_draw()
-            self.schedule_settings_save()
-
-        vu_thick_row = Adw.ActionRow(title="LED Hold Line")
-        vu_thick_row.set_subtitle(format_vu_thickness(1.0))
-
-        vu_thick_scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25
-        )
-        vu_thick_scale.set_value(1.0)
-        vu_thick_scale.set_size_request(160, -1)
-        vu_thick_scale.set_valign(Gtk.Align.CENTER)
-        vu_thick_scale.set_draw_value(False)
-
-        def vu_thick_changed(scale):
-            value = scale.get_value()
-            vu_thick_row.set_subtitle(format_vu_thickness(value))
-            on_vu_thickness_changed(value)
-
-        vu_thick_scale.connect("value-changed", vu_thick_changed)
-        vu_thick_row.add_suffix(vu_thick_scale)
-        vu_group.add(vu_thick_row)
-        self.vu_led_thickness_scale = vu_thick_scale
-
-        page.add(vu_group)
-
-        spectrum_group = Adw.PreferencesGroup(
-            title="Spectrum",
-            description="Settings for all spectrum visualizers."
-        )
-
-        def format_spectrum_thickness(value):
-            return f"{value:.2f}×"
-
-        def on_spectrum_thickness_changed(value):
-            for a in list(self.aux_windows.values()):
-                if a.kind == "spectrum":
-                    a.spectrum_led_thickness = value
-                    a.drawing_area.queue_draw()
-            self.schedule_settings_save()
-
-        spectrum_thick_row = Adw.ActionRow(title="LED Hold Line")
-        spectrum_thick_row.set_subtitle(format_spectrum_thickness(1.0))
-
-        spectrum_thick_scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL, 0.5, 3.0, 0.25
-        )
-        spectrum_thick_scale.set_value(1.0)
-        spectrum_thick_scale.set_size_request(160, -1)
-        spectrum_thick_scale.set_valign(Gtk.Align.CENTER)
-        spectrum_thick_scale.set_draw_value(False)
-
-        def spectrum_thick_changed(scale):
-            value = scale.get_value()
-            spectrum_thick_row.set_subtitle(format_spectrum_thickness(value))
-            on_spectrum_thickness_changed(value)
-
-        spectrum_thick_scale.connect("value-changed", spectrum_thick_changed)
-        spectrum_thick_row.add_suffix(spectrum_thick_scale)
-        spectrum_group.add(spectrum_thick_row)
-        self.spectrum_led_thickness_scale = spectrum_thick_scale
-
-        page.add(spectrum_group)
 
         reset_group = Adw.PreferencesGroup()
         reset_button = Gtk.Button(label="Reset All Mini Visualizers…", halign=Gtk.Align.CENTER)

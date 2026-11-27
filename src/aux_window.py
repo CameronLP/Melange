@@ -17,6 +17,12 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+# TODO: organization, simplify, and harmonize mini viz settings.
+# The per-kind settings (build_settings_controls, build_extra_controls,
+# build_color_controls, build_shared_controls) have grown organically and
+# duplicate logic. Split into declarative specs per kind, consistent row
+# builders, and a single settings page assembler.
+
 import colorsys
 import json
 from pathlib import Path
@@ -202,6 +208,11 @@ SPECTRUM_STYLE_CHOICES = [
     ("bars", "Bars"),
     ("smooth", "Smooth"),
     ("led", "LED Segments"),
+]
+
+SPECTRUM_GRADIENT_CHOICES = [
+    ("vertical", "Vertical"),
+    ("lengthwise", "Lengthwise"),
 ]
 
 LED_PEAK_STYLE_CHOICES = [
@@ -470,6 +481,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         # Shared settings (every kind) - see build_shared_controls.
         self.background_mode = "custom"
+        self.main_bg_plain = False
         self.background_color = Gdk.RGBA()
         # Starts as the theme's canvas shade (DVD: its near-black).
         if kind == "dvd":
@@ -516,8 +528,10 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # Terrain/Waterfall can turn slowly on their own, like Pipes.
         self.terrain_auto_rotate = False
         self.terrain_rotate_speed = 6.0
+        self.terrain_rotate_direction = 1
         self.waterfall_auto_rotate = False
         self.waterfall_rotate_speed = 6.0
+        self.waterfall_rotate_direction = 1
         self.view_dragging = False
         self.last_auto_rotate_time = None
         self.view_hint_shown = False
@@ -564,6 +578,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # replacing it, so 1.0 (default) looks identical to before
         # this setting existed.
         self.scope_zoom = 1.0
+        self.scope_scale_x = 1.0
+        self.scope_scale_y = 1.0
 
         self.num_bars = 24
         self.decay = 0.85
@@ -830,6 +846,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # either way, just a different render function selected at
         # draw time (on_draw).
         self.spectrum_style = "led"
+        self.spectrum_gradient_direction = "vertical"
         self.spectrum_led_segments = 28
         self.spectrum_height_scale = 1.0
         self.spectrum_yellow_zone = 0.7
@@ -1009,6 +1026,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # current value rather than resetting anything.
         self.pipes_auto_rotate = True
         self.pipes_rotate_speed = 6.0
+        self.pipes_rotate_direction = 1
         self.pipes_dragging = False
 
         # Beat-triggered pipe burst - a rolling-average energy-jump
@@ -1063,6 +1081,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.scope_right = deque(maxlen=SCOPE_BUFFER_SAMPLES)
         self.scope_time_base = SCOPE_DEFAULT_TIME_BASE
         self.scope_trigger = True
+        self.scope_gradient_direction = "lengthwise"
 
         # Vector Scope (goniometer) - vector_surface is an offscreen
         # Cairo ImageSurface accumulating a fading trail across frames
@@ -1301,6 +1320,22 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             vu_red_spin.connect("value-changed", vu_red_changed)
             vu_zone_row.append(vu_red_spin)
             box.append(vu_zone_row)
+
+            vu_thick_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            vu_thick_label = Gtk.Label(label="Hold Line Thickness", xalign=0, hexpand=True)
+            vu_thick_row.append(vu_thick_label)
+
+            vu_thick_spin = Gtk.SpinButton.new_with_range(0.5, 3.0, 0.25)
+            vu_thick_spin.set_value(self.vu_led_thickness)
+            vu_thick_spin.set_size_request(70, -1)
+
+            def vu_thick_changed(spin):
+                self.vu_led_thickness = spin.get_value()
+                self.drawing_area.queue_draw()
+
+            vu_thick_spin.connect("value-changed", vu_thick_changed)
+            vu_thick_row.append(vu_thick_spin)
+            box.append(vu_thick_row)
 
         if self.kind in ("spectrum", "spectrogram", "terrain", "waterfall"):
 
@@ -1638,6 +1673,37 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             spectrum_style_row.append(spectrum_style_dropdown)
             box.append(spectrum_style_row)
 
+            # Gradient direction for rainbow/gradient color modes
+            grad_dir_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            grad_dir_label = Gtk.Label(
+                label="Gradient Direction", xalign=0, hexpand=True
+            )
+            grad_dir_row.append(grad_dir_label)
+
+            grad_dir_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in SPECTRUM_GRADIENT_CHOICES]
+            )
+
+            current_grad_dir_index = next(
+                (
+                    i for i, (key, _) in enumerate(SPECTRUM_GRADIENT_CHOICES)
+                    if key == self.spectrum_gradient_direction
+                ),
+                0
+            )
+            grad_dir_dropdown.set_selected(current_grad_dir_index)
+
+            grad_dir_dropdown.connect(
+                "notify::selected",
+                self.on_spectrum_gradient_direction_changed
+            )
+
+            grad_dir_row.append(grad_dir_dropdown)
+            box.append(grad_dir_row)
+
             # LED Segments control - only relevant when style is "led"
             led_segments_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
@@ -1741,6 +1807,22 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             spectrum_hold_style_row.append(spectrum_hold_style_dropdown)
             box.append(spectrum_hold_style_row)
+
+            spectrum_thick_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            spectrum_thick_label = Gtk.Label(label="Hold Line Thickness", xalign=0, hexpand=True)
+            spectrum_thick_row.append(spectrum_thick_label)
+
+            spectrum_thick_spin = Gtk.SpinButton.new_with_range(0.5, 3.0, 0.25)
+            spectrum_thick_spin.set_value(self.spectrum_led_thickness)
+            spectrum_thick_spin.set_size_request(70, -1)
+
+            def spectrum_thick_changed(spin):
+                self.spectrum_led_thickness = spin.get_value()
+                self.drawing_area.queue_draw()
+
+            spectrum_thick_spin.connect("value-changed", spectrum_thick_changed)
+            spectrum_thick_row.append(spectrum_thick_spin)
+            box.append(spectrum_thick_row)
 
             height_scale_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
@@ -1982,34 +2064,53 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             aspect_row.append(aspect_switch)
             box.append(aspect_row)
 
-            zoom_row = Gtk.Box(
+            scope_scale_x_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
             )
-
-            zoom_label = Gtk.Label(
-                label="Zoom", xalign=0, hexpand=True
+            scope_scale_x_label = Gtk.Label(
+                label="X Scale", xalign=0, hexpand=True
             )
-            zoom_row.append(zoom_label)
-
-            self.scope_zoom_value_label = Gtk.Label(
-                label=self.format_scope_zoom(self.scope_zoom)
+            scope_scale_x_row.append(scope_scale_x_label)
+            self.scope_scale_x_value_label = Gtk.Label(
+                label=self.format_scope_zoom(self.scope_scale_x)
             )
-
-            zoom_scale = Gtk.Scale.new_with_range(
+            scope_scale_x_scale = Gtk.Scale.new_with_range(
                 Gtk.Orientation.HORIZONTAL, 0.25, 3.0, 0.05
             )
-            zoom_scale.set_value(self.scope_zoom)
-            zoom_scale.set_size_request(120, -1)
-            zoom_scale.set_draw_value(False)
-
-            zoom_scale.connect(
+            scope_scale_x_scale.set_value(self.scope_scale_x)
+            scope_scale_x_scale.set_size_request(120, -1)
+            scope_scale_x_scale.set_draw_value(False)
+            scope_scale_x_scale.connect(
                 "value-changed",
-                self.on_scope_zoom_changed
+                self.on_scope_scale_x_changed
             )
+            scope_scale_x_row.append(self.scope_scale_x_value_label)
+            scope_scale_x_row.append(scope_scale_x_scale)
+            box.append(scope_scale_x_row)
 
-            zoom_row.append(self.scope_zoom_value_label)
-            zoom_row.append(zoom_scale)
-            box.append(zoom_row)
+            scope_scale_y_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+            scope_scale_y_label = Gtk.Label(
+                label="Y Scale", xalign=0, hexpand=True
+            )
+            scope_scale_y_row.append(scope_scale_y_label)
+            self.scope_scale_y_value_label = Gtk.Label(
+                label=self.format_scope_zoom(self.scope_scale_y)
+            )
+            scope_scale_y_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.25, 3.0, 0.05
+            )
+            scope_scale_y_scale.set_value(self.scope_scale_y)
+            scope_scale_y_scale.set_size_request(120, -1)
+            scope_scale_y_scale.set_draw_value(False)
+            scope_scale_y_scale.connect(
+                "value-changed",
+                self.on_scope_scale_y_changed
+            )
+            scope_scale_y_row.append(self.scope_scale_y_value_label)
+            scope_scale_y_row.append(scope_scale_y_scale)
+            box.append(scope_scale_y_row)
 
         if self.kind in (
             "spectrum", "spectrogram", "vu", "peak", "oscilloscope", "vectorscope",
@@ -2636,6 +2737,33 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             pipes_rotate_speed_row.append(pipes_rotate_speed_scale)
             box.append(pipes_rotate_speed_row)
 
+            pipes_rotate_direction_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            pipes_rotate_direction_label = Gtk.Label(
+                label="Rotation Direction", xalign=0, hexpand=True
+            )
+            pipes_rotate_direction_row.append(pipes_rotate_direction_label)
+
+            pipes_rotate_direction_dropdown = Gtk.DropDown.new_from_strings(
+                ["Clockwise", "Counter clockwise"]
+            )
+            pipes_rotate_direction_dropdown.set_selected(
+                0 if self.pipes_rotate_direction >= 0 else 1
+            )
+            pipes_rotate_direction_dropdown.set_valign(Gtk.Align.CENTER)
+
+            def pipes_direction_changed(dropdown, param):
+                self.pipes_rotate_direction = 1 if dropdown.get_selected() == 0 else -1
+
+            pipes_rotate_direction_dropdown.connect(
+                "notify::selected", pipes_direction_changed
+            )
+
+            pipes_rotate_direction_row.append(pipes_rotate_direction_dropdown)
+            box.append(pipes_rotate_direction_row)
+
             pipes_beats_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             pipes_beats_label = Gtk.Label(
@@ -2896,6 +3024,10 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 box, "Scale", "peak_scale", [("db", "Decibels"), ("linear", "Linear")],
                 subtitle="Decibels spread out quiet levels; Linear is raw amplitude"
             )
+            self.add_scale(
+                box, "Hold Line Thickness", "peak_line_thickness", 0.5, 3.0, 0.25,
+                lambda value: f"{value:.2f}×"
+            )
 
         if self.kind == "oscilloscope":
             self.add_scale(
@@ -2928,6 +3060,10 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 box, "Rotate Speed", f"{self.kind}_rotate_speed", 1, 30, 1,
                 lambda value: f"{value:.0f}°/s"
             )
+            self.add_choice(
+                box, "Rotate Direction", f"{self.kind}_rotate_direction",
+                [(1, "Clockwise"), (-1, "Counter clockwise")]
+            )
 
     def build_color_controls(self, box):
         """Rows for the Colors group (build_settings_page moves the
@@ -2940,6 +3076,11 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             choices = METER_STYLE_CHOICES if self.kind in ("vu", "peak", "spectrum") else STYLE_CHOICES
             self.add_choice(box, "Color Style", "color_style", choices)
             self.add_choice(box, "Gradient", "line_gradient", PALETTE_CHOICES)
+            if self.kind == "oscilloscope":
+                self.add_choice(
+                    box, "Gradient Direction", "scope_gradient_direction",
+                    [("lengthwise", "Lengthwise"), ("vertical", "Vertical (Amplitude)")]
+                )
             self.add_color(box, "Low Color", "line_color_lo")
             self.add_color(box, "High Color", "line_color_hi")
 
@@ -2948,51 +3089,12 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         global_sync = getattr(self.primary, "sync_mini_colors_row", None) and self.primary.sync_mini_colors_row.get_active()
 
-        sync_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        sync_label = Gtk.Label(label="Sync Colors to Main", xalign=0, hexpand=True)
-        sync_row.append(sync_label)
-
-        sync_switch = Gtk.Switch()
-        sync_switch.set_active(global_sync or self.color_sync > 0)
-        sync_switch.set_sensitive(not global_sync)
-        sync_switch.set_valign(Gtk.Align.CENTER)
-
-        def sync_changed(widget, param):
-            if not (getattr(self.primary, "sync_mini_colors_row", None) and self.primary.sync_mini_colors_row.get_active()):
-                self.color_sync = 1.0 if widget.get_active() else 0.0
-                self.settings_changed()
-                update_style_visibility()
-
-        sync_switch.connect("notify::active", sync_changed)
-        sync_row.append(sync_switch)
-        box.append(sync_row)
-
-        style_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        style_label = Gtk.Label(label="Color Style", xalign=0, hexpand=True)
-        style_row.append(style_label)
-
-        sync_style_dropdown = Gtk.DropDown.new_from_strings(["Solid", "Gradient"])
         if global_sync:
-            global_style = self.primary.universal_style_dropdown.get_selected() if hasattr(self.primary, "universal_style_dropdown") else 0
-            sync_style_dropdown.set_selected(global_style)
-        else:
-            sync_style_dropdown.set_selected(self.local_sync_style)
-        sync_style_dropdown.set_sensitive(not global_sync)
-        sync_style_dropdown.set_valign(Gtk.Align.CENTER)
-
-        def style_changed(widget, param):
-            if not (getattr(self.primary, "sync_mini_colors_row", None) and self.primary.sync_mini_colors_row.get_active()):
-                self.local_sync_style = widget.get_selected()
-                self.settings_changed()
-
-        sync_style_dropdown.connect("notify::selected", style_changed)
-        style_row.append(sync_style_dropdown)
-        box.append(style_row)
-
-        def update_style_visibility():
-            style_row.set_visible(sync_switch.get_active())
-
-        update_style_visibility()
+            sync_label = Gtk.Label(
+                label="Colors synced from Visualizers sidebar",
+                xalign=0, css_classes=["dim-label"]
+            )
+            box.append(sync_label)
 
         self.add_choice(box, "Background", "background_mode", BACKGROUND_CHOICES, self.background_changed)
         self.add_color(box, "Background Color", "background_color", self.background_changed)
@@ -3107,6 +3209,10 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             decoded = decode_setting(value, getattr(self, name))
             if decoded is not None:
                 setattr(self, name, decoded)
+
+        self._color_mode_override = None
+        self._sync_active = False
+        self._sync_originals = None
 
         self._icon_cache_key = None
         self.reset_to_current_controls()
@@ -3370,9 +3476,15 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             dt = min(0.1, now - self.last_auto_rotate_time)
             name = f"{self.kind}_azimuth"
             speed = getattr(self, f"{self.kind}_rotate_speed")
-            setattr(self, name, getattr(self, name) + math.radians(speed * dt))
-            self.terrain_dirty = True
-            self.waterfall_dirty = True
+            direction = getattr(self, f"{self.kind}_rotate_direction", 1)
+            old = getattr(self, name)
+            new = old + math.radians(speed * dt * direction)
+            setattr(self, name, new)
+            # Only re-render when the angle changed enough to matter
+            # (about 1/4 degree visually).
+            if abs(new - old) > 0.004:
+                self.terrain_dirty = True
+                self.waterfall_dirty = True
 
         self.last_auto_rotate_time = now
 
@@ -3396,6 +3508,15 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 continue
 
             setattr(self, name, value)
+
+        # Migrate the old single Zoom slider to separate X/Y scales.
+        if (
+            "scope_zoom" in saved
+            and "scope_scale_x" not in saved
+            and "scope_scale_y" not in saved
+        ):
+            self.scope_scale_x = saved["scope_zoom"]
+            self.scope_scale_y = saved["scope_zoom"]
 
         self._icon_cache_key = None
 
@@ -3428,7 +3549,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             self.background_color.parse("#000000")
         elif self.background_mode == "frosted":
             self.background_mode = "main"
-        elif self.background_mode not in ("custom", "main", "transparent"):
+        elif self.background_mode == "main-adaptive":
+            self.background_mode = "main"
+        elif self.background_mode not in ("custom", "main", "system", "transparent"):
             r, g, b = self.theme_background_rgb()
             self.background_mode = "custom"
             self.background_color.red, self.background_color.green, self.background_color.blue = r, g, b
@@ -3498,6 +3621,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             zone_row = getattr(self, "spectrum_zone_row", None)
             if zone_row is not None:
                 zone_row.set_sensitive(self.spectrum_style == "led")
+            self.drawing_area.queue_draw()
+
+    def on_spectrum_gradient_direction_changed(self, dropdown, param):
+
+        index = dropdown.get_selected()
+
+        if 0 <= index < len(SPECTRUM_GRADIENT_CHOICES):
+            self.spectrum_gradient_direction = SPECTRUM_GRADIENT_CHOICES[index][0]
             self.drawing_area.queue_draw()
 
     def on_spectrum_led_segments_changed(self, spin):
@@ -3731,11 +3862,19 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         return f"{value:.2f}x"
 
-    def on_scope_zoom_changed(self, scale):
+    def on_scope_scale_x_changed(self, scale):
 
-        self.scope_zoom = scale.get_value()
-        self.scope_zoom_value_label.set_label(self.format_scope_zoom(self.scope_zoom))
-        self.drawing_area.queue_draw()
+        self.scope_scale_x = scale.get_value()
+        self.scope_scale_x_value_label.set_label(self.format_scope_zoom(self.scope_scale_x))
+        if hasattr(self, "drawing_area"):
+            self.drawing_area.queue_draw()
+
+    def on_scope_scale_y_changed(self, scale):
+
+        self.scope_scale_y = scale.get_value()
+        self.scope_scale_y_value_label.set_label(self.format_scope_zoom(self.scope_scale_y))
+        if hasattr(self, "drawing_area"):
+            self.drawing_area.queue_draw()
 
     # Always paints the real background across the *full* canvas
     # first (so the caller never needs its own separate background
@@ -4373,13 +4512,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             else:
                 zone = (0.2, 0.8, 0.3)
             if self.color_sync > 0:
-                zone = self.sync_blend(zone, palette_color("main", level))
+                main_level = 1.0 - level if self.reverse_colors else level
+                zone = self.sync_blend(zone, palette_color("main", main_level))
             return zone
 
         if self.color_mode == "solid":
             return (self.color.red, self.color.green, self.color.blue)
 
-        return palette_color(self.color_mode, level)
+        return self.mode_color(level)
 
     def set_meter_fill(self, cr, x, y, height, level, zones):
         """Source for a vertical meter bar spanning y..y+height: palettes
@@ -4394,7 +4534,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             else:
                 zone = (0.9, 0.2, 0.2)
             if self.color_sync > 0:
-                zone = self.sync_blend(zone, palette_color("main", min(level, 1.0)))
+                main_level = 1.0 - min(level, 1.0) if self.reverse_colors else min(level, 1.0)
+                zone = self.sync_blend(zone, palette_color("main", main_level))
             cr.set_source_rgb(*zone)
             return
 
@@ -4406,7 +4547,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         for step in range(9):
             t = step / 8
-            gradient.add_color_stop_rgb(t, *palette_color(self.color_mode, t))
+            gradient.add_color_stop_rgb(t, *self.mode_color(t))
 
         cr.set_source(gradient)
 
@@ -4522,23 +4663,24 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                     cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
                     cr.rectangle(x, seg_y, w, seg_height)
                     cr.fill()
-                else:
-                    # "line" and "outline" both draw the normal fill first,
-                    # then overlay the peak indicator on top.
+                elif style == "outline":
+                    cr.set_source_rgba(color[0], color[1], color[2], 0.12)
                     cr.rectangle(x, seg_y, w, seg_height)
                     cr.fill()
-                    if style == "outline":
-                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
-                        cr.set_line_width(1.5)
-                        cr.rectangle(x + 0.75, seg_y + 0.75, w - 1.5, seg_height - 1.5)
-                        cr.stroke()
-                    else:  # line — thin horizontal line like Japanese stereos
-                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
-                        bar_h = max(1.0, seg_height * 0.18 * self.vu_led_thickness)
-                        bar_y = seg_y + (seg_height - bar_h) / 2
-                        pad = 1.5
-                        cr.rectangle(x + pad, bar_y, max(1, w - pad * 2), bar_h)
-                        cr.fill()
+                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
+                    cr.set_line_width(1.5)
+                    cr.rectangle(x + 0.75, seg_y + 0.75, w - 1.5, seg_height - 1.5)
+                    cr.stroke()
+                else:  # line — only the line is bright, the box stays dim
+                    cr.set_source_rgba(color[0], color[1], color[2], 0.12)
+                    cr.rectangle(x, seg_y, w, seg_height)
+                    cr.fill()
+                    cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
+                    bar_h = max(1.0, seg_height * 0.18 * self.vu_led_thickness)
+                    bar_y = seg_y + (seg_height - bar_h) / 2
+                    pad = 1.5
+                    cr.rectangle(x + pad, bar_y, max(1, w - pad * 2), bar_h)
+                    cr.fill()
             else:
                 cr.rectangle(x, seg_y, w, seg_height)
                 cr.fill()
@@ -4661,7 +4803,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         cr.rectangle(x, y, w, h)
         cr.fill()
 
-        filled_height = h * min(level_frac, 1.0)
+        # Only draw the hold line when it's above the live level —
+        # when they overlap in the same spot the hold indicator is
+        # invisible and just leaves a ragged edge.
+        hold_frac = min(hold_frac, 1.0)
+        level_frac = min(level_frac, 1.0)
+        show_hold = hold_frac > level_frac + 0.005
+
+        filled_height = h * level_frac
 
         # Same green/yellow/red convention as the VU Meter/LED
         # segments, but at dB-scaled thresholds appropriate to a peak
@@ -4673,13 +4822,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         cr.rectangle(x, y + (h - filled_height), w, filled_height)
         cr.fill()
 
-        hold_y = y + h * (1.0 - min(hold_frac, 1.0))
-        hold_color = self.meter_color(min(hold_frac, 1.0), (0.8, 0.95))
+        if show_hold:
+            hold_y = y + h * (1.0 - hold_frac)
+            hold_color = self.meter_color(hold_frac, (0.8, 0.95))
 
-        cr.set_source_rgba(*self.peak_hold_draw_color(base=hold_color))
-        hold_h = max(1.0, 2.0 * self.peak_line_thickness)
-        cr.rectangle(x, hold_y - hold_h / 2, w, hold_h)
-        cr.fill()
+            cr.set_source_rgba(*self.peak_hold_draw_color(base=hold_color))
+            hold_h = max(1.0, 2.0 * self.peak_line_thickness)
+            cr.rectangle(x, hold_y - hold_h / 2, w, hold_h)
+            cr.fill()
 
     def draw_peak_scale(self, cr, x, y, h):
 
@@ -4864,7 +5014,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         cx = width / 2
         cy = height / 2
-        scale = (min(width, height) / 2 - 8) * self.scope_zoom
+        base = min(width, height) / 2 - 8
+        scale_x = base * self.scope_scale_x
+        scale_y = base * self.scope_scale_y
 
         if self.show_labels:
 
@@ -4909,13 +5061,13 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             # horizontal.
             k = 0.70710678
             points = [
-                (cx + (self.left[i] - self.right[i]) * k * scale,
-                 cy - (self.left[i] + self.right[i]) * k * scale)
+                (cx + (self.left[i] - self.right[i]) * k * scale_x,
+                 cy - (self.left[i] + self.right[i]) * k * scale_y)
                 for i in indices
             ]
         else:
             points = [
-                (cx + self.left[i] * scale, cy - self.right[i] * scale)
+                (cx + self.left[i] * scale_x, cy - self.right[i] * scale_y)
                 for i in indices
             ]
 
@@ -5005,7 +5157,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 py = y + h / 2 - samples[start + i] * (h / 2 * 0.9)
 
                 if prev_px is not None:
-                    cr.set_source_rgba(*self.mode_color(i / (count - 1)), opacity)
+                    if self.scope_gradient_direction == "vertical":
+                        # Color by amplitude deviation from centre (0 = zero
+                        # crossing, 1 = positive or negative peak). Reverse
+                        # flips which end of the palette is at the centre.
+                        level = max(0.0, min(1.0, abs(samples[start + i])))
+                        cr.set_source_rgba(*self.mode_color(level), opacity)
+                    else:
+                        cr.set_source_rgba(*self.mode_color(i / (count - 1)), opacity)
                     cr.move_to(prev_px, prev_py)
                     cr.line_to(px, py)
                     cr.stroke()
@@ -5087,6 +5246,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             or self.vector_surface.get_width() != width
             or self.vector_surface.get_height() != height
         ):
+            if self.vector_surface is not None:
+                self.vector_surface.finish()
             self.vector_surface = cairo.ImageSurface(
                 cairo.FORMAT_ARGB32, max(1, width), max(1, height)
             )
@@ -5127,7 +5288,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # reaches sqrt(2) - divide that out so the full-scale diamond
         # (|L|, |R| <= 1) just touches the edges. It used to be plotted
         # sqrt(2) too big, so loud passages ran into the boundary.
-        scale = radius / math.sqrt(2) * self.scope_zoom
+        base = radius / math.sqrt(2)
+        scale_x = base * self.scope_scale_x
+        scale_y = base * self.scope_scale_y
 
         if self.vector_auto_gain and count:
             peak = max(
@@ -5141,7 +5304,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             # Loudest recent point at ~80% of the way to the edge; at
             # most 8x for near-silence.
-            scale *= min(8.0, 0.8 * math.sqrt(2) / max(self.vector_envelope, 0.8 * math.sqrt(2) / 8.0))
+            gain = min(8.0, 0.8 * math.sqrt(2) / max(self.vector_envelope, 0.8 * math.sqrt(2) / 8.0))
+            scale_x *= gain
+            scale_y *= gain
 
         # Rotated 45° from a plain L/R plot - Mid ((L+R)/sqrt(2)) on
         # the vertical axis, Side ((L-R)/sqrt(2)) on the horizontal -
@@ -5164,8 +5329,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             mid = (self.left[i] + self.right[i]) * 0.70710678
             side = (self.left[i] - self.right[i]) * 0.70710678
 
-            px = cx + side * scale
-            py = cy - mid * scale
+            px = cx + side * scale_x
+            py = cy - mid * scale_y
 
             if rainbow:
                 # Colored by sample index within the current chunk,
@@ -5208,12 +5373,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # Full-scale reference: where |L| or |R| reaches 1 (without
         # Auto Gain the cloud can't go past it).
         if not self.vector_auto_gain:
-            edge = radius * self.scope_zoom
+            base_edge = radius / math.sqrt(2)
+            edge_x = base_edge * self.scope_scale_x
+            edge_y = base_edge * self.scope_scale_y
             cr.set_source_rgba(*self.canvas_foreground_rgba(0.12))
-            cr.move_to(cx, cy - edge)
-            cr.line_to(cx + edge, cy)
-            cr.line_to(cx, cy + edge)
-            cr.line_to(cx - edge, cy)
+            cr.move_to(cx, cy - edge_y)
+            cr.line_to(cx + edge_x, cy)
+            cr.line_to(cx, cy + edge_y)
+            cr.line_to(cx - edge_x, cy)
             cr.close_path()
             cr.stroke()
 
@@ -5766,12 +5933,16 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             filled = bar_height * min(level, 1.0) * self.spectrum_height_scale
 
             if rainbow:
-                # By position across the frequency axis (a fixed hue
-                # per bar) rather than by that bar's own level - the
-                # classic "rainbow spectrum analyzer" look, a stable
-                # gradient across the bars rather than colors
-                # flickering with loudness.
-                cr.set_source_rgb(*self.mode_color(i / max(1, bar_count - 1)))
+                if self.spectrum_gradient_direction == "vertical":
+                    # Palette mapped to height inside each bar.
+                    gradient = cairo.LinearGradient(0, margin + bar_height, 0, margin)
+                    for step in range(9):
+                        t = step / 8
+                        gradient.add_color_stop_rgb(t, *self.mode_color(t))
+                    cr.set_source(gradient)
+                else:
+                    # Classic lengthwise: one fixed hue per bar.
+                    cr.set_source_rgb(*self.mode_color(i / max(1, bar_count - 1)))
 
             cr.rectangle(x, margin + (bar_height - filled), bar_width, filled)
             cr.fill()
@@ -5783,11 +5954,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                     * self.spectrum_height_scale
                 )
                 hold_y = margin + (bar_height - hold_height)
-                bar_color = (
-                    self.mode_color(i / max(1, bar_count - 1))
-                    if rainbow else
-                    (self.color.red, self.color.green, self.color.blue)
-                )
+                if rainbow:
+                    if self.spectrum_gradient_direction == "vertical":
+                        hold_level_frac = min(self.spectrum_bar_holds[i], 1.0) * self.spectrum_height_scale
+                        bar_color = self.mode_color(min(hold_level_frac, 1.0))
+                    else:
+                        bar_color = self.mode_color(i / max(1, bar_count - 1))
+                else:
+                    bar_color = (self.color.red, self.color.green, self.color.blue)
 
                 cr.set_source_rgba(*self.peak_hold_draw_color(base=bar_color))
                 cr.rectangle(x, hold_y - 2, bar_width, 2)
@@ -5809,6 +5983,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         seg_gap = min(3, bar_height / segments / 4)
         seg_height = (bar_height - seg_gap * (segments - 1)) / segments
 
+        rainbow = self.color_mode not in ("solid", "classic")
+
         for i, level in enumerate(self.bar_levels):
 
             x = margin + i * (bar_width + gap)
@@ -5827,7 +6003,12 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 threshold = (s + 1) / segments
                 seg_y = margin + bar_height - (s + 1) * seg_height - s * seg_gap
 
-                color = self.meter_color(threshold, (self.spectrum_yellow_zone, self.spectrum_red_zone))
+                if rainbow and self.spectrum_gradient_direction == "lengthwise":
+                    # One color per bar (based on its index), all
+                    # segments share it.
+                    color = self.mode_color(i / max(1, bar_count - 1))
+                else:
+                    color = self.meter_color(threshold, (self.spectrum_yellow_zone, self.spectrum_red_zone))
 
                 lit = level >= threshold - 1.0 / segments
 
@@ -5848,26 +6029,27 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                         cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
                         cr.rectangle(x, seg_y, bar_width, seg_height)
                         cr.fill()
-                    else:
-                        # "line" and "outline" both draw the normal fill first,
-                        # then overlay the peak indicator on top.
+                    elif style == "outline":
+                        cr.set_source_rgba(color[0], color[1], color[2], 0.12)
                         cr.rectangle(x, seg_y, bar_width, seg_height)
                         cr.fill()
-                        if style == "outline":
-                            cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
-                            cr.set_line_width(1.5)
-                            cr.rectangle(
-                                x + 0.75, seg_y + 0.75,
-                                bar_width - 1.5, seg_height - 1.5
-                            )
-                            cr.stroke()
-                        else:  # line — thin horizontal line like Japanese stereos
-                            cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
-                            bar_h = max(1.0, seg_height * 0.18 * self.spectrum_led_thickness)
-                            bar_y = seg_y + (seg_height - bar_h) / 2
-                            pad = 1.5
-                            cr.rectangle(x + pad, bar_y, max(1, bar_width - pad * 2), bar_h)
-                            cr.fill()
+                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
+                        cr.set_line_width(1.5)
+                        cr.rectangle(
+                            x + 0.75, seg_y + 0.75,
+                            bar_width - 1.5, seg_height - 1.5
+                        )
+                        cr.stroke()
+                    else:  # line — only the line is bright, the box stays dim
+                        cr.set_source_rgba(color[0], color[1], color[2], 0.12)
+                        cr.rectangle(x, seg_y, bar_width, seg_height)
+                        cr.fill()
+                        cr.set_source_rgba(*self.peak_hold_draw_color(0.9, base=color))
+                        bar_h = max(1.0, seg_height * 0.18 * self.spectrum_led_thickness)
+                        bar_y = seg_y + (seg_height - bar_h) / 2
+                        pad = 1.5
+                        cr.rectangle(x + pad, bar_y, max(1, bar_width - pad * 2), bar_h)
+                        cr.fill()
                 else:
                     cr.rectangle(x, seg_y, bar_width, seg_height)
                     cr.fill()
@@ -5924,12 +6106,13 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         if self.color_mode not in ("solid", "classic"):
 
-            # A real left-to-right rainbow gradient fill (Cairo's own
-            # LinearGradient), rather than per-bar solid fills the way
-            # render_spectrum_bars does it - there's no per-bar
-            # boundary left to color independently once this is one
-            # continuous filled shape.
-            gradient = cairo.LinearGradient(margin, 0, margin + inner_width, 0)
+            # Rainbow gradient fill. Direction follows the user's
+            # preference: vertical (height-mapped) or lengthwise
+            # (left-to-right across the frequency axis).
+            if self.spectrum_gradient_direction == "vertical":
+                gradient = cairo.LinearGradient(0, baseline_y, 0, margin)
+            else:
+                gradient = cairo.LinearGradient(margin, 0, margin + inner_width, 0)
 
             stops = 8
 
@@ -5959,11 +6142,14 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
                 x = margin + inner_width * (i / (bar_count - 1))
                 y = baseline_y - bar_height * min(hold, 1.0) * self.spectrum_height_scale
-                bar_color = (
-                    self.mode_color(i / max(1, bar_count - 1))
-                    if self.color_mode not in ("solid", "classic") else
-                    (self.color.red, self.color.green, self.color.blue)
-                )
+                if self.color_mode not in ("solid", "classic"):
+                    if self.spectrum_gradient_direction == "vertical":
+                        hold_frac = min(hold, 1.0) * self.spectrum_height_scale
+                        bar_color = self.mode_color(min(hold_frac, 1.0))
+                    else:
+                        bar_color = self.mode_color(i / max(1, bar_count - 1))
+                else:
+                    bar_color = (self.color.red, self.color.green, self.color.blue)
 
                 cr.set_source_rgba(*self.peak_hold_draw_color(0.8, base=bar_color))
                 cr.rectangle(x - 3, y - 1, 6, 2)
@@ -6062,6 +6248,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         if surface is None or key != self.spectrogram_image_key:
 
+            if surface is not None:
+                surface.finish()
             surface = cairo.ImageSurface(
                 cairo.FORMAT_ARGB32, SPECTROGRAM_COLUMNS, max(1, self.num_bars)
             )
@@ -6218,6 +6406,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         return (cx + rx * scale, cy - rz * scale, depth)
 
     def render_terrain_surface(self, width, height):
+
+        if self.terrain_surface is not None:
+            self.terrain_surface.finish()
 
         self.terrain_surface = cairo.ImageSurface(
             cairo.FORMAT_ARGB32, max(1, width), max(1, height)
@@ -6443,6 +6634,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.waterfall_dirty = True
 
     def render_waterfall_surface(self, width, height):
+
+        if self.waterfall_surface is not None:
+            self.waterfall_surface.finish()
 
         self.waterfall_surface = cairo.ImageSurface(
             cairo.FORMAT_ARGB32, max(1, width), max(1, height)
@@ -6850,10 +7044,11 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         # purely so the value itself doesn't grow forever).
         if self.pipes_auto_rotate and not self.pipes_dragging:
 
+            direction = getattr(self, "pipes_rotate_direction", 1)
             self.pipes_azimuth = (
                 self.pipes_azimuth
                 + math.radians(self.pipes_rotate_speed + self.pipes_beat_spin_boost)
-                * dt
+                * dt * direction
             ) % (2 * math.pi)
 
             self.pipes_elevation = max(

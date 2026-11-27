@@ -51,13 +51,14 @@ import cairo
 SAVED_SETTINGS = [
     "color", "color_style", "line_gradient", "line_color_lo", "line_color_hi", "num_bars", "decay", "show_labels",
     "mirror_reflection", "maintain_aspect_ratio", "scope_zoom",
+    "scope_scale_x", "scope_scale_y",
     "xy_line_width", "xy_points", "xy_curved",
     "vu_style", "vu_peak_hold", "vu_peak_hold_style", "vu_segments", "vu_height_scale",
     "vu_yellow_zone", "vu_red_zone",
     "peak_hold_seconds", "peak_hold_color_mode", "peak_hold_tint", "peak_line_thickness", "vu_led_thickness", "spectrum_led_thickness", "peak_hold_color",
-    "spectrum_peak_hold", "spectrum_peak_hold_style", "spectrum_height_scale", "spectrum_style", "spectrum_led_segments",
+    "spectrum_peak_hold", "spectrum_peak_hold_style", "spectrum_height_scale", "spectrum_style", "spectrum_gradient_direction", "spectrum_led_segments",
     "spectrum_yellow_zone", "spectrum_red_zone",
-    "scope_time_base", "scope_trigger", "vector_persistence", "vector_dot_size",
+    "scope_time_base", "scope_trigger", "scope_gradient_direction", "vector_persistence", "vector_dot_size",
     "spectrogram_vertical", "spectrogram_speed", "spectrogram_palette",
     "spectrogram_color_lo", "spectrogram_color_hi", "spectrogram_color_ceiling",
     "terrain_palette", "terrain_color_lo", "terrain_color_hi",
@@ -72,14 +73,14 @@ SAVED_SETTINGS = [
     "pipes_max_pipes", "pipes_base_width", "pipes_band_colors",
     "pipes_speed_scale", "pipes_reactivity", "pipes_show_grid",
     "pipes_fade_enabled", "pipes_fade_seconds", "pipes_auto_rotate",
-    "pipes_rotate_speed", "pipes_beats_enabled", "pipes_beat_rotation_enabled",
+    "pipes_rotate_speed", "pipes_rotate_direction", "pipes_beats_enabled", "pipes_beat_rotation_enabled",
     "pipes_beat_zoom_enabled", "pipes_pulse_width", "pipes_pulse_color",
     "pipes_tube_shading", "pipes_zoom", "pipes_azimuth", "pipes_elevation",
     # Shared (every kind)
-    "background_mode", "background_color", "gain", "frame_rate_cap",
+    "background_mode", "main_bg_plain", "background_color", "gain", "frame_rate_cap",
     "compact_mode", "freq_min", "freq_max", "xy_goniometer",
-    "terrain_auto_rotate", "terrain_rotate_speed",
-    "waterfall_auto_rotate", "waterfall_rotate_speed",
+    "terrain_auto_rotate", "terrain_rotate_speed", "terrain_rotate_direction",
+    "waterfall_auto_rotate", "waterfall_rotate_speed", "waterfall_rotate_direction",
     "view_hint_shown", "vector_auto_gain", "color_sync", "local_sync_style", "reverse_colors",
     "terrain_pan_x", "terrain_pan_y", "waterfall_pan_x", "waterfall_pan_y",
     "pipes_pan_x", "pipes_pan_y",
@@ -341,11 +342,11 @@ def update_main_visualizer_palette(pixels):
         dominant = stops[3]
 
     old = MAIN_DOMINANT[0]
-    MAIN_DOMINANT[0] = tuple(old[c] + (dominant[c] - old[c]) * 0.35 for c in range(3))
+    MAIN_DOMINANT[0] = tuple(old[c] + (dominant[c] - old[c]) * 0.25 for c in range(3))
 
     current = PALETTE_STOPS["main"]
     PALETTE_STOPS["main"] = [
-        tuple(old[c] + (new[c] - old[c]) * 0.35 for c in range(3))
+        tuple(old[c] + (new[c] - old[c]) * 0.25 for c in range(3))
         for old, new in zip(current, stops)
     ]
     _PALETTE_LUTS.pop("main", None)
@@ -422,9 +423,11 @@ METER_STYLE_CHOICES = [("classic", "Classic")] + STYLE_CHOICES
 # kind has). Built partly by build_settings_controls, partly by
 # build_color_controls; build_settings_page gathers them.
 COLOR_ROW_ORDER = [
-    "Color Style", "Color", "Gradient", "Low Color", "High Color", "High Level",
+    "Color Style", "Color", "Gradient", "Gradient Direction",
+    "Low Color", "High Color", "High Level",
     "Reverse", "Bass Color", "Low Mid Color", "High Mid Color", "Treble Color",
-    "Pulse Color", "Peak Hold Color", "Match Main Visualizer",
+    "Pulse Color", "Peak Hold Color",
+    "Match Main Visualizer",
     "Background", "Background Color",
 ]
 
@@ -432,7 +435,7 @@ COLOR_ROW_ORDER = [
 # A color (Background Color), the main visualizer's darkest color, or
 # see-through to the desktop.
 BACKGROUND_CHOICES = [
-    ("custom", "Color"), ("main", "Main Visualizer"), ("transparent", "Transparent"),
+    ("custom", "Color"), ("main", "Main Visualizer"), ("system", "System Theme"), ("transparent", "Transparent"),
 ]
 
 
@@ -846,8 +849,19 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
             return None
 
         if self.background_mode == "main":
-            # Its darkest color, darker still so traces stay readable.
-            return tuple(c * 0.55 for c in palette_color("main", 0.0))
+            if getattr(self, "main_bg_plain", False):
+                if Adw.StyleManager.get_default().get_dark():
+                    return (0.05, 0.05, 0.06)
+                return (0.93, 0.93, 0.94)
+            base = palette_color("main", 0.0)
+            if Adw.StyleManager.get_default().get_dark():
+                # Dark mode: its darkest color, darker still so traces stay readable.
+                return tuple(c * 0.55 for c in base)
+            # Light mode: light base with a stronger tint from the palette.
+            return tuple(0.80 + c * 0.16 for c in base)
+
+        if self.background_mode == "system":
+            return self.theme_background_rgb()
 
         color = self.background_color
         return (color.red, color.green, color.blue)
@@ -1027,6 +1041,8 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
     def mode_color(self, level):
         """Trace/bar color at 0..1 for the current non-solid Color Mode."""
 
+        if self.reverse_colors:
+            level = 1.0 - level
         return palette_color(self.color_mode, level)
 
     def rounded_rect_path(self, cr, x, y, w, h, r):
