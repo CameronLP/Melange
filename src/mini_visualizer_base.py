@@ -84,7 +84,7 @@ SAVED_SETTINGS = [
     "view_hint_shown", "vector_auto_gain", "reverse_colors",
     "terrain_pan_x", "terrain_pan_y", "waterfall_pan_x", "waterfall_pan_y",
     "pipes_pan_x", "pipes_pan_y",
-    "scope_line_width", "peak_scale",
+    "scope_line_width", "peak_scale", "color_sync",
 ]
 
 

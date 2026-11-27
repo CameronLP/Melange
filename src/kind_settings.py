@@ -185,6 +185,15 @@ def color_group() -> Group:
             title="Reverse Colors",
             visible_when=lambda w: w.color_style == "gradient",
         ),
+        Scale(
+            attr="color_sync",
+            title="Match Main Visualizer",
+            subtitle="Blend colors toward the main visualizer palette",
+            min=0.0,
+            max=1.0,
+            step=0.05,
+            format_fn=lambda v: f"{v:.0%}",
+        ),
     ])
 
 

@@ -2769,7 +2769,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             if kind not in self.aux_windows:
 
                 aux_window = AuxVisualizerWindow(self, kind)
-                self.apply_mini_viz_color_overrides(aux_window)
                 self.apply_mini_viz_background_overrides(aux_window)
                 self.aux_windows[kind] = aux_window
                 aux_window.present()
@@ -2801,26 +2800,6 @@ class MelangeWindow(Adw.ApplicationWindow):
 
         if self.aux_windows or matching:
             update_main_visualizer_palette(pixels)
-
-        # Keep synced solid colors tracking the main palette dynamically.
-        if self.aux_windows:
-            r, g, b = MAIN_DOMINANT[0]
-            for aux in self.aux_windows.values():
-                if getattr(aux, "_sync_active", False) and aux.color_mode == "solid":
-                    color = Gdk.RGBA()
-                    color.red, color.green, color.blue, color.alpha = r, g, b, 1.0
-                    aux.color = color
-                    aux.line_color_lo = color
-                    aux.line_color_hi = color
-                    for prefix in ("terrain", "waterfall", "spectrogram"):
-                        lo = f"{prefix}_color_lo"
-                        hi = f"{prefix}_color_hi"
-                        if hasattr(aux, lo):
-                            setattr(aux, lo, color)
-                        if hasattr(aux, hi):
-                            setattr(aux, hi, color)
-                    if hasattr(aux, "drawing_area"):
-                        aux.drawing_area.queue_draw()
 
         if matching:
             self.apply_now_playing_text_style()
@@ -3980,137 +3959,12 @@ class MelangeWindow(Adw.ApplicationWindow):
             store_as="beat_cycle_row"
         )
 
-    def build_sync_mini_colors_control(self):
-
-        def on_toggle(enabled):
-            self._update_universal_style_visibility()
-            self.apply_mini_viz_color_overrides()
-            self.schedule_settings_save()
-
-        return self.build_toggle_row(
-            "Sync Colors to Main",
-            False,
-            on_toggle,
-            store_as="sync_mini_colors_row"
-        )
-
-    def _update_universal_style_visibility(self):
-        if hasattr(self, "universal_style_row"):
-            sync_on = getattr(self, "sync_mini_colors_row", None) and self.sync_mini_colors_row.get_active()
-            self.universal_style_row.set_visible(sync_on)
-
     def on_color_sample_interval_changed(self, value):
 
         self.color_sample_interval = value
         if self.projectm_view is not None:
             self.projectm_view.color_sample_interval = value
         self.schedule_settings_save()
-
-    def apply_mini_viz_color_overrides(self, aux=None):
-        """Apply global color sync / style to one or all aux windows."""
-        if aux is None:
-            for a in list(self.aux_windows.values()):
-                self.apply_mini_viz_color_overrides(a)
-            return
-
-        if not hasattr(self, "sync_mini_colors_row"):
-            return
-
-        sync = self.sync_mini_colors_row.get_active()
-        style = self.universal_style_dropdown.get_selected() if hasattr(self, "universal_style_dropdown") else 0
-
-        if sync:
-            if not getattr(aux, "_sync_active", False):
-                aux._sync_originals = {
-                    "color_mode": aux._color_mode_override,
-                    "terrain_palette": getattr(aux, "terrain_palette", None),
-                    "waterfall_palette": getattr(aux, "waterfall_palette", None),
-                    "spectrogram_palette": getattr(aux, "spectrogram_palette", None),
-                    "reverse_colors": aux.reverse_colors,
-                    "color": Gdk.RGBA()
-                }
-                c = aux._sync_originals["color"]
-                c.red, c.green, c.blue, c.alpha = aux.color.red, aux.color.green, aux.color.blue, aux.color.alpha
-                aux._sync_originals["line_color_lo"] = Gdk.RGBA()
-                c = aux._sync_originals["line_color_lo"]
-                c.red, c.green, c.blue, c.alpha = aux.line_color_lo.red, aux.line_color_lo.green, aux.line_color_lo.blue, aux.line_color_lo.alpha
-                aux._sync_originals["line_color_hi"] = Gdk.RGBA()
-                c = aux._sync_originals["line_color_hi"]
-                c.red, c.green, c.blue, c.alpha = aux.line_color_hi.red, aux.line_color_hi.green, aux.line_color_hi.blue, aux.line_color_hi.alpha
-                for prefix in ("terrain", "waterfall", "spectrogram"):
-                    lo = f"{prefix}_color_lo"
-                    hi = f"{prefix}_color_hi"
-                    if hasattr(aux, lo):
-                        saved = Gdk.RGBA()
-                        src = getattr(aux, lo)
-                        saved.red, saved.green, saved.blue, saved.alpha = src.red, src.green, src.blue, src.alpha
-                        aux._sync_originals[lo] = saved
-                    if hasattr(aux, hi):
-                        saved = Gdk.RGBA()
-                        src = getattr(aux, hi)
-                        saved.red, saved.green, saved.blue, saved.alpha = src.red, src.green, src.blue, src.alpha
-                        aux._sync_originals[hi] = saved
-                aux._sync_active = True
-
-            if style == 0:  # Solid from main palette
-                from melange.mini_visualizer_base import MAIN_DOMINANT
-                r, g, b = MAIN_DOMINANT[0]
-                color = Gdk.RGBA()
-                color.red, color.green, color.blue, color.alpha = r, g, b, 1.0
-                aux.color_mode = "solid"
-                aux.color = color
-                aux.line_color_lo = color
-                aux.line_color_hi = color
-                for prefix in ("terrain", "waterfall"):
-                    lo = f"{prefix}_color_lo"
-                    hi = f"{prefix}_color_hi"
-                    if hasattr(aux, lo):
-                        setattr(aux, lo, color)
-                    if hasattr(aux, hi):
-                        setattr(aux, hi, color)
-                    pal = f"{prefix}_palette"
-                    if hasattr(aux, pal):
-                        setattr(aux, pal, "gradient")
-                # Spectrogram always maps intensity to a gradient palette.
-                if hasattr(aux, "spectrogram_palette"):
-                    aux.spectrogram_palette = "main"
-            else:  # Gradient from main palette
-                aux.color_mode = "main"
-                for attr in ("terrain_palette", "waterfall_palette", "spectrogram_palette"):
-                    if hasattr(aux, attr):
-                        setattr(aux, attr, "main")
-        else:
-            if getattr(aux, "_sync_active", False):
-                orig = aux._sync_originals
-                aux.color_mode = orig.get("color_mode")
-                for attr in ("terrain_palette", "waterfall_palette", "spectrogram_palette"):
-                    if hasattr(aux, attr) and orig.get(attr) is not None:
-                        setattr(aux, attr, orig[attr])
-                if "reverse_colors" in orig:
-                    aux.reverse_colors = orig["reverse_colors"]
-                if "color" in orig:
-                    aux.color = orig["color"]
-                if "line_color_lo" in orig:
-                    aux.line_color_lo = orig["line_color_lo"]
-                if "line_color_hi" in orig:
-                    aux.line_color_hi = orig["line_color_hi"]
-                for prefix in ("terrain", "waterfall", "spectrogram"):
-                    lo = f"{prefix}_color_lo"
-                    hi = f"{prefix}_color_hi"
-                    if hasattr(aux, lo) and lo in orig:
-                        setattr(aux, lo, orig[lo])
-                    if hasattr(aux, hi) and hi in orig:
-                        setattr(aux, hi, orig[hi])
-                aux._sync_active = False
-
-        if aux.kind == "terrain":
-            aux.terrain_dirty = True
-        if aux.kind == "waterfall":
-            aux.waterfall_dirty = True
-        if hasattr(aux, "drawing_area"):
-            aux.drawing_area.queue_draw()
-        if hasattr(aux, "reset_to_current_controls"):
-            aux.reset_to_current_controls()
 
     def apply_mini_viz_background_overrides(self, aux=None):
         """Apply global background sync to one or all aux windows."""
@@ -4307,11 +4161,7 @@ class MelangeWindow(Adw.ApplicationWindow):
                 if action is not None and isinstance(value, bool) and action.get_state().get_boolean() != value:
                     action.change_state(GLib.Variant("b", value))
 
-        # Global mini visualizer color sync / style / background (sidebar, not preferences page)
-        if saved.get("sync_mini_colors") is True and hasattr(self, "sync_mini_colors_row"):
-            self.sync_mini_colors_row.set_active(True)
-        if "sync_mini_style" in saved and hasattr(self, "universal_style_dropdown"):
-            self.universal_style_dropdown.set_selected(saved["sync_mini_style"])
+        # Global mini visualizer background (sidebar, not preferences page)
         if "sync_mini_bg" in saved and hasattr(self, "universal_bg_dropdown"):
             self.universal_bg_dropdown.set_selected(saved["sync_mini_bg"])
         if "sync_mini_bg_plain" in saved and hasattr(self, "main_bg_plain_dropdown"):
@@ -4379,8 +4229,6 @@ class MelangeWindow(Adw.ApplicationWindow):
             },
             "theme": int(Adw.StyleManager.get_default().get_color_scheme()),
             "maximized": self.is_maximized(),
-            "sync_mini_colors": getattr(self, "sync_mini_colors_row", None) and self.sync_mini_colors_row.get_active(),
-            "sync_mini_style": self.universal_style_dropdown.get_selected() if hasattr(self, "universal_style_dropdown") else 0,
             "sync_mini_bg": self.universal_bg_dropdown.get_selected() if hasattr(self, "universal_bg_dropdown") else 0,
             "sync_mini_bg_plain": self.main_bg_plain_dropdown.get_selected() if hasattr(self, "main_bg_plain_dropdown") else 0,
             "now_playing_art_override": self.now_playing_art_override_path,
@@ -5069,28 +4917,7 @@ class MelangeWindow(Adw.ApplicationWindow):
 
             page.add(group)
 
-        color_group = Adw.PreferencesGroup(
-            title="Colors",
-            description="Override color for all open mini visualizers."
-        )
-        color_group.add(self.build_sync_mini_colors_control())
-
-        style_row = Adw.ActionRow(title="Color Style")
-        self.universal_style_dropdown = Gtk.DropDown.new_from_strings(
-            ["Solid", "Gradient"]
-        )
-        self.universal_style_dropdown.set_selected(0)
-        self.universal_style_dropdown.set_valign(Gtk.Align.CENTER)
-        style_row.add_suffix(self.universal_style_dropdown)
-        color_group.add(style_row)
-        self.universal_style_row = style_row
-
-        self.universal_style_dropdown.connect(
-            "notify::selected",
-            lambda d, p: (self.apply_mini_viz_color_overrides(), self.schedule_settings_save())
-        )
-
-        self.universal_style_row.set_visible(False)
+        color_group = Adw.PreferencesGroup(title="Background")
 
         bg_row = Adw.ActionRow(title="Background")
         self.universal_bg_dropdown = Gtk.DropDown.new_from_strings(
