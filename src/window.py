@@ -4133,6 +4133,8 @@ class MelangeWindow(Adw.ApplicationWindow):
                 aux._bg_sync_original = getattr(aux, "background_mode", "custom")
                 aux._bg_sync_active = True
             aux.background_mode = mode
+            if mode == "main" and hasattr(self, "main_bg_plain_dropdown"):
+                aux.main_bg_plain = self.main_bg_plain_dropdown.get_selected() == 1
         else:
             if getattr(aux, "_bg_sync_active", False):
                 orig = getattr(aux, "_bg_sync_original", "custom")
@@ -4145,6 +4147,12 @@ class MelangeWindow(Adw.ApplicationWindow):
             aux.drawing_area.queue_draw()
         if hasattr(aux, "reset_to_current_controls"):
             aux.reset_to_current_controls()
+
+    def _update_main_bg_style_visibility(self):
+        """Show/hide Main Viz Style row based on whether Main Visualizer is selected."""
+        if hasattr(self, "main_bg_plain_row") and hasattr(self, "universal_bg_dropdown"):
+            is_main = self.universal_bg_dropdown.get_selected() == 1
+            self.main_bg_plain_row.set_visible(is_main)
 
     def _redraw_system_background_aux_windows(self):
         for aux in list(self.aux_windows.values()):
@@ -4306,6 +4314,9 @@ class MelangeWindow(Adw.ApplicationWindow):
             self.universal_style_dropdown.set_selected(saved["sync_mini_style"])
         if "sync_mini_bg" in saved and hasattr(self, "universal_bg_dropdown"):
             self.universal_bg_dropdown.set_selected(saved["sync_mini_bg"])
+        if "sync_mini_bg_plain" in saved and hasattr(self, "main_bg_plain_dropdown"):
+            self.main_bg_plain_dropdown.set_selected(saved["sync_mini_bg_plain"])
+        self._update_main_bg_style_visibility()
 
         if "now_playing_art_override" in saved:
             self.now_playing_art_override_path = saved["now_playing_art_override"]
@@ -4371,6 +4382,7 @@ class MelangeWindow(Adw.ApplicationWindow):
             "sync_mini_colors": getattr(self, "sync_mini_colors_row", None) and self.sync_mini_colors_row.get_active(),
             "sync_mini_style": self.universal_style_dropdown.get_selected() if hasattr(self, "universal_style_dropdown") else 0,
             "sync_mini_bg": self.universal_bg_dropdown.get_selected() if hasattr(self, "universal_bg_dropdown") else 0,
+            "sync_mini_bg_plain": self.main_bg_plain_dropdown.get_selected() if hasattr(self, "main_bg_plain_dropdown") else 0,
             "now_playing_art_override": self.now_playing_art_override_path,
         }
 

@@ -480,7 +480,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self.line_color_hi.parse("#ff3cc8")
 
         # Shared settings (every kind) - see build_shared_controls.
-        self.background_mode = "custom"
+        self.background_mode = "system"
         self.main_bg_plain = False
         self.background_color = Gdk.RGBA()
         # Starts as the theme's canvas shade (DVD: its near-black).
@@ -1178,50 +1178,6 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
             height_scale_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
-            vu_hold_label = Gtk.Label(label="Peak Hold", xalign=0, hexpand=True)
-            vu_hold_row.append(vu_hold_label)
-
-            vu_hold_switch = Gtk.Switch()
-            vu_hold_switch.set_active(self.peak_hold)
-            vu_hold_switch.set_valign(Gtk.Align.CENTER)
-
-            vu_hold_switch.connect(
-                "notify::active",
-                self.on_peak_hold_changed
-            )
-
-            vu_hold_row.append(vu_hold_switch)
-            box.append(vu_hold_row)
-
-            vu_hold_style_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
-            vu_hold_style_label = Gtk.Label(
-                label="Peak Hold Style", xalign=0, hexpand=True
-            )
-            vu_hold_style_row.append(vu_hold_style_label)
-
-            vu_hold_style_dropdown = Gtk.DropDown.new_from_strings(
-                [label for _, label in LED_PEAK_STYLE_CHOICES]
-            )
-            vu_hold_style_drop_index = next(
-                (
-                    i for i, (key, _) in enumerate(LED_PEAK_STYLE_CHOICES)
-                    if key == self.peak_hold_style
-                ),
-                0
-            )
-            vu_hold_style_dropdown.set_selected(vu_hold_style_drop_index)
-
-            vu_hold_style_dropdown.connect(
-                "notify::selected",
-                self.on_peak_hold_style_changed
-            )
-
-            vu_hold_style_row.append(vu_hold_style_dropdown)
-            box.append(vu_hold_style_row)
-
-            height_scale_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
             height_scale_label = Gtk.Label(
                 label="Height Scale", xalign=0, hexpand=True
             )
@@ -1291,6 +1247,49 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             box.append(vu_zone_row)
 
             self.group_break(box, "Peak Hold")
+
+            vu_hold_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            vu_hold_label = Gtk.Label(label="Peak Hold", xalign=0, hexpand=True)
+            vu_hold_row.append(vu_hold_label)
+
+            vu_hold_switch = Gtk.Switch()
+            vu_hold_switch.set_active(self.peak_hold)
+            vu_hold_switch.set_valign(Gtk.Align.CENTER)
+
+            vu_hold_switch.connect(
+                "notify::active",
+                self.on_peak_hold_changed
+            )
+
+            vu_hold_row.append(vu_hold_switch)
+            box.append(vu_hold_row)
+
+            vu_hold_style_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+
+            vu_hold_style_label = Gtk.Label(
+                label="Peak Hold Style", xalign=0, hexpand=True
+            )
+            vu_hold_style_row.append(vu_hold_style_label)
+
+            vu_hold_style_dropdown = Gtk.DropDown.new_from_strings(
+                [label for _, label in LED_PEAK_STYLE_CHOICES]
+            )
+            vu_hold_style_drop_index = next(
+                (
+                    i for i, (key, _) in enumerate(LED_PEAK_STYLE_CHOICES)
+                    if key == self.peak_hold_style
+                ),
+                0
+            )
+            vu_hold_style_dropdown.set_selected(vu_hold_style_drop_index)
+
+            vu_hold_style_dropdown.connect(
+                "notify::selected",
+                self.on_peak_hold_style_changed
+            )
+
+            vu_hold_style_row.append(vu_hold_style_dropdown)
+            box.append(vu_hold_style_row)
 
             vu_thick_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
             vu_thick_label = Gtk.Label(label="Line Thickness", xalign=0, hexpand=True)
@@ -1729,6 +1728,34 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             box.append(spec_zone_row)
             self.spectrum_zone_row = spec_zone_row
 
+            height_scale_row = Gtk.Box(
+                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
+            )
+
+            height_scale_label = Gtk.Label(
+                label="Height Scale", xalign=0, hexpand=True
+            )
+            height_scale_row.append(height_scale_label)
+
+            # Goes past 1.0 on purpose (a gain-style control, not a
+            # 0-100% fit-to-canvas one) - bars/the smooth curve simply
+            # clip at the canvas edge once a level's scaled height
+            # exceeds it, same as an analog meter pinned past its dial.
+            height_scale_scale = Gtk.Scale.new_with_range(
+                Gtk.Orientation.HORIZONTAL, 0.25, 2.5, 0.05
+            )
+            height_scale_scale.set_value(self.spectrum_height_scale)
+            height_scale_scale.set_size_request(120, -1)
+            height_scale_scale.set_draw_value(False)
+
+            height_scale_scale.connect(
+                "value-changed",
+                self.on_spectrum_height_scale_changed
+            )
+
+            height_scale_row.append(height_scale_scale)
+            box.append(height_scale_row)
+
             self.group_break(box, "Peak Hold")
 
             spectrum_hold_row = Gtk.Box(
@@ -1782,7 +1809,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             box.append(spectrum_hold_style_row)
 
             spectrum_thick_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            spectrum_thick_label = Gtk.Label(label="Hold Line Thickness", xalign=0, hexpand=True)
+            spectrum_thick_label = Gtk.Label(label="Line Thickness", xalign=0, hexpand=True)
             spectrum_thick_row.append(spectrum_thick_label)
 
             spectrum_thick_spin = Gtk.SpinButton.new_with_range(0.5, 3.0, 0.25)
@@ -1796,34 +1823,6 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             spectrum_thick_spin.connect("value-changed", spectrum_thick_changed)
             spectrum_thick_row.append(spectrum_thick_spin)
             box.append(spectrum_thick_row)
-
-            height_scale_row = Gtk.Box(
-                orientation=Gtk.Orientation.HORIZONTAL, spacing=8
-            )
-
-            height_scale_label = Gtk.Label(
-                label="Height Scale", xalign=0, hexpand=True
-            )
-            height_scale_row.append(height_scale_label)
-
-            # Goes past 1.0 on purpose (a gain-style control, not a
-            # 0-100% fit-to-canvas one) - bars/the smooth curve simply
-            # clip at the canvas edge once a level's scaled height
-            # exceeds it, same as an analog meter pinned past its dial.
-            height_scale_scale = Gtk.Scale.new_with_range(
-                Gtk.Orientation.HORIZONTAL, 0.25, 2.5, 0.05
-            )
-            height_scale_scale.set_value(self.spectrum_height_scale)
-            height_scale_scale.set_size_request(120, -1)
-            height_scale_scale.set_draw_value(False)
-
-            height_scale_scale.connect(
-                "value-changed",
-                self.on_spectrum_height_scale_changed
-            )
-
-            height_scale_row.append(height_scale_scale)
-            box.append(height_scale_row)
 
         if self.kind in ("peak", "spectrum", "vu"):
 
@@ -1916,23 +1915,24 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             hold_tint_row.append(hold_tint_dropdown)
             box.append(hold_tint_row)
 
-            line_thick_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            if self.kind == "peak":
+                line_thick_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
-            line_thick_label = Gtk.Label(
-                label="Line Thickness", xalign=0, hexpand=True
-            )
-            line_thick_row.append(line_thick_label)
+                line_thick_label = Gtk.Label(
+                    label="Hold Line Thickness", xalign=0, hexpand=True
+                )
+                line_thick_row.append(line_thick_label)
 
-            line_thick_spin = Gtk.SpinButton.new_with_range(0.5, 3.0, 0.25)
-            line_thick_spin.set_value(self.peak_line_thickness)
-            line_thick_spin.set_size_request(70, -1)
+                line_thick_spin = Gtk.SpinButton.new_with_range(0.5, 3.0, 0.25)
+                line_thick_spin.set_value(self.peak_line_thickness)
+                line_thick_spin.set_size_request(70, -1)
 
-            def line_thick_changed(spin):
-                self.peak_line_thickness = spin.get_value()
+                def line_thick_changed(spin):
+                    self.peak_line_thickness = spin.get_value()
 
-            line_thick_spin.connect("value-changed", line_thick_changed)
-            line_thick_row.append(line_thick_spin)
-            box.append(line_thick_row)
+                line_thick_spin.connect("value-changed", line_thick_changed)
+                line_thick_row.append(line_thick_spin)
+                box.append(line_thick_row)
 
         if self.kind == "oscilloscope":
 
@@ -3000,10 +3000,6 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 box, "Scale", "peak_scale", [("db", "Decibels"), ("linear", "Linear")],
                 subtitle="Decibels spread out quiet levels; Linear is raw amplitude"
             )
-            self.add_scale(
-                box, "Hold Line Thickness", "peak_line_thickness", 0.5, 3.0, 0.25,
-                lambda value: f"{value:.2f}×"
-            )
 
         if self.kind == "oscilloscope":
             self.add_scale(
@@ -3124,6 +3120,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         visible("Low Color", gradient_shown and gradient == "gradient")
         visible("High Color", gradient_shown and gradient == "gradient")
         visible("Reverse", gradient_shown)
+        visible("Gradient Direction", gradient_shown)
         visible("Background Color", self.background_mode == "custom")
 
         if "Peak Hold Color" in rows:
