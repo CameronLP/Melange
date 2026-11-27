@@ -179,7 +179,11 @@ def build_settings_page(window, descriptors: KindSettings):
 
 
 def _build_row(window, setting: Setting):
-    """Build the right Adw.*Row for a single Setting descriptor."""
+    """Build Adw.ActionRow + suffix widget for a single Setting descriptor.
+
+    Uses GTK4/libadwaita 1.0-compatible widgets (not Adw.SwitchRow/etc.)
+    so it works with any libadwaita version >= 1.0.
+    """
     import gi
     gi.require_version("Gtk", "4.0")
     gi.require_version("Adw", "1")
@@ -188,59 +192,57 @@ def _build_row(window, setting: Setting):
     if not setting.is_visible(window):
         return None
 
+    row = Adw.ActionRow(
+        title=setting.title,
+        subtitle=setting.subtitle or "",
+    )
+
     if isinstance(setting, Toggle):
-        row = Adw.SwitchRow(
-            title=setting.title,
-            subtitle=setting.subtitle,
-        )
-        row.set_active(getattr(window, setting.attr))
+        switch = Gtk.Switch()
+        switch.set_active(getattr(window, setting.attr))
+        switch.set_valign(Gtk.Align.CENTER)
+        row.add_suffix(switch)
+        row.set_activatable_widget(switch)
 
         def _toggle_changed(widget, param, attr=setting.attr, on_change=setting.on_change):
             setattr(window, attr, widget.get_active())
             if on_change:
                 getattr(window, on_change, lambda: None)()
 
-        row.connect("notify::active", _toggle_changed)
-        return row
+        switch.connect("notify::active", _toggle_changed)
 
     elif isinstance(setting, Scale):
-        row = Adw.SpinRow(
-            title=setting.title,
-            subtitle=setting.subtitle,
+        scale = Gtk.Scale.new_with_range(
+            Gtk.Orientation.HORIZONTAL,
+            setting.min,
+            setting.max,
+            setting.step,
         )
-        adj = Gtk.Adjustment(
-            value=getattr(window, setting.attr),
-            lower=setting.min,
-            upper=setting.max,
-            step_increment=setting.step,
-            page_increment=setting.step * 10,
-        )
-        row.set_adjustment(adj)
+        scale.set_value(getattr(window, setting.attr))
+        scale.set_size_request(120, -1)
+        scale.set_draw_value(False)
+        scale.set_hexpand(False)
+        scale.set_valign(Gtk.Align.CENTER)
+        row.add_suffix(scale)
 
         def _scale_changed(widget, attr=setting.attr):
             cast = type(getattr(window, attr))
             setattr(window, attr, cast(widget.get_value()))
 
-        adj.connect("value-changed", lambda a: _scale_changed(row, setting.attr))
-        row.set_digits(_digits_for_step(setting.step))
-        return row
+        scale.connect("value-changed", lambda w: _scale_changed(w, setting.attr))
 
     elif isinstance(setting, Choice):
-        row = Adw.ComboRow(
-            title=setting.title,
-            subtitle=setting.subtitle,
+        dropdown = Gtk.DropDown.new_from_strings(
+            [label for _, label in setting.options]
         )
-        model = Gtk.StringList()
-        for _, label in setting.options:
-            model.append(label)
-        row.set_model(model)
-
         keys = [key for key, _ in setting.options]
         current = getattr(window, setting.attr)
         try:
-            row.set_selected(keys.index(current))
+            dropdown.set_selected(keys.index(current))
         except ValueError:
-            row.set_selected(0)
+            dropdown.set_selected(0)
+        dropdown.set_valign(Gtk.Align.CENTER)
+        row.add_suffix(dropdown)
 
         def _choice_changed(widget, param, attr=setting.attr, keys=keys, on_change=setting.on_change):
             idx = widget.get_selected()
@@ -249,14 +251,9 @@ def _build_row(window, setting: Setting):
                 if on_change:
                     getattr(window, on_change, lambda: None)()
 
-        row.connect("notify::selected", _choice_changed)
-        return row
+        dropdown.connect("notify::selected", _choice_changed)
 
     elif isinstance(setting, Color):
-        row = Adw.ActionRow(
-            title=setting.title,
-            subtitle=setting.subtitle,
-        )
         button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
         button.set_rgba(getattr(window, setting.attr))
         button.set_valign(Gtk.Align.CENTER)
@@ -266,9 +263,8 @@ def _build_row(window, setting: Setting):
             setattr(window, attr, widget.get_rgba())
 
         button.connect("notify::rgba", _color_changed)
-        return row
 
-    return None
+    return row
 
 
 def _digits_for_step(step: float) -> int:

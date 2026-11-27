@@ -604,23 +604,20 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
     # Settings as libadwaita rows: the dialog's content.
     def build_settings_page(self, controls):
 
-        # ── New declarative system (falls back to legacy if unavailable) ──
-        try:
-            from src.kind_settings import KIND_REGISTRY
-            if self.kind in KIND_REGISTRY:
-                from src.mini_viz_settings import build_settings_page as _build_page
-                page = _build_page(self, KIND_REGISTRY[self.kind]())
-                self.zoom_scale = None
-                zoom_row = self.settings_rows.get("Zoom")
-                if zoom_row is not None and self.kind in VIEW_KINDS:
-                    self.zoom_scale = next(
-                        (w for w in self.iter_widgets(zoom_row) if isinstance(w, Gtk.Scale)), None
-                    )
-                return page
-        except Exception:
-            pass
+        # ── New declarative system ──────────────────────────────────────
+        from src.kind_settings import KIND_REGISTRY
+        if self.kind in KIND_REGISTRY:
+            from src.mini_viz_settings import build_settings_page as _build_page
+            page = _build_page(self, KIND_REGISTRY[self.kind]())
+            self.zoom_scale = None
+            zoom_row = self.settings_rows.get("Zoom")
+            if zoom_row is not None and self.kind in VIEW_KINDS:
+                self.zoom_scale = next(
+                    (w for w in self.iter_widgets(zoom_row) if isinstance(w, Gtk.Scale)), None
+                )
+            return page
 
-        # ── Legacy manual row builders ───────────────────────────────────
+        # ── Legacy manual row builders (should never be reached) ─────────
 
         def children(widget):
             out = []
