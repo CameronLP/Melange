@@ -1148,27 +1148,6 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         box.set_margin_top(10)
         box.set_margin_bottom(10)
 
-        if self.kind in (
-            "xy", "spectrum", "vu", "peak", "oscilloscope", "vectorscope"
-        ):
-
-            color_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-
-            color_label = Gtk.Label(label="Color", xalign=0, hexpand=True)
-            color_row.append(color_label)
-
-            color_button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog())
-            color_button.set_rgba(self.color)
-
-            color_button.connect(
-                "notify::rgba",
-                self.on_color_changed
-            )
-
-            color_row.append(color_button)
-            box.append(color_row)
-
-
         if self.kind == "vu":
 
             style_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
@@ -1197,7 +1176,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             style_row.append(style_dropdown)
             box.append(style_row)
 
-            vu_hold_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            height_scale_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
             vu_hold_label = Gtk.Label(label="Peak Hold", xalign=0, hexpand=True)
             vu_hold_row.append(vu_hold_label)
@@ -1311,8 +1290,10 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             vu_zone_row.append(vu_red_spin)
             box.append(vu_zone_row)
 
+            self.group_break(box, "Peak Hold")
+
             vu_thick_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            vu_thick_label = Gtk.Label(label="Hold Line Thickness", xalign=0, hexpand=True)
+            vu_thick_label = Gtk.Label(label="Line Thickness", xalign=0, hexpand=True)
             vu_thick_row.append(vu_thick_label)
 
             vu_thick_spin = Gtk.SpinButton.new_with_range(0.5, 3.0, 0.25)
@@ -1748,6 +1729,8 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             box.append(spec_zone_row)
             self.spectrum_zone_row = spec_zone_row
 
+            self.group_break(box, "Peak Hold")
+
             spectrum_hold_row = Gtk.Box(
                 orientation=Gtk.Orientation.HORIZONTAL, spacing=8
             )
@@ -1843,6 +1826,9 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
             box.append(height_scale_row)
 
         if self.kind in ("peak", "spectrum", "vu"):
+
+            if self.kind == "peak":
+                self.group_break(box, "Peak Hold")
 
             hold_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
 
@@ -3063,6 +3049,7 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         line_kind = self.kind in ("xy", "spectrum", "vu", "peak", "oscilloscope", "vectorscope")
 
         if line_kind:
+            self.add_color(box, "Color", "color")
             choices = METER_STYLE_CHOICES if self.kind in ("vu", "peak", "spectrum") else STYLE_CHOICES
             self.add_choice(box, "Color Style", "color_style", choices)
             self.add_choice(box, "Gradient", "line_gradient", PALETTE_CHOICES)
