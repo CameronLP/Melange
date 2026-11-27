@@ -3100,6 +3100,17 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
     def update_row_sensitivity(self):
         """Show only the rows that apply to the current choices."""
 
+        # ── New declarative progressive disclosure ───────────────────────
+        try:
+            from src.kind_settings import KIND_REGISTRY
+            from src.mini_viz_settings import update_row_sensitivity as _update
+            if self.kind in KIND_REGISTRY:
+                _update(self, KIND_REGISTRY[self.kind]())
+                return
+        except Exception:
+            pass
+
+        # ── Legacy fallback ──────────────────────────────────────────────
         rows = self.settings_rows
 
         def visible(title, value):
@@ -3179,6 +3190,15 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
     def reset_to_defaults(self):
 
+        # Cancel any pending dirty timer so it doesn't clobber fresh reset
+        if hasattr(self, "_dirty_timer") and self._dirty_timer:
+            GLib.source_remove(self._dirty_timer)
+            self._dirty_timer = None
+
+        # Clear background sync state
+        self._bg_sync_active = False
+        self._bg_sync_original = None
+
         for name, value in self.default_settings.items():
             decoded = decode_setting(value, getattr(self, name))
             if decoded is not None:
@@ -3189,6 +3209,19 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
         self._sync_originals = None
 
         self._icon_cache_key = None
+        
+        # Clear runtime audio / buffer state
+        self.vu_left = 0.0
+        self.vu_right = 0.0
+        self.peak_left = 0.0
+        self.peak_right = 0.0
+        self.bar_levels = []
+        self.spectrum_buffer = []
+        self.spectrogram_columns = []
+        self.terrain_rows = []
+        self.waterfall_rows = []
+        self.vector_surface = None
+        
         self.reset_to_current_controls()
         self.background_changed()
         self.frame_rate_changed()
@@ -3550,12 +3583,6 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
                 self.background_mode = "custom"
                 self.background_color = color
 
-
-    def on_color_changed(self, button, param):
-
-        self.color = button.get_rgba()
-        self.terrain_dirty = True
-        self.drawing_area.queue_draw()
 
     def on_bars_changed(self, spin):
 
@@ -4839,19 +4866,23 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         now = time.monotonic()
 
-        self.peak_hold_left, self.peak_hold_left_time = self.update_peak_hold(
-            self.peak_left, self.peak_hold_left, self.peak_hold_left_time, now
-        )
-        self.peak_hold_right, self.peak_hold_right_time = self.update_peak_hold(
-            self.peak_right, self.peak_hold_right, self.peak_hold_right_time, now
-        )
+        if self.peak_hold:
+            self.peak_hold_left, self.peak_hold_left_time = self.update_peak_hold(
+                self.peak_left, self.peak_hold_left, self.peak_hold_left_time, now
+            )
+            self.peak_hold_right, self.peak_hold_right_time = self.update_peak_hold(
+                self.peak_right, self.peak_hold_right, self.peak_hold_right_time, now
+            )
+
+        hold_l = self.db_frac(self.peak_hold_left) if self.peak_hold else None
+        hold_r = self.db_frac(self.peak_hold_right) if self.peak_hold else None
 
         if width > height * 1.3:
             self.draw_meter_pair_horizontal(
                 cr, width, height,
                 lambda c, x, y, w, h, level, hold: self.draw_peak_bar(c, x, y, w, h, level, hold),
                 self.db_frac(self.peak_left), self.db_frac(self.peak_right),
-                self.db_frac(self.peak_hold_left), self.db_frac(self.peak_hold_right),
+                hold_l, hold_r,
             )
             return
 
@@ -4868,11 +4899,11 @@ class AuxVisualizerWindow(MiniVisualizerWindow):
 
         self.draw_peak_bar(
             cr, left_x, margin, cell_width, cell_height,
-            self.db_frac(self.peak_left), self.db_frac(self.peak_hold_left)
+            self.db_frac(self.peak_left), hold_l
         )
         self.draw_peak_bar(
             cr, right_x, margin, cell_width, cell_height,
-            self.db_frac(self.peak_right), self.db_frac(self.peak_hold_right)
+            self.db_frac(self.peak_right), hold_r
         )
 
         if self.show_labels:

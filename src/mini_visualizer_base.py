@@ -50,12 +50,12 @@ import cairo
 # Everything a setting control changes, plus the 3D views' camera.
 SAVED_SETTINGS = [
     "color", "color_style", "line_gradient", "line_color_lo", "line_color_hi", "num_bars", "decay", "show_labels",
-    "mirror_reflection", "maintain_aspect_ratio", "scope_zoom",
+    "mirror_reflection", "maintain_aspect_ratio",
     "scope_scale_x", "scope_scale_y",
     "xy_line_width", "xy_points", "xy_curved",
     "vu_style", "peak_hold", "peak_hold_style", "vu_segments", "vu_height_scale",
     "vu_yellow_zone", "vu_red_zone",
-    "peak_hold_seconds", "peak_hold_color_mode", "peak_hold_tint", "peak_line_thickness", "vu_led_thickness", "spectrum_led_thickness", "peak_hold_color",
+    "peak_hold_seconds", "peak_hold_fall_rate", "peak_hold_color_mode", "peak_hold_tint", "peak_line_thickness", "vu_led_thickness", "spectrum_led_thickness", "peak_hold_color",
     "spectrum_height_scale", "spectrum_style", "spectrum_gradient_direction", "spectrum_led_segments",
     "spectrum_yellow_zone", "spectrum_red_zone",
     "scope_time_base", "scope_trigger", "scope_gradient_direction", "vector_persistence", "vector_dot_size",
@@ -81,7 +81,7 @@ SAVED_SETTINGS = [
     "compact_mode", "freq_min", "freq_max", "xy_goniometer",
     "terrain_auto_rotate", "terrain_rotate_speed", "terrain_rotate_direction",
     "waterfall_auto_rotate", "waterfall_rotate_speed", "waterfall_rotate_direction",
-    "view_hint_shown", "vector_auto_gain", "color_sync", "local_sync_style", "reverse_colors",
+    "view_hint_shown", "vector_auto_gain", "reverse_colors",
     "terrain_pan_x", "terrain_pan_y", "waterfall_pan_x", "waterfall_pan_y",
     "pipes_pan_x", "pipes_pan_y",
     "scope_line_width", "peak_scale",
@@ -427,7 +427,6 @@ COLOR_ROW_ORDER = [
     "Low Color", "High Color", "High Level",
     "Reverse", "Bass Color", "Low Mid Color", "High Mid Color", "Treble Color",
     "Pulse Color", "Peak Hold Color",
-    "Match Main Visualizer",
     "Background", "Background Color",
 ]
 
@@ -604,6 +603,24 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
 
     # Settings as libadwaita rows: the dialog's content.
     def build_settings_page(self, controls):
+
+        # ── New declarative system (falls back to legacy if unavailable) ──
+        try:
+            from src.kind_settings import KIND_REGISTRY
+            if self.kind in KIND_REGISTRY:
+                from src.mini_viz_settings import build_settings_page as _build_page
+                page = _build_page(self, KIND_REGISTRY[self.kind]())
+                self.zoom_scale = None
+                zoom_row = self.settings_rows.get("Zoom")
+                if zoom_row is not None and self.kind in VIEW_KINDS:
+                    self.zoom_scale = next(
+                        (w for w in self.iter_widgets(zoom_row) if isinstance(w, Gtk.Scale)), None
+                    )
+                return page
+        except Exception:
+            pass
+
+        # ── Legacy manual row builders ───────────────────────────────────
 
         def children(widget):
             out = []
@@ -999,7 +1016,7 @@ class MiniVisualizerWindow(Adw.ApplicationWindow):
         finally:
             for name, value in saved.items():
                 if name == "color_mode":
-                    self._color_mode_override = None
+                    self._color_mode_override = value
                 else:
                     setattr(self, name, value)
 
